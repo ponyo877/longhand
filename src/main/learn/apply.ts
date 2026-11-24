@@ -1,25 +1,25 @@
 /**
- * 手直しから学習した結果を、保存先に反映する。貼り付け後の手直し（DictationController）と、
- * 履歴の画面での手直し（main）の両方から使う。
+ * Saves what was learned from a correction. Used both for corrections after a paste (DictationController)
+ * and for corrections in the history page (main).
  */
 import type { KeptPhrase, LearnedWord, PastCorrection } from '../../shared/types';
 import type { AppliedNumberStyle, CustomizationsStore } from '../store/customizations';
 import type { LearnResult, MisheardForm } from './Learner';
 
 export interface AppliedLearning {
-  /** 辞書に足した語 */
+  /** Words added to the dictionary */
   words: LearnedWord[];
-  /** すでにある語に足した、聞き違えた形 */
+  /** Misheard forms added to existing words */
   forms: MisheardForm[];
-  /** 覚えた取り違えの組（回数を増やしただけのものも含む） */
+  /** Mix-up pairs learned (including ones whose count was only increased) */
   corrections: PastCorrection[];
-  /** 覚えた、書き換えない語句（回数を増やしただけのものも含む） */
+  /** Phrases not to rewrite learned (including ones whose count was only increased) */
   kept: KeptPhrase[];
   /** Number notation preferences that were set or confirmed */
   numbers: AppliedNumberStyle[];
-  /** 反映した数の合計 */
+  /** Total number of items saved */
   count: number;
-  /** 今回の反映を取り消す。語は「学習しない語」に入る（以前からの動き）。回数を増やしただけの組と語句は、そのまま残す */
+  /** Undoes this save. Words go to the list of words not to learn (the existing behavior). Pairs and phrases whose count was only increased stay as they are */
   undo: () => void;
 }
 

@@ -10,24 +10,24 @@ import { JsonStore } from './json-store';
 
 const log = createLogger('customizations');
 
-/** 辞書の件数の上限（スタイル画面の表示と検査も同じ値を使う） */
+/** Maximum number of dictionary words (the Style page shows and checks the same value) */
 export const DICTIONARY_LIMIT = CUSTOMIZATION_LIMITS.dictionary;
-/** 辞書の 1 語の長さの上限 */
+/** Maximum length of one dictionary word */
 export const WORD_MAX_LENGTH = CUSTOMIZATION_LIMITS.wordLength;
-/** 学習語の件数の上限。超えたら古い語から外す（G4-10） */
+/** Maximum number of learned words. Beyond it, the oldest words are dropped (G4-10) */
 export const LEARNED_LIMIT = CUSTOMIZATION_LIMITS.learned;
-/** 整形の LLM に渡す語の上限（G4-10） */
+/** Maximum number of words passed to the formatting LLM (G4-10) */
 export const FORMATTER_VOCAB_LIMIT = 300;
-/** ASR に渡すヒントの上限（whisper のワーカーがさらに 120 トークンで打ち切る） */
+/** Maximum number of hints passed to ASR (the whisper worker also cuts them off at 120 tokens) */
 export const ASR_HINT_LIMIT = 64;
-/** 整形の辞書の行に添える、聞き違えた形の数（1 語あたり） */
+/** Number of misheard forms added to a word's line in the formatting dictionary (per word) */
 export const FORMATTER_FORMS_PER_WORD = 3;
-/** 整形に渡す、書き換えない語句の数（新しい順） */
+/** Number of phrases to keep as they are passed to formatting (newest first) */
 export const FORMATTER_KEPT_LIMIT = 40;
-/** 1 回の整形に渡す、取り違えの組の数 */
+/** Number of correction pairs passed to one formatting call */
 export const FORMATTER_CORRECTIONS_LIMIT = 6;
 
-/** 比べるときの形（全角と半角、大文字と小文字、空白の違いを無視する） */
+/** Form used for comparison (ignores full-width vs half-width, upper vs lower case, and whitespace) */
 const normKey = (s: string) => s.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
 
 function uniq(words: string[]): string[] {
@@ -54,14 +54,14 @@ function uniqLearned(words: LearnedWord[]): LearnedWord[] {
   return out;
 }
 
-/** 新しい順に limit 件まで残す（並びは変えない） */
+/** Keeps up to limit items, newest first (the order is unchanged) */
 function capByTime<T extends { at: number }>(list: T[], limit: number): T[] {
   if (list.length <= limit) return list;
   const keep = new Set([...list].sort((a, b) => b.at - a.at).slice(0, limit));
   return list.filter((x) => keep.has(x));
 }
 
-/** 学習語の誤認識の形を、利用者が確かめた読みとして使えるか（かなか英字で、短すぎない） */
+/** Whether a learned word's misrecognized form can serve as a reading the user confirmed (kana or Latin letters, and not too short) */
 function usableFromForm(from: string): boolean {
   const f = from.trim();
   if (!f || hasKanji(f)) return false;
@@ -70,31 +70,31 @@ function usableFromForm(from: string): boolean {
 }
 
 export interface PrepareOptions {
-  /** 整形に LLM を使うか。使わないときは、確かめた読みの完全一致だけを置き換える */
+  /** Whether formatting uses the LLM. Without it, only exact matches of confirmed readings are replaced */
   useLlm: boolean;
   context?: HintContext;
   recent?: RecentText[];
-  /** 得点を付ける基準の時刻。省けば今（評価では、発話を録音した時刻を渡して結果を固定する） */
+  /** Reference time for scoring. Defaults to now (the evaluation passes the time of the recording to make results repeatable) */
   now?: number;
   vocabularyLimit?: number;
 }
 
 export interface PreparedFormatting {
-  /** 整形に渡す生テキスト（LLM を使わないときは置き換え済み） */
+  /** Raw text passed to formatting (already replaced when the LLM is not used) */
   text: string;
-  /** 整形のプロンプトに入れる語（得点順） */
+  /** Words to put in the formatting prompt (by score) */
   vocabulary: string[];
-  /** 整形に渡す照合の候補（LLM を使うときだけ） */
+  /** Match candidates passed to formatting (only when the LLM is used) */
   candidates: { heard: string; word: string }[];
-  /** LLM を使わないときに置き換えた数 */
+  /** Number of replacements made when the LLM is not used */
   replaced: number;
-  /** 辞書の語ごとの、聞き違えた形（vocabulary にある語だけ）。整形の辞書の行に添える */
+  /** Misheard forms per dictionary word (only words in vocabulary). Added to the word's line in the formatting dictionary */
   misheard?: Record<string, string[]>;
-  /** 生テキストに出ている、以前の取り違えの組。整形に候補として渡す（LLM を使うときだけ） */
+  /** Earlier correction pairs that appear in the raw text. Passed to formatting as candidates (only when the LLM is used) */
   corrections?: { heard: string; corrected: string }[];
-  /** 整形が書き換えてはいけない語句（利用者が元に戻したもの） */
+  /** Phrases formatting must not rewrite (ones the user changed back) */
   kept?: { phrase: string; changedTo: string }[];
-  /** 利用者が、取り違えの組を 1 つでも持っているか（整形の規則に説明を足すかどうかを決める） */
+  /** Whether the user has at least one correction pair (decides whether the formatting rules get an explanation) */
   hasCorrections?: boolean;
   /** How the user writes numbers. Described in the formatter prompt and applied to the output */
   numberStyle?: NumberStyles;
@@ -126,7 +126,7 @@ function cleanNumberStyles(styles: unknown): NumberStyles | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-/** 読みを作る関数。LLM を使えないときは null を返す（次に辞書が変わったときに作り直す） */
+/** Function that makes readings. Returns null when the LLM cannot be used (they are made again the next time the dictionary changes) */
 type ReadingGenerator = (words: string[]) => Promise<Record<string, string[]> | null>;
 
 export class CustomizationsStore extends EventEmitter {
@@ -135,9 +135,9 @@ export class CustomizationsStore extends EventEmitter {
   private readingGenerator: ReadingGenerator | null = null;
   private readingTimer: NodeJS.Timeout | null = null;
   private readingBusy = false;
-  /** LLM を使えなかった（次に辞書が変わるまで作らない） */
+  /** The LLM could not be used (nothing is made until the dictionary changes) */
   private readingUnavailable = false;
-  /** 読みの生成に失敗した語（同じ起動中は作り直さない） */
+  /** Words whose readings could not be made (not retried until the next launch) */
   private readingFailed = new Set<string>();
 
   constructor(file: string) {
@@ -147,8 +147,8 @@ export class CustomizationsStore extends EventEmitter {
     this.value = { ...EMPTY_CUSTOMIZATIONS, ...saved, version: 1 };
     this.value.learnedWords = uniqLearned(this.value.learnedWords ?? []);
     if (!this.value.replacementCaseMigrated) {
-      // 置換の preserveCase の意味が逆になった（G4-12）。以前のオフは「書いたとおりに入れる」、オンは「形を引き継ぐ」だった。
-      // 新しい意味ではオンが「書いたとおり」、オフが「文頭で先頭の英小文字を大文字にする」なので、1 回だけ反転する
+      // The meaning of a replacement's preserveCase was inverted (G4-12). Off used to mean “insert as written” and on meant “carry over the case”.
+      // Now on means “as written” and off means “capitalize a leading lowercase letter at the start of a sentence”, so flip it once
       const flipped = this.value.replacements.length > 0;
       this.value = {
         ...this.value,
@@ -156,7 +156,7 @@ export class CustomizationsStore extends EventEmitter {
         replacementCaseMigrated: true,
       };
       if (saved) this.store.write(this.value);
-      if (flipped) log.info(`置換 ${this.value.replacements.length} 件の大文字小文字の設定を、新しい意味に移しました`);
+      if (flipped) log.info(`moved the case setting of ${this.value.replacements.length} replacements to the new meaning`);
     }
   }
 
@@ -169,24 +169,24 @@ export class CustomizationsStore extends EventEmitter {
     let dict = uniq(next.dictionary);
     const tooLong = dict.filter((w) => Array.from(w).length > WORD_MAX_LENGTH);
     if (tooLong.length) {
-      log.warn(`${WORD_MAX_LENGTH} 字を超える語を ${tooLong.length} 件、辞書に入れませんでした`);
+      log.warn(`left ${tooLong.length} words longer than ${WORD_MAX_LENGTH} characters out of the dictionary`);
       dict = dict.filter((w) => Array.from(w).length <= WORD_MAX_LENGTH);
     }
     if (dict.length > DICTIONARY_LIMIT) {
-      // 画面で上限を検査しているので、ここに来るのは読み込みなど画面を通らない場合だけ
-      log.warn(`辞書が上限（${DICTIONARY_LIMIT} 語）を超えたため、${dict.length - DICTIONARY_LIMIT} 語を入れませんでした`);
+      // The window checks the limit, so this only happens when the window is bypassed, as in an import
+      log.warn(`the dictionary exceeded its limit (${DICTIONARY_LIMIT} words), so ${dict.length - DICTIONARY_LIMIT} words were left out`);
       dict = dict.slice(0, DICTIONARY_LIMIT);
     }
     next.dictionary = dict;
     next.learnedWords = this.capLearned(uniqLearned(next.learnedWords));
     next.blockedLearnedWords = uniq(next.blockedLearnedWords);
-    // 消えた語の読みを片づける
+    // Clean up the readings of removed words
     const alive = new Set([...next.dictionary, ...next.learnedWords.map((w) => w.word)]);
     const prune = (m?: Record<string, string[]>) => (m ? Object.fromEntries(Object.entries(m).filter(([k, v]) => alive.has(k) && Array.isArray(v) && v.length)) : undefined);
     next.readings = prune(next.readings);
     next.suggestedReadings = prune(next.suggestedReadings);
     next.misheard = prune(next.misheard);
-    // 学習しない語にした語は、取り違えの組からも外す
+    // Words set to never learn are also removed from the correction pairs
     const blockedKeys = new Set(next.blockedLearnedWords.map((w) => w.toLowerCase()));
     if (next.pastCorrections) next.pastCorrections = next.pastCorrections.filter((c) => !blockedKeys.has(c.corrected.toLowerCase()));
     next.numberStyle = cleanNumberStyles(next.numberStyle);
@@ -202,16 +202,16 @@ export class CustomizationsStore extends EventEmitter {
   private capLearned(words: LearnedWord[]): LearnedWord[] {
     if (words.length <= LEARNED_LIMIT) return words;
     const keep = new Set([...words].sort((a, b) => b.learnedAt - a.learnedAt).slice(0, LEARNED_LIMIT));
-    log.info(`学習語が上限（${LEARNED_LIMIT} 語）を超えたため、古い ${words.length - LEARNED_LIMIT} 語を外しました`);
+    log.info(`learned words exceeded the limit (${LEARNED_LIMIT} words), so the ${words.length - LEARNED_LIMIT} oldest were dropped`);
     return words.filter((w) => keep.has(w));
   }
 
-  /** プロンプトと ASR の語彙ヒントに使う語（辞書と学習語） */
+  /** Words used in the prompt and as ASR vocabulary hints (dictionary and learned words) */
   vocabulary(): string[] {
     return uniq([...this.value.dictionary, ...this.value.learnedWords.map((w) => w.word)]);
   }
 
-  /** 得点付けに使う語の一覧（辞書と学習語） */
+  /** Words used for scoring (dictionary and learned words) */
   private entries(): VocabEntry[] {
     const n = this.value.dictionary.length;
     const learned = new Map(this.value.learnedWords.map((w) => [w.word.toLowerCase(), w]));
@@ -238,8 +238,8 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * ASR に語彙ヒントとして渡す語（G4-09）。今の入力先と最近の書き起こしとの関係で得点を付け、高い順に返す。
-   * 文脈を渡さなければ、最近学習した語、学習語、新しく登録した語の順になる。
+   * Words passed to ASR as vocabulary hints (G4-09). Scored by how they relate to the current input target and recent transcripts, highest first.
+   * Without a context, the order is recently learned words, learned words, then newly added words.
    */
   asrHints(opts: number | HintOptions = {}): string[] {
     const o: HintOptions = typeof opts === 'number' ? { limit: opts } : opts;
@@ -248,14 +248,14 @@ export class CustomizationsStore extends EventEmitter {
       .map((s) => s.word);
   }
 
-  /** 整形の LLM に渡す語（G4-10）。辞書が大きいときは得点の高い語に絞る */
+  /** Words passed to the formatting LLM (G4-10). A large dictionary is narrowed to the highest-scoring words */
   formatterVocabulary(opts: HintOptions = {}): string[] {
     return rankVocabulary(this.entries(), opts)
       .slice(0, opts.limit ?? FORMATTER_VOCAB_LIMIT)
       .map((s) => s.word);
   }
 
-  /** 照合に使う語と読み（G4-11）。学習語の誤認識の形と、利用者の読みは確かめた読みとして扱う */
+  /** Words and readings used for matching (G4-11). Misrecognized forms of learned words and the user's readings count as confirmed readings */
   matchEntries(): MatchEntry[] {
     const readings = this.value.readings ?? {};
     const suggested = this.value.suggestedReadings ?? {};
@@ -275,7 +275,7 @@ export class CustomizationsStore extends EventEmitter {
       if (!from || from === lw.word) continue;
       add(lw.word, { text: from, confirmed: usableFromForm(from) });
     }
-    // 手直しから学んだ、聞き違えた形（辞書の語にも学習語にも付く）。利用者が直した形なので、学習語の形と同じ扱いにする
+    // Misheard forms learned from corrections (on dictionary words and learned words alike). The user made the correction, so treat them like a learned word's form
     for (const [word, forms] of Object.entries(this.value.misheard ?? {})) {
       for (const f of forms) {
         const from = f.trim();
@@ -285,7 +285,7 @@ export class CustomizationsStore extends EventEmitter {
     return [...map.entries()].map(([word, rs]) => ({ word, readings: rs }));
   }
 
-  /** 語ごとの、聞き違えた形（学習語の最初の形と、後から学んだ形）。新しい形を先にする */
+  /** Misheard forms of a word (a learned word's first form and forms learned later). Newest first */
   misheardForms(word: string): string[] {
     const lw = this.value.learnedWords.find((w) => w.word === word);
     const later = [...(this.value.misheard?.[word] ?? [])].reverse();
@@ -293,7 +293,7 @@ export class CustomizationsStore extends EventEmitter {
     return uniq(all);
   }
 
-  /** 整形に渡す、聞き違えた形（words にある語だけ） */
+  /** Misheard forms passed to formatting (only for the given words) */
   private formsFor(words: readonly string[]): Record<string, string[]> {
     const out: Record<string, string[]> = {};
     for (const w of words) {
@@ -303,7 +303,7 @@ export class CustomizationsStore extends EventEmitter {
     return out;
   }
 
-  /** 生テキストに出ている、以前の取り違えの組（回数の多い順、新しい順） */
+  /** Earlier correction pairs that appear in the raw text (most frequent first, then newest) */
   private correctionsIn(rawText: string): { heard: string; corrected: string }[] {
     const list = this.value.pastCorrections ?? [];
     if (!list.length) return [];
@@ -315,9 +315,9 @@ export class CustomizationsStore extends EventEmitter {
       .map((c) => ({ heard: c.heard, corrected: c.corrected }));
   }
 
-  /** 整形に渡す、書き換えない語句。古い順に並べる（新しい語句を足しても、前のほうが変わらないように） */
+  /** Phrases to keep as they are, passed to formatting. Oldest first (so adding a new phrase leaves the earlier part unchanged) */
   keptPhrases(): { phrase: string; changedTo: string }[] {
-    // 同じ時刻のものは、足した順を保つ
+    // Entries with the same time keep the order they were added in
     return (this.value.keptPhrases ?? [])
       .map((k, i) => ({ k, i }))
       .sort((a, b) => b.k.at - a.k.at || b.i - a.i)
@@ -327,16 +327,16 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * 書き起こしの後、整形の前に呼ぶ（G4-10、G4-11）。
-   * 辞書の語との照合の候補を作り、LLM を使うなら候補を整形に渡し、使わないなら確かめた読みだけを置き換える。
-   * 整形に渡す語は、得点の高い順に絞り、照合で見つかった語は必ず入れる。
+   * Called after transcription and before formatting (G4-10, G4-11).
+   * Finds match candidates for dictionary words. With the LLM, the candidates go to formatting; without it, only confirmed readings are replaced.
+   * Words passed to formatting are narrowed by score, and words found by matching are always included.
    */
   prepareFormatting(rawText: string, opts: PrepareOptions): PreparedFormatting {
     const matches = findDictionaryCandidates(rawText, this.matchEntries());
     const ranked = this.formatterVocabulary({ context: opts.context, recent: opts.recent, now: opts.now, limit: opts.vocabularyLimit });
     const chosen = uniq([...matches.map((m) => m.word), ...ranked]).slice(0, Math.max(ranked.length, matches.length));
-    // 並びは、辞書に入っている順（辞書の語、学習語の順）にそろえる。得点の順のままにすると、発話ごとに並びが変わり、
-    // 整形のシステムプロンプトが毎回変わって、プロンプトキャッシュが効かなくなる。並びの違いで、LLM の出力もゆらぐ
+    // Order the words as they are in the dictionary (dictionary words, then learned words). Ordered by score, they would change with every utterance,
+    // so the formatting system prompt would change every time and the prompt cache would stop working. A different order also makes the LLM output waver
     const position = new Map(this.vocabulary().map((w, i) => [w.toLowerCase(), i]));
     const vocabulary = [...chosen].sort((a, b) => (position.get(a.toLowerCase()) ?? Infinity) - (position.get(b.toLowerCase()) ?? Infinity));
     const learned = {
@@ -347,8 +347,8 @@ export class CustomizationsStore extends EventEmitter {
     };
     if (!opts.useLlm) {
       const { text, replaced } = applyConfirmedMatches(rawText, matches);
-      if (replaced) log.info(`辞書の読みと一致した ${replaced} か所を置き換えました`);
-      // 取り違えの組は、文脈を見ないと決められないので、LLM を使わないときは使わない
+      if (replaced) log.info(`replaced ${replaced} spots that matched dictionary readings`);
+      // Correction pairs cannot be decided without looking at the context, so they are not used without the LLM
       return { text, vocabulary, candidates: [], replaced, ...learned, corrections: [] };
     }
     return {
@@ -362,8 +362,8 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * すでに辞書にある語（辞書の語と学習語）の、新しい聞き違えた形を足す。足した形を返す。
-   * 学習語の最初の形（learnedWords の from）と同じ形、語そのものと同じ形は足さない。
+   * Adds new misheard forms of words already in the dictionary (dictionary words and learned words). Returns the forms added.
+   * A form equal to a learned word's first form (from in learnedWords), or to the word itself, is not added.
    */
   addMisheardForms(forms: { word: string; from: string }[]): { word: string; from: string }[] {
     const vocab = new Map(this.vocabulary().map((w) => [w.toLowerCase(), w]));
@@ -382,7 +382,7 @@ export class CustomizationsStore extends EventEmitter {
     return added;
   }
 
-  /** 聞き違えた形を外す（学習の取り消し） */
+  /** Removes a misheard form (undoing learning) */
   removeMisheardForm(word: string, from: string): void {
     const cur = this.value.misheard?.[word];
     if (!cur) return;
@@ -390,8 +390,8 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * 取り違えの組を足す。足した組（新しく覚えたものと、回数を増やしたもの）を返す。
-   * 同じ組は回数を増やす。逆向きの組（直した語を、元の語に直した）があれば、古いほうを外す。
+   * Adds correction pairs. Returns the pairs added (newly learned ones and ones whose count went up).
+   * The same pair raises the count. If the reverse pair exists (the corrected word was changed back to the original), the older one is removed.
    */
   addPastCorrections(pairs: { heard: string; corrected: string }[], now = Date.now()): PastCorrection[] {
     let list = [...(this.value.pastCorrections ?? [])];
@@ -447,7 +447,7 @@ export class CustomizationsStore extends EventEmitter {
     this.update({ numberStyle: NUMBER_STYLE_KINDS.some((k) => styles[k]) ? styles : undefined });
   }
 
-  /** 書き換えない語句を足す。足した語句を返す。同じ語句は回数を増やす */
+  /** Adds phrases to keep as they are. Returns the phrases added. The same phrase raises the count */
   addKeptPhrases(pairs: { phrase: string; changedTo: string }[], now = Date.now()): KeptPhrase[] {
     const list = [...(this.value.keptPhrases ?? [])];
     const added: KeptPhrase[] = [];
@@ -471,9 +471,9 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * 学習した語を足す。足した語を返す。
-   * - 同じ語は 1 つにまとめ、辞書にある語と学習しない語は足さない
-   * - 新しい語の誤認識の形が既存の学習語と同じなら（学習語を別の語に直したなら）、古い学習語を外して学習しない語に入れる（G4-06）
+   * Adds learned words. Returns the words added.
+   * - Merges duplicates, and skips words already in the dictionary and words set to never learn
+   * - If a new word's misrecognized form equals an existing learned word (the learned word was corrected to another word), removes the old learned word and sets it to never learn (G4-06)
    */
   addLearnedWords(words: LearnedWord[]): LearnedWord[] {
     const known = new Set(this.vocabulary().map((w) => w.toLowerCase()));
@@ -487,7 +487,7 @@ export class CustomizationsStore extends EventEmitter {
     }
     const added = batch.filter((w) => !known.has(w.word.toLowerCase()) && !blocked.has(w.word.toLowerCase()));
     if (!added.length && !takenBack.size) return [];
-    if (takenBack.size) log.info(`学習語 ${takenBack.size} 語を、新しい手直しに合わせて取り下げました`);
+    if (takenBack.size) log.info(`withdrew ${takenBack.size} learned words to follow a new correction`);
     this.update({
       learnedWords: [...this.value.learnedWords.filter((x) => !takenBack.has(x.word)), ...added],
       blockedLearnedWords: [...this.value.blockedLearnedWords, ...takenBack],
@@ -495,7 +495,7 @@ export class CustomizationsStore extends EventEmitter {
     return added;
   }
 
-  /** 学習を取り消し、同じ語を二度と学習しないようにする（LRN-2） */
+  /** Undoes learning a word, and never learns the same word again (LRN-2) */
   undoLearnedWord(word: string): void {
     this.update({
       learnedWords: this.value.learnedWords.filter((w) => w.word !== word),
@@ -504,8 +504,8 @@ export class CustomizationsStore extends EventEmitter {
   }
 
   /**
-   * 読みを作る関数を設定する（main で LLM の接続を渡す）。
-   * 設定すると、読みのない英字の辞書の語について、少し待ってからまとめて読みを作る。
+   * Sets the function that makes readings (main passes the LLM connection).
+   * Once set, readings for Latin-letter dictionary words without readings are made in a batch after a short wait.
    */
   setReadingGenerator(fn: ReadingGenerator | null): void {
     this.readingGenerator = fn;
@@ -513,7 +513,7 @@ export class CustomizationsStore extends EventEmitter {
     this.scheduleReadings();
   }
 
-  /** 読みがまだない英字の辞書の語 */
+  /** Latin-letter dictionary words that have no reading yet */
   wordsNeedingReadings(): string[] {
     const r = this.value.readings ?? {};
     const s = this.value.suggestedReadings ?? {};
@@ -530,7 +530,7 @@ export class CustomizationsStore extends EventEmitter {
     this.readingTimer.unref?.();
   }
 
-  /** 読みのない語の読みを今すぐ作る（最大 50 語ずつ） */
+  /** Makes readings for words without one right away (up to 50 words at a time) */
   async generateReadingsNow(): Promise<number> {
     const gen = this.readingGenerator;
     const words = this.wordsNeedingReadings().slice(-50);
@@ -546,11 +546,11 @@ export class CustomizationsStore extends EventEmitter {
       const entries = Object.entries(made).filter(([, v]) => v.length);
       if (!entries.length) return 0;
       this.update({ suggestedReadings: { ...this.value.suggestedReadings, ...Object.fromEntries(entries) } });
-      log.info(`辞書の ${entries.length} 語に読みの候補を作りました`);
+      log.info(`made reading candidates for ${entries.length} dictionary words`);
       return entries.length;
     } catch (e) {
       for (const w of words) this.readingFailed.add(w);
-      log.warn('読みの候補を作れませんでした', e);
+      log.warn('could not make reading candidates', e);
       return 0;
     } finally {
       this.readingBusy = false;

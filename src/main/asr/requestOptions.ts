@@ -1,6 +1,7 @@
 /**
- * 設定から、書き起こしの要求に付ける任意の指定を作る。アプリ（DictationController）と評価（eval/pipeline）が同じ関数を通る。
- * どれも既定ではオフで、評価で効果を確かめた設定だけを既定にする。
+ * Builds the optional fields of a transcription request from the settings. The app (DictationController) and the evaluation
+ * (eval/pipeline) go through the same function.
+ * All of them are off by default; only settings whose effect has been confirmed by evaluation become defaults.
  */
 import type { AsrResultPayload } from '../../shared/asr-protocol';
 import type { AsrSettings } from '../../shared/settings';
@@ -10,14 +11,14 @@ import { mergeUncertain, uncertainFromHypotheses, uncertainFromTokens, type Unce
 
 export type AsrRequestExtras = Pick<TranscribeOptions, 'promptText' | 'alternatives' | 'rehear'>;
 
-/** 別候補を付ける箇所の確信度の上限 */
+/** Confidence below which alternative candidates are requested */
 const ALTERNATIVES_BELOW = 0.5;
 
 type ExtraSettings = Partial<Pick<AsrSettings, 'promptStyle' | 'promptTerms' | 'rehear' | 'alternativesTopK'>>;
 
 /**
- * hints は大事な順（得点順）で渡す。context は直前の文脈（長い録音の、前の区間の書き起こし）。
- * プロンプトを main で組むのは、丸ごとの書き起こしと、区間ごとの書き起こしの両方で同じにする
+ * hints are passed most important first (by score). context is the preceding text (the previous segment's transcript in a long recording).
+ * The prompt is built in main so that it is the same for whole and per-segment transcription
  */
 export function asrRequestExtras(asr: ExtraSettings, hints: readonly string[], context?: string): AsrRequestExtras {
   const out: AsrRequestExtras = {};
@@ -32,7 +33,7 @@ export function asrRequestExtras(asr: ExtraSettings, hints: readonly string[], c
   return out;
 }
 
-/** 書き起こしの結果から、聞き違いかもしれない箇所を取り出す（聞き直しの食い違いを先に、確信度の低い箇所の別候補を後に） */
+/** Takes the places that may be misheard from a transcription result (differences from listening again first, then alternative candidates where confidence is low) */
 export function uncertainOf(result: Pick<AsrResultPayload, 'text' | 'tokens' | 'alternatives' | 'hypotheses'>): Uncertain[] {
   const text = result.text.trim();
   if (!text) return [];

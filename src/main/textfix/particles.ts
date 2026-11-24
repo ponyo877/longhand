@@ -1,30 +1,30 @@
 /**
- * 規則 d: 助詞の明らかな誤りを直す。話し手が省いた助詞は補わない。
+ * Rule d: fixes obvious particle mistakes. Does not add particles the speaker left out.
  *
- * - 語の決まり（「こんにちわ」→「こんにちは」など）は、確信度がなくても直す
- * - 「お」→「を」、「え」→「へ」は、名詞と自立語の動詞の間にあり、その字の確信度が低いときだけ直す
- * - Whisper が足した「を」（名詞と自立語の動詞の間で、確信度が低いもの）を消す。
- *   評価では、本物の「を」の確信度はどれも 0.9 以上、足された「を」は 0.7 未満だった（docs/evaluation.md）
- * 確信度は丸ごと書き起こした発話（28 秒以下）でだけ取れる。確信度のない文字を含む所は直さない。
+ * - Fixed spellings (「こんにちわ」→「こんにちは」 and so on) are fixed even without confidence
+ * - 「お」→「を」 and 「え」→「へ」 are fixed only between a noun and an independent verb, and only when that character's confidence is low
+ * - Removes a 「を」 added by Whisper (between a noun and an independent verb, with low confidence).
+ *   In evaluation, every real 「を」 had a confidence of 0.9 or more, and every added one less than 0.7 (docs/evaluation.md)
+ * Confidence is available only for utterances transcribed in one piece (28 seconds or less). Spans with characters lacking confidence are not fixed.
  */
 import { rangeConfidence } from './align';
 import type { RuleContext, RuleResult } from './index';
 import type { FixEdit, Token } from './types';
 
-/** 語の決まりの誤り */
+/** Misspellings of fixed expressions */
 const FIXED_WORDS: Record<string, string> = {
   こんにちわ: 'こんにちは',
   こんばんわ: 'こんばんは',
 };
 
-/** 「お」「え」を助詞に直す確信度の上限 */
+/** Confidence below which 「お」 and 「え」 become particles */
 export const PARTICLE_LOW_CONFIDENCE = 0.6;
-/** 足された「を」とみなす確信度の上限 */
+/** Confidence below which a 「を」 counts as added */
 export const DROP_WO_LOW_CONFIDENCE = 0.8;
-/** 足された「を」を消すかの既定（評価の基準を満たしたのでオン） */
+/** Default for removing an added 「を」 (on, since it met the evaluation criteria) */
 export const DROP_WO_DEFAULT = true;
 
-/** 名詞と自立語の動詞の間に、隙間なく挟まっているか */
+/** Whether the token sits directly between a noun and an independent verb, with no gaps */
 function betweenNounAndVerb(tokens: readonly Token[], i: number): boolean {
   const prev = tokens[i - 1];
   const next = tokens[i + 1];

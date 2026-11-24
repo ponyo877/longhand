@@ -19,7 +19,7 @@ enum AudioError: Error, CustomStringConvertible {
     }
 }
 
-/// base64 の Float32 LE（16 kHz モノラル）を復号する。
+/// Decodes base64 Float32 LE (16 kHz mono).
 func decodePcmBase64(_ b64: String) throws -> [Float] {
     guard let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters) else { throw AudioError.badBase64 }
     guard data.count % 4 == 0 else { throw AudioError.badPcmLength(data.count) }
@@ -33,7 +33,7 @@ func decodePcmBase64(_ b64: String) throws -> [Float] {
     return sanitize(out)
 }
 
-/// WAV を読む。16 kHz モノラルの PCM16 / Float32 は自前で読み、それ以外は FluidAudio の AudioConverter（AVAudioFile）で 16 kHz モノラルに変換する。
+/// Reads a WAV. 16 kHz mono PCM16 / Float32 is read directly; anything else is converted to 16 kHz mono with FluidAudio's AudioConverter (AVAudioFile).
 func readWav(path: String) throws -> [Float] {
     guard FileManager.default.fileExists(atPath: path) else { throw AudioError.fileNotFound(path) }
     let url = URL(fileURLWithPath: path)
@@ -109,23 +109,23 @@ private func sanitize(_ x: [Float]) -> [Float] {
     return x.map { $0.isFinite ? max(-1, min(1, $0)) : 0 }
 }
 
-// MARK: - エネルギーによる無音判定、前後の無音の削除、ポーズでの分割
+// MARK: - Energy-based silence detection, trimming leading and trailing silence, splitting at pauses
 
 struct VadConfig {
-    /// フレーム長（ms）
+    /// Frame length (ms)
     var frameMs = 20
-    /// 発話とみなす閾値の下限（dBFS）。実際の閾値は「雑音の床 + relDb」と比べて大きい方
+    /// Lower bound of the speech threshold (dBFS). The actual threshold is the larger of this and "noise floor + relDb"
     var minThresholdDb: Float = -60
-    /// 雑音の床（フレーム dB の 10 パーセンタイル）からの高さ
+    /// Height above the noise floor (the 10th percentile of frame dB)
     var relDb: Float = 15
-    /// 閾値の絶対的な下限（dBFS）。これより小さいフレームは常に無音
+    /// Absolute lower bound of the threshold (dBFS). Frames below this are always silence
     var hardFloorDb: Float = -62
-    /// フレーム dB の 99 パーセンタイルと 10 パーセンタイルの差がこれ未満なら、
-    /// 抑揚のない定常音（空調やホワイトノイズ）とみなして無音扱いにする
+    /// If the difference between the 99th and 10th percentiles of frame dB is below this,
+    /// the audio is taken as a flat steady sound (air conditioning or white noise) and treated as silence
     var minDynamicRangeDb: Float = 10
-    /// 発話フレームの合計がこれ未満なら無音とみなす（ms）
+    /// Treated as silence if the total of speech frames is below this (ms)
     var minSpeechMs = 150
-    /// 前後の無音を削るときに残す余白（ms）
+    /// Margin kept when trimming leading and trailing silence (ms)
     var padStartMs = 300
     var padEndMs = 400
 }
@@ -134,7 +134,7 @@ struct EnergyProfile {
     let frameSamples: Int
     let db: [Float]
     let threshold: Float
-    /// p99 - p10（dB）
+    /// p99 - p10 (dB)
     let dynamicRange: Float
     var frameCount: Int { db.count }
 
@@ -166,9 +166,9 @@ struct EnergyProfile {
         let p99 = sorted[min(n - 1, (n * 99) / 100)]
         dynamicRange = p99 - floorDb
         var thr = max(floorDb + config.relDb, config.minThresholdDb)
-        // 全体が発話の短いクリップで閾値が発話より上に行かないようにする
+        // Keep the threshold from rising above the speech in a short clip that is all speech
         thr = min(thr, p99 - 6)
-        // ただし絶対値の下限は割らない（デジタル無音や小さな定常雑音を発話とみなさない）
+        // But never go below the absolute lower bound (so digital silence and faint steady noise are not taken as speech)
         threshold = max(thr, config.hardFloorDb)
     }
 
@@ -178,32 +178,32 @@ struct EnergyProfile {
 }
 
 struct Chunk {
-    /// 元の音声内のサンプル位置
+    /// Sample positions in the original audio
     let start: Int
     let end: Int
 }
 
 enum SplitMode: String {
-    /// 分割しない（15 秒を超える音声は FluidAudio の窓分割に任せる）
+    /// Do not split (audio longer than 15 seconds is left to FluidAudio's window splitting)
     case none
-    /// maxChunkSec を超えるときだけ、ポーズで分割する
+    /// Split at pauses only when longer than maxChunkSec
     case long
-    /// minPauseMs 以上のポーズごとに分割する（短すぎる断片は隣とまとめる）
+    /// Split at every pause of minPauseMs or longer (pieces that are too short are merged with a neighbor)
     case pauses
 }
 
 struct SegmentPlanConfig {
-    /// 前後の無音を削る。評価では、削ると最初の文が落ちる例があり、平均では悪化したので既定は false
+    /// Trim leading and trailing silence. In evaluation, trimming sometimes lost the first sentence and was worse on average, so the default is false
     var trim = false
     var split: SplitMode = .long
-    /// モデルの窓（15 秒）。long モードでは、これ以下の音声は分割しない
+    /// The model's window (15 seconds). In long mode, audio this long or shorter is not split
     var windowSec: Double = 15.0
     var maxChunkSec: Double = 14.0
     var minChunkSec: Double = 2.0
     var minPauseMs = 500
 }
 
-/// 無音なら nil。そうでなければ書き起こす区間のリストを返す。
+/// nil for silence. Otherwise returns the list of chunks to transcribe.
 func planChunks(samples: [Float], vad: VadConfig, plan: SegmentPlanConfig) -> [Chunk]? {
     let prof = EnergyProfile(samples: samples, config: vad)
     let fs = prof.frameSamples
@@ -228,9 +228,9 @@ func planChunks(samples: [Float], vad: VadConfig, plan: SegmentPlanConfig) -> [C
         return [Chunk(start: startFrame * fs, end: endSample)]
     }
 
-    // ポーズ（閾値未満が minPauseMs 以上続く区間）を集める
+    // Collect pauses (stretches below the threshold lasting minPauseMs or longer)
     let minPauseFrames = max(1, plan.minPauseMs / vad.frameMs)
-    var pauses: [(start: Int, end: Int)] = []  // フレーム番号 [start, end)
+    var pauses: [(start: Int, end: Int)] = []  // Frame numbers [start, end)
     var i = first
     while i <= last {
         if !prof.isSpeech(i) {
@@ -245,7 +245,7 @@ func planChunks(samples: [Float], vad: VadConfig, plan: SegmentPlanConfig) -> [C
 
     let maxFrames = Int(plan.maxChunkSec * 1000) / vad.frameMs
     let minFrames = Int(plan.minChunkSec * 1000) / vad.frameMs
-    var cuts: [Int] = []  // フレーム番号。区間の境界
+    var cuts: [Int] = []  // Frame numbers of the chunk boundaries
 
     switch plan.split {
     case .none:
@@ -263,14 +263,14 @@ func planChunks(samples: [Float], vad: VadConfig, plan: SegmentPlanConfig) -> [C
         break
     }
 
-    // どのモードでも maxChunkSec を超える区間は分割する
+    // In every mode, split chunks longer than maxChunkSec
     var bounds = [startFrame] + cuts + [endFrame]
     var k = 0
     while k < bounds.count - 1 {
         let a = bounds[k]
         let b = bounds[k + 1]
         if b - a > maxFrames {
-            // a + minFrames .. a + maxFrames の中で一番長いポーズの中央、なければ一番静かなフレームで切る
+            // Cut at the middle of the longest pause within a + minFrames .. a + maxFrames, or else at the quietest frame
             let lo = a + minFrames
             let hi = a + maxFrames
             var best: Int? = nil
@@ -302,13 +302,13 @@ func planChunks(samples: [Float], vad: VadConfig, plan: SegmentPlanConfig) -> [C
     for k in 0..<(bounds.count - 1) {
         var a = bounds[k]
         var b = bounds[k + 1]
-        // 区間の前後に残った長い無音は余白の分だけ残して削る
+        // Trim long silence left at either end of the chunk, keeping only the margin
         if plan.trim {
             var f = a
             while f < b && !prof.isSpeech(f) { f += 1 }
             var l = b - 1
             while l > f && !prof.isSpeech(l) { l -= 1 }
-            if f >= b { continue }  // 区間全体が無音
+            if f >= b { continue }  // The whole chunk is silence
             a = max(a, f - padS)
             b = min(b, l + 1 + padE)
         }

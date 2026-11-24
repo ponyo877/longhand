@@ -1,23 +1,23 @@
 /**
- * Electron main <-> Swift ヘルパー（LonghandHelper）の通信仕様。
+ * Protocol between Electron main and the Swift helper (LonghandHelper).
  *
- * - ヘルパーは main の子プロセスとして起動し、stdin / stdout で JSON Lines（1 行 1 メッセージ、UTF-8）をやり取りする。
- * - stdout はプロトコル専用。ヘルパーのログは stderr に出す（main がログファイルへ転送する）。
- * - エンベロープは {type, id?, payload}。要求に対する応答は同じ id を付けて返す。
- *   ヘルパーから自発的に送るイベント（hotkey など）は id を持たない。
- * - 応答が失敗の場合は {type: "error", id, payload: {code, message}} を返す。
- * - audio_start と audio_stop の応答（audio_started、audio_stopped、開始失敗の audio_error）にも id は付くが、
- *   main は id ではなく sessionId で突き合わせる。録音中に audio_start が来て前のセッションを閉じたときの
- *   audio_stopped と、録音中のデバイスの抜けによる audio_error は、要求と無関係に id なしで届くため。
- * - stdin が EOF になったら（親が死んだら）、ヘルパーは後始末（地球儀キー設定の復元など）をして終了する。
+ * - The helper runs as a child process of main and exchanges JSON Lines (one message per line, UTF-8) over stdin / stdout.
+ * - stdout is for the protocol only. The helper writes its logs to stderr (main forwards them to the log file).
+ * - The envelope is {type, id?, payload}. A response to a request carries the same id.
+ *   Events the helper sends on its own (hotkey and so on) have no id.
+ * - A failed response is {type: "error", id, payload: {code, message}}.
+ * - The responses to audio_start and audio_stop (audio_started, audio_stopped, and audio_error for a failed start) also carry an id,
+ *   but main matches them by sessionId, not by id. The audio_stopped for a previous session closed by an audio_start during
+ *   recording, and an audio_error for a device lost during recording, arrive without an id and unrelated to any request.
+ * - When stdin reaches EOF (the parent died), the helper cleans up (restores the globe key setting and so on) and exits.
  *
- * Swift 側の実装は helper/ にある。ここを変えたら helper/Sources/LonghandHelper/Protocol.swift も合わせる。
+ * The Swift side lives in helper/. When this changes, update helper/Sources/LonghandHelper/Protocol.swift to match.
  */
 
 export const PROTOCOL_VERSION = 1;
 
 // ---------------------------------------------------------------------------
-// 共通
+// Common
 // ---------------------------------------------------------------------------
 
 export interface Envelope<T extends string = string, P = unknown> {
@@ -27,17 +27,17 @@ export interface Envelope<T extends string = string, P = unknown> {
 }
 
 /**
- * キー名。
- * - 修飾キー（左右を区別しない）: "Fn" | "Control" | "Alt" | "Shift" | "Meta"
- * - 修飾キー（左右を区別する）: "ControlLeft" | "ControlRight" | "AltLeft" | "AltRight" |
+ * Key name.
+ * - Modifier keys (either side): "Fn" | "Control" | "Alt" | "Shift" | "Meta"
+ * - Modifier keys (one side): "ControlLeft" | "ControlRight" | "AltLeft" | "AltRight" |
  *   "ShiftLeft" | "ShiftRight" | "MetaLeft" | "MetaRight"
- * - それ以外は W3C KeyboardEvent.code の名前: "KeyA".."KeyZ", "Digit0".."Digit9", "Space", "Escape",
- *   "Enter", "Tab", "Backspace", "F1".."F20", "ArrowUp" など
- * - マウスボタン: "Mouse3"（中ボタン）, "Mouse4", "Mouse5"
+ * - Anything else is a W3C KeyboardEvent.code name: "KeyA".."KeyZ", "Digit0".."Digit9", "Space", "Escape",
+ *   "Enter", "Tab", "Backspace", "F1".."F20", "ArrowUp" and so on
+ * - Mouse buttons: "Mouse3" (middle button), "Mouse4", "Mouse5"
  */
 export type KeyName = string;
 
-/** 1 つのショートカット。含まれるキーをすべて押した状態で成立する（最大 5 キー） */
+/** One shortcut. It matches while all of its keys are held (up to 5 keys) */
 export type Binding = KeyName[];
 
 export type HotkeyAction = 'activate' | 'lock' | 'cancel' | 'paste_last';
@@ -49,16 +49,17 @@ export type PttState = 'inactive' | 'active' | 'locked' | 'finalizing';
 // ---------------------------------------------------------------------------
 
 export interface ConfigurePayload {
-  /** 各操作に最大 3 個のショートカット。空配列なら無効 */
+  /** Up to 3 shortcuts per action. An empty array turns the action off */
   hotkeys: Record<HotkeyAction, Binding[]>;
   /**
-   * 地球儀キー（Fn）のシステム動作（絵文字ピッカー、入力ソース切替など）を一時的に「何もしない」にする。
-   * 非公開 API（TISUpdateFnUsageType 相当）を使う。元の値はレシートファイルに保存し、終了時とクラッシュ後の次回起動時に戻す。
+   * Temporarily sets the system action of the globe key (Fn) (emoji picker, switching input sources and so on) to "Do Nothing".
+   * Uses a private API (equivalent to TISUpdateFnUsageType). The original value is saved in a receipt file and restored on exit, or on
+   * the next launch after a crash.
    */
   suppressGlobe: boolean;
   /**
-   * Chromium 系ブラウザが AXManualAccessibility に対応しないとき、代わりに AXEnhancedUserInterface を立ててよいか（省略時 true）。
-   * ウィンドウ整列ツールの動きを妨げることがあるので切れるようにしている
+   * Whether AXEnhancedUserInterface may be set instead when a Chromium-based browser does not support AXManualAccessibility (default true).
+   * It can get in the way of window management tools, so it can be turned off
    */
   chromiumEnhancedUI?: boolean;
 }
@@ -69,7 +70,7 @@ export interface StateSyncPayload {
 
 export interface AudioStartPayload {
   sessionId: number;
-  /** null ならシステム既定の入力デバイス */
+  /** null for the system default input device */
   deviceId: string | null;
 }
 
@@ -78,48 +79,48 @@ export interface AudioStopPayload {
 }
 
 export interface GetContextPayload {
-  /** 入力欄の内容（カーソル前後、選択範囲）を読むか */
+  /** Whether to read the field's content (around the cursor, the selection) */
   includeField: boolean;
-  /** ブラウザのホスト名を探すか */
+  /** Whether to look for the browser's host name */
   includeHost: boolean;
-  /** カーソル前後それぞれの最大文字数（既定 1000） */
+  /** Maximum characters on each side of the cursor (default 1000) */
   maxContextChars?: number;
 }
 
 export interface PastePayload {
   pasteId: string;
   /**
-   * 貼り付ける文字列。コマンド記法を含められる。ヘルパーは先頭から順に、
-   * 通常の文字列はクリップボード経由で貼り付け、トークンはキー操作として実行する。
-   *   <|BACKSPACE|>      Backspace を 1 回押す
-   *   <|WAIT_n|>         n ミリ秒待つ（n は 1..5000）
-   *   <|ENTER|>          Return を押す
-   *   <|TAB|>            Tab を押す
+   * Text to paste. It may contain command tokens. The helper works from the start:
+   * plain text is pasted through the clipboard, and tokens are run as key presses.
+   *   <|BACKSPACE|>      press Backspace once
+   *   <|WAIT_n|>         wait n milliseconds (n is 1..5000)
+   *   <|ENTER|>          press Return
+   *   <|TAB|>            press Tab
    */
   text: string;
-  /** 貼り付け前に、選択範囲がこの文字列と一致することを確かめる（編集モード）。一致しなければ貼らずに edit_target_changed で失敗する */
+  /** Before pasting, checks that the selection equals this text (edit mode). If it does not, fails with edit_target_changed without pasting */
   expectSelectedText?: string;
-  /** 貼り付け前に前面アプリの bundle ID がこれと一致することを確かめる。違えば貼らずに app_changed で失敗する */
+  /** Before pasting, checks that the frontmost app's bundle ID equals this. If it does not, fails with app_changed without pasting */
   expectBundleId?: string;
-  /** AX で貼り付け前後の入力欄を読み、文字が入ったかを確かめる（入らなければ ⌘V を 1 回だけ送り直す） */
+  /** Reads the field with AX before and after pasting to check that the text arrived (if it did not, sends ⌘V once more) */
   verifyLanding: boolean;
-  /** クリップボードに nspasteboard の Transient / Concealed / AutoGenerated マーカーを付ける */
+  /** Adds the nspasteboard Transient / Concealed / AutoGenerated markers to the clipboard */
   avoidClipboardHistory: boolean;
   /**
-   * 貼り付けが成功したら、その入力欄をこのミリ秒数だけ監視し、最後の内容を field_watch_result で返す（学習機能）。
-   * 0 または未指定なら監視しない。上限は 600000。時間切れのときは、変化が 1 秒落ち着くのを最大 1.5 秒待ってから返す。
-   * 欄が読めず監視できないときも、reason: 'unreadable' の field_watch_result を 1 回返す。
+   * After a successful paste, watches the field for this many milliseconds and returns its last content in field_watch_result (learning).
+   * 0 or unset means no watching. The maximum is 600000. On timeout, waits up to 1.5 seconds for changes to settle for 1 second before
+   * returning. When the field cannot be read and watched, still returns one field_watch_result with reason: 'unreadable'.
    */
   watchMs?: number;
 }
 
 export interface PermissionsPayload {
-  /** 指定した権限について、まだ決まっていなければ OS の許可ダイアログを出す */
+  /** For the given permission, shows the system permission dialog if it has not been decided yet */
   prompt?: 'accessibility' | 'microphone';
 }
 
 export interface RecordShortcutPayload {
-  /** true の間、ホットキーの判定を止め、押されたキーを shortcut_keys で報告する。5 秒以内に再送がなければ自動で false に戻る */
+  /** While true, hotkey matching stops and pressed keys are reported in shortcut_keys. Turns back to false by itself unless sent again within 5 seconds */
   active: boolean;
 }
 
@@ -149,19 +150,19 @@ export interface ReadyPayload {
 export interface HotkeyPayload {
   action: HotkeyAction;
   /**
-   * down: ショートカットが成立した
-   * up: 成立していたショートカットが解除された（activate の押しっぱなし判定に使う）
-   * interrupted: activate が成立している間に、ショートカットに含まれない別のキーが押された
-   *   （Fn+Delete など、Fn を修飾キーとして使った）。main は短い録音なら取り消す。
+   * down: the shortcut matched
+   * up: a matched shortcut was released (used to detect holding activate)
+   * interrupted: while activate was matched, another key not in the shortcut was pressed
+   *   (Fn used as a modifier, as in Fn+Delete). main cancels a short recording.
    */
   phase: 'down' | 'up' | 'interrupted';
-  /** イベントの時刻（ミリ秒、単調増加。CGEvent のタイムスタンプ由来） */
+  /** Time of the event (milliseconds, monotonic, from the CGEvent timestamp) */
   t: number;
 }
 
 export interface ConfiguredPayload {
   ok: boolean;
-  /** 受け付けなかったショートカットの理由 */
+  /** Reasons for the rejected shortcuts */
   errors: string[];
   globeSuppressed: boolean;
 }
@@ -170,26 +171,26 @@ export interface AudioStartedPayload {
   sessionId: number;
   deviceId: string;
   deviceName: string;
-  /** Bluetooth などの種類。"builtin" | "usb" | "bluetooth" | "virtual" | "aggregate" | "unknown" */
+  /** Kind of connection, such as Bluetooth. "builtin" | "usb" | "bluetooth" | "virtual" | "aggregate" | "unknown" */
   transport: string;
 }
 
 export interface AudioChunkPayload {
   sessionId: number;
   seq: number;
-  /** 16kHz モノラル Float32 リトルエンディアンの base64。約 100ms 分 */
+  /** Base64 of 16 kHz mono Float32 little-endian samples. About 100 ms */
   pcm: string;
-  /** このチャンクの RMS（0..1）。波形表示用 */
+  /** RMS of this chunk (0..1), for the waveform */
   rms: number;
-  /** このチャンクの最大振幅（0..1）。デジタル無音の判定用 */
+  /** Peak amplitude of this chunk (0..1), for detecting digital silence */
   peak: number;
 }
 
 export interface AudioStoppedPayload {
   sessionId: number;
-  /** flushed: 最後まで出し切った / incomplete: 途中でエラーがあった */
+  /** flushed: everything was sent / incomplete: an error occurred on the way */
   status: 'flushed' | 'incomplete';
-  /** 送ったチャンクの総数 */
+  /** Total number of chunks sent */
   chunks: number;
 }
 
@@ -201,11 +202,11 @@ export interface AudioErrorPayload {
 }
 
 export interface AudioDevice {
-  id: string; // CoreAudio の UID
+  id: string; // CoreAudio UID
   name: string;
   isDefault: boolean;
   transport: string;
-  /** BlackHole、Zoom Audio、Teams Audio などの仮想デバイス */
+  /** A virtual device such as BlackHole, Zoom Audio or Teams Audio */
   isVirtual: boolean;
 }
 
@@ -220,35 +221,35 @@ export interface AppInfo {
 }
 
 export interface FieldInfo {
-  /** AXRole（AXTextField、AXTextArea、AXComboBox、AXWebArea など） */
+  /** AXRole (AXTextField, AXTextArea, AXComboBox, AXWebArea and so on) */
   role: string;
   subrole?: string;
-  /** AXDescription / AXTitle / AXPlaceholderValue / AXHelp から作った説明（最大 200 字） */
+  /** Description built from AXDescription / AXTitle / AXPlaceholderValue / AXHelp (up to 200 characters) */
   description?: string;
-  /** パスワード欄（AXSecureTextField）。true のとき本文は一切読まない */
+  /** Password field (AXSecureTextField). When true, the content is never read */
   isSecure: boolean;
-  /** 書き込める要素か（AXValue が settable か、AXEditable 相当） */
+  /** Whether the element is writable (AXValue is settable, or the equivalent of AXEditable) */
   editable: boolean;
-  /** キャレットより前の文字列（最大 maxContextChars 字、選択範囲の手前まで） */
+  /** Text before the caret (up to maxContextChars characters, up to the start of the selection) */
   beforeCursor?: string;
-  /** キャレット（選択範囲の末尾）より後の文字列（最大 maxContextChars 字） */
+  /** Text after the caret (the end of the selection), up to maxContextChars characters */
   afterCursor?: string;
-  /** 選択中の文字列。選択がなければ空文字 */
+  /** Selected text. Empty when nothing is selected */
   selectedText?: string;
-  /** 入力欄全体の文字数（読めた場合） */
+  /** Character count of the whole field (when it could be read) */
   totalLength?: number;
 }
 
 export interface ContextPayload {
   app: AppInfo;
-  /** ブラウザならホスト名（例: "mail.google.com"）。取れなければ undefined */
+  /** Host name for a browser (for example "mail.google.com"). undefined when it cannot be found */
   host?: string;
-  /** ウィンドウのタイトル（最大 200 字） */
+  /** Window title (up to 200 characters) */
   windowTitle?: string;
   field?: FieldInfo;
-  /** フォーカス中の要素に貼り付けられそうか。AX で判断できなければ "unknown" */
+  /** Whether the focused element looks pasteable. "unknown" when AX cannot tell */
   canPaste: 'yes' | 'no' | 'unknown';
-  /** 取得にかかった時間 */
+  /** Time taken to collect the context */
   elapsedMs: number;
 }
 
@@ -257,59 +258,59 @@ export interface PasteAckPayload {
   success: boolean;
   failureReason?: 'edit_target_changed' | 'app_changed' | 'no_text_target' | 'secure_field' | 'pasteboard_error' | 'not_trusted';
   /**
-   * confirmed: AX で文字が入ったことを確認した
-   * read: 欄の変化は見えないが、貼り付け先がクリップボードを読んだ（Electron など AX の更新が遅いアプリ。貼れている見込みが高い）
-   * unconfirmed: 読まれず、⌘V を送り直しても欄が変わらなかった
-   * unknown: AX で読めない欄、または verifyLanding: false
+   * confirmed: AX confirmed that the text arrived
+   * read: no change seen in the field, but the target read the clipboard (apps with slow AX updates, such as Electron apps. Very likely pasted)
+   * unconfirmed: not read, and the field did not change even after sending ⌘V again
+   * unknown: a field AX cannot read, or verifyLanding: false
    */
   landed: 'confirmed' | 'read' | 'unconfirmed' | 'unknown';
-  /** 着地確認で ⌘V を送り直したか */
+  /** Whether ⌘V was sent again for the landing check */
   retried: boolean;
   elapsedMs: number;
-  /** 最初の ⌘V を投入した時刻。hotkey の t と同じ時計（CLOCK_UPTIME_RAW のミリ秒、process.hrtime と同じ基準）。⌘V を送る前に失敗したら無い */
+  /** Time the first ⌘V was posted. Same clock as the hotkey t (CLOCK_UPTIME_RAW milliseconds, same base as process.hrtime). Absent if it failed before sending ⌘V */
   keyPostedAt?: number;
-  /** ヘルパーが paste 要求を受け取ってから最初の ⌘V を投入するまでのミリ秒。⌘V を送る前に失敗したら無い */
+  /** Milliseconds from the helper receiving the paste request to posting the first ⌘V. Absent if it failed before sending ⌘V */
   keyPostedAfterMs?: number;
-  /** 貼り付け前の AX の読み取り（対象の確認、編集モードの照合、監視用の全文）にかかったミリ秒 */
+  /** Milliseconds spent on AX reads before pasting (checking the target, matching for edit mode, the full text for watching) */
   preReadMs?: number;
 }
 
 export interface FieldWatchResultPayload {
   pasteId: string;
-  /** 貼り付ける直前の入力欄の全文（最大 20000 字。長ければキャレットの周りを切り出す） */
+  /** Full text of the field just before pasting (up to 20000 characters. Longer text is cut around the caret) */
   before: string;
-  /** 貼り付けた直後の入力欄の全文（貼った文字列が見えるまで最大 1 秒読み直す） */
+  /** Full text of the field just after pasting (read again for up to 1 second until the pasted text shows) */
   afterPaste: string;
   /**
-   * 学習に使う最後の全文。enter と sent では、欄が空になる（貼った範囲が消える）直前の読み取り
-   * （enter なら Return の keyDown の瞬間に読んだ値）。それ以外は監視を終えた時点の値
+   * Last full text, used for learning. For enter and sent, the read just before the field went empty (the pasted range disappeared)
+   * (for enter, the value read at the moment of Return's keyDown). Otherwise the value when watching ended
    */
   final: string;
   /**
-   * timeout: watchMs が過ぎた / focus_changed: 別の要素や別のアプリに移った / element_gone: 要素が消えた /
-   * enter: Return の keyDown の後に欄が空になった（または 3 秒以内にフォーカスが移った）/
-   * sent: Return なしで欄が空になった、または貼った文字列が消えた / unreadable: 欄が読めず監視しなかった（文字列はすべて空）/
-   * cancelled: 次の貼り付けが来たなどで打ち切った
+   * timeout: watchMs passed / focus_changed: moved to another element or app / element_gone: the element disappeared /
+   * enter: the field went empty after Return's keyDown (or focus moved within 3 seconds) /
+   * sent: the field went empty without Return, or the pasted text disappeared / unreadable: the field could not be read and was not
+   * watched (all text is empty) / cancelled: stopped early, for example because the next paste came
    */
   reason: 'timeout' | 'focus_changed' | 'element_gone' | 'enter' | 'sent' | 'unreadable' | 'cancelled';
-  // 以下は新しいヘルパーだけが付ける（古いヘルパーでは undefined）
-  /** 利用者が最初にキーを押す直前の全文。キーを押さなければ afterPaste と同じ（アプリの自動整形と手直しを分けるため） */
+  // Only newer helpers set the fields below (undefined from older helpers)
+  /** Full text just before the user's first key press. Same as afterPaste if no key was pressed (to tell the app's auto-formatting from the user's edits) */
   baseline?: string;
-  /** 監視中の利用者のキー入力の数（文字、削除、⌘V/⌘X/⌘Z/⌘Y、⌃H など）。矢印、Esc、Tab、F キー、⌘C、修飾キー単独、Return は数えない */
+  /** Number of the user's key presses while watching (characters, deletions, ⌘V/⌘X/⌘Z/⌘Y, ⌃H and so on). Arrows, Esc, Tab, F keys, ⌘C, modifiers alone and Return do not count */
   keystrokes?: number;
-  /** 監視の開始から最初と最後のキー入力までのミリ秒 */
+  /** Milliseconds from the start of watching to the first and the last key press */
   firstKeystrokeMs?: number;
   lastKeystrokeMs?: number;
-  /** before の中での貼り付け位置（選択範囲の先頭、UTF-16）と、貼り付けで置き換えた選択の長さ */
+  /** Paste position in before (start of the selection, UTF-16), and the length of the selection the paste replaced */
   insertOffset?: number;
   insertReplacedLength?: number;
-  /** 貼った文字列（{key:...} などのコマンド記法を除いた本文） */
+  /** Pasted text (the body without command tokens such as {key:...}) */
   inserted?: string;
-  /** 最後の読み取りの前に、1 秒以上変化がなかったか */
+  /** Whether nothing changed for 1 second or more before the last read */
   settled?: boolean;
-  /** 監視していた時間 */
+  /** How long it watched */
   durationMs?: number;
-  /** enter と sent のとき、送信で欄が空になる直前の読み取り（final と同じ値）。それ以外は無い */
+  /** For enter and sent, the read just before sending emptied the field (same value as final). Absent otherwise */
   preSend?: string;
 }
 
@@ -319,16 +320,16 @@ export interface PermissionsResultPayload {
 }
 
 export interface ShortcutKeysPayload {
-  /** 現在押されているキー（KeyName） */
+  /** Keys currently held (KeyName) */
   keys: KeyName[];
-  /** 押下が始まってから最大になった組み合わせ。すべて離した時点で確定として送る */
+  /** The largest combination since the first key went down. Sent as final when all keys are released */
   combo: KeyName[];
-  /** true ならすべてのキーが離された（combo が確定した） */
+  /** true when all keys are released (combo is final) */
   done: boolean;
 }
 
 export interface FrontAppPayload extends AppInfo {
-  /** Electron 製アプリなら true（AXManualAccessibility を設定済み） */
+  /** true for an Electron app (AXManualAccessibility already set) */
   isElectron: boolean;
 }
 
@@ -362,11 +363,11 @@ export type HelperToMain =
       'event_tap',
       {
         /**
-         * moved_to_front: 自分より前に能動型の tap があったので、作り直して先頭に戻った /
-         * rival_in_front: 同じ相手に 60 秒で 3 回先頭を取り返されたので、取り合いをやめた（以後ホットキーを先に飲まれうる）
+         * moved_to_front: an active tap was ahead of ours, so ours was recreated and went back to the front /
+         * rival_in_front: the same rival took the front back 3 times in 60 seconds, so we stopped competing (it may swallow hotkeys first from now on)
          */
         status: 'enabled' | 'disabled_by_timeout' | 'disabled_by_user_input' | 're_enabled' | 'failed' | 'moved_to_front' | 'rival_in_front';
-        /** moved_to_front と rival_in_front のときの相手のプロセス */
+        /** The other process, for moved_to_front and rival_in_front */
         pid?: number;
         name?: string;
       }

@@ -3,7 +3,7 @@ import type { LlmProvider, LlmRequest } from '../llm/types';
 import { LlmError } from '../llm/types';
 import { formatText, type FormatInput } from './Formatter';
 
-/** 受け取った要求を記録し、用意した応答を返す偽のプロバイダ */
+/** A fake provider that records requests and returns prepared responses */
 function fake(reply: string | ((req: LlmRequest) => string) | Error) {
   const calls: LlmRequest[] = [];
   const provider: LlmProvider = {
@@ -30,33 +30,33 @@ const base = (over: Partial<FormatInput>): FormatInput => ({
   ...over,
 });
 
-describe('formatText（通常の音声入力）', () => {
-  it('LLM の出力にも正規化を掛ける（和英間の空白、半角の「?」）', async () => {
+describe('formatText (dictation)', () => {
+  it('normalizes the LLM output too (spaces between Japanese and Latin text, half-width 「?」)', async () => {
     const f = fake('{"text": "Slack で 共有しましたか?"}');
     const r = await formatText(base({ rawText: 'すらっくで共有しましたか', provider: f.provider }));
     expect(r).toMatchObject({ text: 'Slackで共有しましたか？', formatted: true });
   });
 
-  it('LLM が無いときも、生テキストを正規化して返す', async () => {
+  it('returns the normalized raw text without an LLM', async () => {
     const r = await formatText(base({ rawText: 'Notion に まとめました' }));
     expect(r).toMatchObject({ text: 'Notionにまとめました', formatted: false });
   });
 
-  it('ターミナルでは和英間の空白を残す（アプリ名から推定、明示もできる）', async () => {
+  it('keeps spaces between Japanese and Latin text in a terminal (guessed from the app name, or set explicitly)', async () => {
     const f = fake('{"text": "mkdir 資料"}');
     expect((await formatText(base({ rawText: 'x', provider: f.provider, context: { appName: 'Terminal' } }))).text).toBe('mkdir 資料');
     expect((await formatText(base({ rawText: 'x', provider: f.provider, codeLike: true }))).text).toBe('mkdir 資料');
     expect((await formatText(base({ rawText: 'x', provider: f.provider, context: { appName: 'Slack' } }))).text).toBe('mkdir資料');
   });
 
-  it('置換のきっかけをシステムプロンプトに渡す', async () => {
+  it('passes replacement triggers in the system prompt', async () => {
     const f = fake('{"text": "ほげです。"}');
     await formatText(base({ rawText: 'ほげです', provider: f.provider, protectedPhrases: ['ほげ'] }));
     expect(f.calls[0].system).toContain('# そのまま残す語句\n');
     expect(f.calls[0].system).toContain('- ほげ');
   });
 
-  it('以前の取り違えの組があれば近道に入らず、組をユーザーメッセージで、覚えたことをシステムプロンプトで渡す', async () => {
+  it('skips the fast path with past mix-up pairs, passing the pairs in the user message and what was learned in the system prompt', async () => {
     const f = fake('{"text": "資料を校正に回します。"}');
     const r = await formatText(
       base({
@@ -74,7 +74,7 @@ describe('formatText（通常の音声入力）', () => {
     expect(f.calls[0].system).toContain('- なんか（「何か」にしない）');
   });
 
-  it('食い違った箇所は、設定がオンのときだけ LLM に渡す。渡すときは近道に入らず、説明をシステムプロンプトに足す', async () => {
+  it('passes disagreeing spots to the LLM only when the setting is on, and then skips the fast path and adds the explanation to the system prompt', async () => {
     const uncertain = [{ heard: '剣', alternatives: ['件'] }];
     const off = fake('{"text": "その剣は来週です。"}');
     const r0 = await formatText(base({ rawText: 'その剣は来週です。', provider: off.provider, fastPath: true, uncertain }));
@@ -89,21 +89,21 @@ describe('formatText（通常の音声入力）', () => {
     expect(on.calls[0].system).toContain('# 聞き違いかもしれない箇所（uncertain）');
   });
 
-  it('辞書の語の候補をユーザーメッセージで渡し、候補があれば近道に入らない', async () => {
+  it('passes dictionary word candidates in the user message and skips the fast path when there are any', async () => {
     const f = fake('{"text": "明日の会議は午後からです。"}');
     await formatText(base({ rawText: '明日の会議は午後からです。', provider: f.provider, fastPath: true, dictionaryCandidates: [{ heard: '会議', word: 'Kaigi' }] }));
     expect(f.calls).toHaveLength(1);
     expect(JSON.parse(f.calls[0].user).dictionary_candidates).toEqual([{ heard: '会議', word: 'Kaigi' }]);
   });
 
-  it('近道がオンで整った短い発話なら、LLM を呼ばずに確定する', async () => {
+  it('finishes a short, clean utterance without calling the LLM when the fast path is on', async () => {
     const f = fake('{"text": "呼ばれないはず"}');
     const r = await formatText(base({ rawText: '明日の会議は午後からです。', provider: f.provider, fastPath: true }));
     expect(r).toMatchObject({ text: '明日の会議は午後からです。', formatted: true, fastPath: true, llmMs: 0 });
     expect(f.calls).toHaveLength(0);
   });
 
-  it('自動修正（textfix）で直した文は、近道と LLM の失敗のときに使い、英字に直した語は知っている語として扱う', async () => {
+  it('uses the textfix output on the fast path and on LLM failure, and treats words turned into Latin letters as known words', async () => {
     const textFix = {
       text: '明日はSlackで連絡します。',
       edits: [{ rule: 'latin' as const, start: 3, end: 7, before: 'スラック', after: 'Slack' }],
@@ -114,21 +114,21 @@ describe('formatText（通常の音声入力）', () => {
     expect(r).toMatchObject({ text: '明日はSlackで連絡します。', fastPath: true, autoFixed: true });
     expect(near.calls).toHaveLength(0);
 
-    const failed = fake(new LlmError('timeout', 'タイムアウト'));
+    const failed = fake(new LlmError('timeout', 'timed out'));
     const r2 = await formatText(base({ rawText: '明日はスラックで連絡します。', provider: failed.provider, textFix }));
     expect(r2).toMatchObject({ text: '明日はSlackで連絡します。', formatted: false, autoFixed: true });
-    // LLM には直す前の文を渡す
+    // The LLM gets the text before fixing
     expect(JSON.parse(failed.calls[0].user).raw_text).toBe('明日はスラックで連絡します。');
   });
 
-  it('確信度の低い字がある発話は、整っていても近道に入れない', async () => {
+  it('skips the fast path for an utterance with low-confidence characters, even when clean', async () => {
     const f = fake('{"text": "明日の会議は午後からです。"}');
     const r = await formatText(base({ rawText: '明日の会議は午後からです。', provider: f.provider, fastPath: true, lowConfidence: true }));
     expect(f.calls).toHaveLength(1);
     expect(r.fastPath).toBeUndefined();
   });
 
-  it('直さなかった用語集の候補があれば近道に入らず、LLM に候補を渡す', async () => {
+  it('skips the fast path with unfixed glossary candidates and passes them to the LLM', async () => {
     const f = fake('{"text": "ラインで送ります。"}');
     const r = await formatText(
       base({
@@ -143,47 +143,47 @@ describe('formatText（通常の音声入力）', () => {
     expect(r.autoFixed).toBeUndefined();
   });
 
-  it('近道がオンでも、整っていない発話は LLM に回す', async () => {
+  it('sends an unclean utterance to the LLM even when the fast path is on', async () => {
     const f = fake('{"text": "明日行きます。"}');
     const r = await formatText(base({ rawText: 'えーと明日行きます', provider: f.provider, fastPath: true }));
     expect(f.calls).toHaveLength(1);
     expect(r.fastPath).toBeUndefined();
   });
 
-  it('近道がオフなら、整った発話でも LLM に回す', async () => {
+  it('sends even a clean utterance to the LLM when the fast path is off', async () => {
     const f = fake('{"text": "明日の会議は午後からです。"}');
     await formatText(base({ rawText: '明日の会議は午後からです。', provider: f.provider }));
     expect(f.calls).toHaveLength(1);
   });
 
-  it('「うん」だけの発話も本文として LLM に回す', async () => {
+  it('sends an utterance of only 「うん」 to the LLM as content', async () => {
     const f = fake('{"text": "うん。"}');
     expect((await formatText(base({ rawText: 'うん', provider: f.provider }))).text).toBe('うん。');
   });
 
-  it('LLM が失敗したら、正規化した生テキストに戻す', async () => {
-    const f = fake(new LlmError('timeout', 'タイムアウト'));
+  it('falls back to the normalized raw text when the LLM fails', async () => {
+    const f = fake(new LlmError('timeout', 'timed out'));
     const r = await formatText(base({ rawText: '資料 は Slack に 置きました', provider: f.provider }));
     expect(r).toMatchObject({ text: '資料はSlackに置きました', formatted: false, errorKind: 'timeout' });
   });
 });
 
-describe('formatText（編集モード）', () => {
+describe('formatText (edit mode)', () => {
   const edit = (reply: string) => formatText(base({ mode: 'edit', rawText: '直して', selectedText: '元の文', provider: fake(reply).provider }));
 
-  it('削除の指示でないのに本文が空なら、不明確として扱う（N5）', async () => {
+  it('treats empty text without a delete instruction as unclear (N5)', async () => {
     expect(await edit('{"text": "", "deleted": false, "unclear": false}')).toMatchObject({ text: '', unclear: true, deleted: false });
   });
 
-  it('削除の指示なら deleted を返す', async () => {
+  it('returns deleted for a delete instruction', async () => {
     expect(await edit('{"text": "", "deleted": true, "unclear": false}')).toMatchObject({ text: '', unclear: false, deleted: true });
   });
 
-  it('不明確と判断されたら、本文があっても空にする', async () => {
+  it('empties the text when judged unclear, even if there is text', async () => {
     expect(await edit('{"text": "元の文", "deleted": false, "unclear": true}')).toMatchObject({ text: '', unclear: true });
   });
 
-  it('書き換えた本文はそのまま返す（編集結果には正規化を掛けない）', async () => {
+  it('returns the rewritten text as is (edit results are not normalized)', async () => {
     expect(await edit('{"text": "Slack で送る", "deleted": false, "unclear": false}')).toMatchObject({ text: 'Slack で送る', unclear: false });
   });
 });

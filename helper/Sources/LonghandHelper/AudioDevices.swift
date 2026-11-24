@@ -2,7 +2,7 @@ import CoreAudio
 import Foundation
 import IOKit
 
-/// CoreAudio の入力デバイスの列挙と、一覧・既定デバイスの変化の監視
+/// Lists CoreAudio input devices and watches for changes to the list and the default device
 enum AudioDevices {
     struct Device: Equatable {
         let id: AudioDeviceID
@@ -28,7 +28,7 @@ enum AudioDevices {
         guard inputChannelCount(id) > 0 else { return nil }
         if getUInt32(id, kAudioDevicePropertyIsHidden) == 1 { return nil }
         guard let uid = getString(id, kAudioDevicePropertyDeviceUID) else { return nil }
-        // AVAudioEngine などが一時的に作る集約デバイスは一覧に出さない
+        // Leave out aggregate devices that AVAudioEngine and others create temporarily
         if uid.hasPrefix("CADefaultDeviceAggregate") { return nil }
         let name = getString(id, kAudioObjectPropertyName) ?? uid
         let transportCode = getUInt32(id, kAudioDevicePropertyTransportType) ?? 0
@@ -55,7 +55,7 @@ enum AudioDevices {
         defaultInputDeviceID().flatMap(device(for:))
     }
 
-    /// ノートの蓋が閉じているか（IOPMrootDomain の AppleClamshellState）。閉じていると内蔵マイクは無音になる
+    /// Whether the laptop lid is closed (AppleClamshellState of IOPMrootDomain). With the lid closed, the built-in microphone is silent
     static func isClamshellClosed() -> Bool {
         let svc = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
         guard svc != 0 else { return false }
@@ -65,7 +65,7 @@ enum AudioDevices {
         return (v as? Bool) ?? false
     }
 
-    /// 蓋が閉じているときに内蔵の入力を避ける（REC-3）。ほかに入力がなければそのまま返す
+    /// Avoids the built-in input when the lid is closed (REC-3). Returns the device as is if there is no other input
     static func avoidingClosedLid(_ device: Device) -> Device {
         guard device.transport == "builtin", isClamshellClosed() else { return device }
         let alt = defaultInputDevice().flatMap { $0.transport == "builtin" || !$0.isAlive ? nil : $0 }
@@ -85,13 +85,13 @@ enum AudioDevices {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "bluetooth"
         case kAudioDeviceTransportTypeVirtual: return "virtual"
         case kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate: return "aggregate"
-        case kAudioDeviceTransportTypeContinuityCaptureWireless: return "bluetooth" // iPhone のマイク（無線）。遅延の性質が近い
+        case kAudioDeviceTransportTypeContinuityCaptureWireless: return "bluetooth" // iPhone microphone (wireless). Its latency behaves similarly
         case kAudioDeviceTransportTypeContinuityCaptureWired: return "usb"
         default: return "unknown"
         }
     }
 
-    /// 仮想デバイスによくある名前（transport が virtual になっていない製品向け）
+    /// Names common for virtual devices (for products whose transport is not virtual)
     static func looksVirtual(name: String, uid: String) -> Bool {
         let s = (name + " " + uid).lowercased()
         let patterns = ["blackhole", "loopback", "soundflower", "zoomaudiodevice", "zoom audio", "teams audio",
@@ -100,14 +100,14 @@ enum AudioDevices {
         return patterns.contains { s.contains($0) }
     }
 
-    // MARK: - 監視
+    // MARK: - Monitoring
 
     private static let listenerQueue = DispatchQueue(label: "longhand.audio.devices")
     nonisolated(unsafe) private static var installed = false
     nonisolated(unsafe) private static var pending: DispatchWorkItem?
     nonisolated(unsafe) private static var lastPayloads: [AudioDevicePayload] = []
 
-    /// 一覧か既定デバイスが変わったら（300ms まとめて）handler を呼ぶ
+    /// Calls handler when the list or the default device changes (coalesced over 300ms)
     static func startMonitoring(_ handler: @escaping @Sendable ([AudioDevicePayload]) -> Void) {
         listenerQueue.sync {
             guard !installed else { return }
@@ -132,7 +132,7 @@ enum AudioDevices {
         }
     }
 
-    // MARK: - CoreAudio の小道具
+    // MARK: - CoreAudio helpers
 
     static func allDeviceIDs() -> [AudioDeviceID] {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# longhand-asr-apple をリリースビルドし、asr/build/longhand-asr-apple に置く。
-# 必要なもの: Xcode 26 以降（macOS 26 SDK）、Apple Silicon の Mac。
-# 署名は asr/build.sh がまとめて行う（このスクリプト単体で作ったバイナリも、そのまま実行できる）。
+# Builds longhand-asr-apple in release mode and puts it at asr/build/longhand-asr-apple.
+# Requires Xcode 26 or later (macOS 26 SDK) and an Apple Silicon Mac.
+# asr/build.sh does all the signing (a binary built by this script alone also runs as is).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

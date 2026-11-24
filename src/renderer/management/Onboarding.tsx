@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import type { MessageKey } from '../../shared/i18n';
 import type { Settings } from '../../shared/settings';
 import type { AppSnapshot, DeepPartial } from '../../shared/types';
+import { useT } from '../common/i18n';
 import { bindingLabel } from '../common/keys';
 import { Button, cx, inputClass, Select, StatusDot, Toggle } from '../common/ui';
 import { AsrSettingsSection, LlmSettingsSection } from './Settings';
@@ -8,7 +10,26 @@ import { Keys } from './Shortcuts';
 
 type Update = (patch: DeepPartial<Settings>) => Promise<void>;
 
-const STEPS = ['ようこそ', 'マイク', 'アクセシビリティ', '地球儀キー', 'キーのテスト', 'LLM', '音声認識', '試す'] as const;
+const STEPS = ['welcome', 'microphone', 'accessibility', 'globe', 'keyTest', 'llm', 'asr', 'try'] as const;
+
+const STEP_LABEL: Record<(typeof STEPS)[number], MessageKey> = {
+  welcome: 'onboarding.step.welcome',
+  microphone: 'onboarding.step.microphone',
+  accessibility: 'onboarding.step.accessibility',
+  globe: 'onboarding.step.globe',
+  keyTest: 'onboarding.step.keyTest',
+  llm: 'onboarding.step.llm',
+  asr: 'onboarding.step.asr',
+  try: 'onboarding.step.try',
+};
+
+/** Example of a spoken edit instruction. It stays Japanese in both languages because Longhand transcribes Japanese speech */
+const EDIT_EXAMPLE = 'もっと丁寧に';
+
+/** Puts elements (key caps, for example) into the `{name}` placeholders of a translated message */
+function fill(text: string, nodes: Record<string, ReactNode>): ReactNode[] {
+  return text.split(/\{(\w+)\}/).map((part, i) => (i % 2 === 1 ? <Fragment key={i}>{nodes[part] ?? `{${part}}`}</Fragment> : part));
+}
 
 function Step({ title, children, footer }: { title: string; children: ReactNode; footer: ReactNode }) {
   return (
@@ -29,16 +50,17 @@ function Status({ ok, okText, ngText }: { ok: boolean; okText: string; ngText: s
   );
 }
 
-/** 「音が入った」とみなす RMS */
+/** RMS at which sound counts as coming in */
 const HEARD_RMS = 0.003;
-/** これだけ音が来なければ警告する */
+/** Warn when no sound arrives for this long */
 const SILENT_WARN_MS = 4000;
 
 /**
- * マイクの確認（O1）。マイクを選び、レベルメーターで音が入るのを確かめる。
- * 数秒ずつ録音を繰り返してメーターを動かす（録音は保存しない）。
+ * Microphone check (O1). The user picks a microphone and checks on the level meter that sound comes in.
+ * Records a few seconds at a time, repeatedly, to drive the meter (the recordings are not saved).
  */
 function MicCheck({ snap, update, onHeard }: { snap: AppSnapshot; update: Update; onHeard: (heard: boolean) => void }) {
+  const t = useT();
   const [mics, setMics] = useState<Awaited<ReturnType<typeof window.longhand.listMicrophones>>>([]);
   const [level, setLevel] = useState(0);
   const [heard, setHeard] = useState(false);
@@ -62,7 +84,7 @@ function MicCheck({ snap, update, onHeard }: { snap: AppSnapshot; update: Update
     [onHeard],
   );
 
-  // マイクを変えたら確かめ直す
+  // Check again when the microphone changes
   useEffect(() => {
     let stop = false;
     heardRef.current = false;
@@ -75,7 +97,7 @@ function MicCheck({ snap, update, onHeard }: { snap: AppSnapshot; update: Update
       for (let i = 0; i < 20 && !stop; i++) {
         const r = await window.longhand.testMicrophone(3);
         if (!r.ok) {
-          setError(r.error ?? 'マイクを開けませんでした');
+          setError(r.error ?? t('onboarding.mic.openFailed'));
           break;
         }
       }
@@ -93,32 +115,36 @@ function MicCheck({ snap, update, onHeard }: { snap: AppSnapshot; update: Update
   return (
     <div className="my-4 flex flex-col gap-3 rounded-lg bg-black/[0.03] px-4 py-3 dark:bg-white/[0.04]">
       <div className="flex items-center justify-between gap-4">
-        <span className="text-[13px]">使うマイク</span>
+        <span className="text-[13px]">{t('onboarding.mic.device')}</span>
         <Select
           value={micId}
-          options={[{ value: '', label: 'システムの既定' }, ...real.map((m) => ({ value: m.id, label: m.name + (m.transport === 'bluetooth' ? '（Bluetooth）' : '') }))]}
+          options={[
+            { value: '', label: t('onboarding.mic.systemDefault') },
+            ...real.map((m) => ({ value: m.id, label: m.transport === 'bluetooth' ? t('onboarding.mic.bluetooth', { name: m.name }) : m.name })),
+          ]}
           onChange={(v) => void update({ microphoneId: v || null })}
         />
       </div>
       <div className="flex items-center gap-3">
-        <span className="flex gap-1" aria-label={heard ? '音が入っています' : '音を待っています'}>
+        <span className="flex gap-1" aria-label={t(heard ? 'onboarding.mic.hearing' : 'onboarding.mic.waiting')}>
           {Array.from({ length: dots }, (_, i) => (
             <span key={i} className={cx('h-2.5 w-2.5 rounded-full transition-colors', i < lit ? (i >= dots - 2 ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-black/10 dark:bg-white/15')} />
           ))}
         </span>
-        <span className="text-[12.5px] text-neutral-500">{error ? `確かめられませんでした: ${error}` : heard ? '音が入っています' : silent ? '' : '何か話してみてください'}</span>
+        <span className="text-[12.5px] text-neutral-500">{error ? t('onboarding.mic.checkFailed', { error }) : heard ? t('onboarding.mic.hearing') : silent ? '' : t('onboarding.mic.speak')}</span>
       </div>
       {silent && !heard && !error && (
         <div role="alert" className="text-[12.5px] text-amber-700 dark:text-amber-300">
-          音が入っていません。マイクのミュートを外すか、別のマイクを選んでください。
+          {t('onboarding.mic.silent')}
         </div>
       )}
-      <div className="text-[12px] text-neutral-500">ヘッドセットなど口元に近いマイクほど、認識の精度が上がります。</div>
+      <div className="text-[12px] text-neutral-500">{t('onboarding.mic.closeMicTip')}</div>
     </div>
   );
 }
 
 function KeyTest({ activeKeys, lockLabel, onDetected }: { activeKeys: string[]; lockLabel: string; onDetected: () => void }) {
+  const t = useT();
   const [held, setHeld] = useState(false);
   const [seen, setSeen] = useState(false);
   const [locked, setLocked] = useState(false);
@@ -148,22 +174,21 @@ function KeyTest({ activeKeys, lockLabel, onDetected }: { activeKeys: string[]; 
         )}
       >
         {held ? (
-          '検出しています（離すと録音が確定します）'
+          t('onboarding.keyTest.held')
         ) : seen ? (
-          '✓ 検出できました'
+          t('onboarding.keyTest.seen')
         ) : (
-          <span className="inline-flex items-center gap-2">
-            <Keys keys={activeKeys} /> を押してみてください
-          </span>
+          <span className="inline-flex items-center gap-2">{fill(t('onboarding.keyTest.press'), { keys: <Keys keys={activeKeys} /> })}</span>
         )}
       </div>
-      {lockLabel && <div className="text-[12.5px] text-neutral-500">{locked ? '✓ ハンズフリーのショートカットも検出しました' : `${lockLabel}（ハンズフリー）も試せます。`}</div>}
+      {lockLabel && <div className="text-[12.5px] text-neutral-500">{locked ? t('onboarding.keyTest.lockSeen') : t('onboarding.keyTest.lockHint', { lock: lockLabel })}</div>}
     </div>
   );
 }
 
-/** 試し入力（O4）。入力欄に文字が入ったら成功を出し、次にハンズフリーを試してもらう */
+/** Practice input (O4). Shows success when text arrives in the field, then asks the user to try hands-free */
 function TryIt({ snap, activate, paste }: { snap: AppSnapshot; activate: string; paste: string }) {
+  const t = useT();
   const [first, setFirst] = useState('');
   const [second, setSecond] = useState('');
   const ready = snap.status.asr === 'ready';
@@ -171,61 +196,56 @@ function TryIt({ snap, activate, paste }: { snap: AppSnapshot; activate: string;
   const ok2 = second.trim().length > 0;
   return (
     <>
-      {!ready && <Status ok={false} okText="" ngText={`音声認識を準備しています。準備ができると試せます${snap.status.asrMessage ? `（${snap.status.asrMessage}）` : ''}`} />}
-      <p>
-        1. 下の欄をクリックしてから、<kbd className="key">{activate}</kbd> を押しながら話し、話し終えたら離してください。
-      </p>
+      {!ready && <Status ok={false} okText="" ngText={snap.status.asrMessage ? t('onboarding.try.preparingDetail', { detail: snap.status.asrMessage }) : t('onboarding.try.preparing')} />}
+      <p>{fill(t('onboarding.try.step1'), { activate: <kbd className="key">{activate}</kbd> })}</p>
       <textarea
-        aria-label="試し入力 1"
+        aria-label={t('onboarding.try.field1')}
         disabled={!ready}
         value={first}
         onChange={(e) => setFirst(e.target.value)}
         className={cx(inputClass, 'mt-3 min-h-[90px] text-[14px] leading-relaxed disabled:opacity-50')}
-        placeholder={ready ? 'ここに入力されます' : '準備中…'}
+        placeholder={ready ? t('onboarding.try.placeholder') : t('onboarding.try.placeholderPreparing')}
       />
       {ok1 && (
         <div role="status" className="mt-2 text-[13px] text-emerald-700 dark:text-emerald-300">
-          ✓ 入力できました
+          {t('onboarding.try.ok1')}
         </div>
       )}
-      <p className={cx('mt-5', !ok1 && 'opacity-50')}>
-        2. 次はハンズフリーです。<kbd className="key">{activate}</kbd> を 2 回続けて押すと、キーを離しても録音が続きます。話し終えたら、もう一度押して確定します。
-      </p>
+      <p className={cx('mt-5', !ok1 && 'opacity-50')}>{fill(t('onboarding.try.step2'), { activate: <kbd className="key">{activate}</kbd> })}</p>
       <textarea
-        aria-label="試し入力 2"
+        aria-label={t('onboarding.try.field2')}
         disabled={!ready || !ok1}
         value={second}
         onChange={(e) => setSecond(e.target.value)}
         className={cx(inputClass, 'mt-3 min-h-[70px] text-[14px] leading-relaxed disabled:opacity-50')}
-        placeholder={ok1 ? 'ここに入力されます' : ''}
+        placeholder={ok1 ? t('onboarding.try.placeholder') : ''}
       />
       {ok2 && (
         <div role="status" className="mt-2 text-[13px] text-emerald-700 dark:text-emerald-300">
-          ✓ ハンズフリーでも入力できました
+          {t('onboarding.try.ok2')}
         </div>
       )}
       <ul className="mt-5 list-disc space-y-1 pl-5 text-[13px] text-neutral-600 dark:text-neutral-400">
-        <li>{bindingLabel(snap.settings.hotkeys.cancel[0]) || 'esc'} で取り消せます。</li>
-        <li>文字を選択してから話すと、「もっと丁寧に」のように指示して書き換えられます。</li>
-        <li>
-          {paste ? `入力できなかったときは ${paste} で直前の書き起こしを貼り付けられます。` : '入力できなかったときは、フローティングバーを右クリックして「直前の書き起こしを貼り付け」を選べます。'}
-        </li>
+        <li>{t('onboarding.try.cancelTip', { cancel: bindingLabel(snap.settings.hotkeys.cancel[0], snap.locale) || 'esc' })}</li>
+        <li>{t('onboarding.try.editTip', { example: EDIT_EXAMPLE })}</li>
+        <li>{paste ? t('onboarding.try.pasteTip', { paste }) : t('onboarding.try.pasteTipMenu')}</li>
       </ul>
     </>
   );
 }
 
 export function Onboarding({ snap, update, onDone }: { snap: AppSnapshot; update: Update; onDone: () => void }) {
+  const t = useT();
   const [i, setI] = useState(0);
   const [heard, setHeard] = useState(false);
   const [keySeen, setKeySeen] = useState(false);
-  // ログイン時に起動する（S1）。完了画面で既定オンにしておき、完了したときに反映する
+  // Open at login (S1). On by default on the last screen, and applied when setup is completed
   const [launch, setLaunch] = useState(true);
   const p = snap.permissions;
   const hk = snap.settings.hotkeys;
-  const activate = bindingLabel(hk.activate[0]) || 'fn';
-  const lockLabel = bindingLabel(hk.lock[0]);
-  const paste = bindingLabel(hk.paste_last[0]);
+  const activate = bindingLabel(hk.activate[0], snap.locale) || 'fn';
+  const lockLabel = bindingLabel(hk.lock[0], snap.locale);
+  const paste = bindingLabel(hk.paste_last[0], snap.locale);
   const next = () => setI((x) => Math.min(STEPS.length - 1, x + 1));
   const back = () => setI((x) => Math.max(0, x - 1));
   const finish = async () => {
@@ -236,217 +256,217 @@ export function Onboarding({ snap, update, onDone }: { snap: AppSnapshot; update
   const onHeard = useRef((h: boolean) => setHeard(h)).current;
   const onKeySeen = useRef(() => setKeySeen(true)).current;
 
-  // 権限の画面では、システム設定から戻ってきたときに状態を更新する
+  // On the permission screens, refresh the state when the user comes back from System Settings
   useEffect(() => {
-    if (STEPS[i] !== 'アクセシビリティ' && STEPS[i] !== 'マイク') return;
+    if (STEPS[i] !== 'accessibility' && STEPS[i] !== 'microphone') return;
     const t = setInterval(() => void window.longhand.refreshPermissions(), 1500);
     return () => clearInterval(t);
   }, [i]);
 
-  // マイクの手順に入ったら、まだ聞いていなければ OS の確認を出す
+  // On entering the microphone step, show the system prompt if the user has not been asked yet
   useEffect(() => {
-    if (STEPS[i] === 'マイク' && p.microphone === 'undetermined') void window.longhand.requestPermission('microphone');
+    if (STEPS[i] === 'microphone' && p.microphone === 'undetermined') void window.longhand.requestPermission('microphone');
   }, [i]);
 
-  // アクセシビリティが許可されたら、少し待って次へ進む（O2。画面を前に戻すのは main が行う）
+  // When accessibility is allowed, wait a moment and move on (O2. main brings the window back to the front)
   const prevAx = useRef(p.accessibility);
   useEffect(() => {
     const was = prevAx.current;
     prevAx.current = p.accessibility;
-    if (STEPS[i] !== 'アクセシビリティ' || was || !p.accessibility) return;
+    if (STEPS[i] !== 'accessibility' || was || !p.accessibility) return;
     const t = setTimeout(next, 1200);
     return () => clearTimeout(t);
   }, [p.accessibility, i]);
 
   const backBtn = i > 0 && (
     <Button variant="ghost" onClick={back}>
-      戻る
+      {t('onboarding.back')}
     </Button>
   );
 
   let body: ReactNode;
   switch (STEPS[i]) {
-    case 'ようこそ':
+    case 'welcome':
       body = (
         <Step
-          title="Longhand へようこそ"
+          title={t('onboarding.welcome.title')}
           footer={
             <Button variant="primary" onClick={next}>
-              はじめる
+              {t('onboarding.start')}
             </Button>
           }
         >
-          <p>{activate} キーを押しながら話すと、話した内容が整った文章になって、カーソルの位置に入ります。</p>
+          <p>{t('onboarding.welcome.intro', { activate })}</p>
           <ul className="mt-4 list-disc space-y-1.5 pl-5">
-            <li>音声の書き起こしは、この Mac の中だけで行います。音声は外に送りません。</li>
-            <li>文章の整形には、設定した LLM の API を使います。</li>
-            <li>文字を選択してから話すと、選択した文章を声で書き換えられます。</li>
+            <li>{t('onboarding.welcome.local')}</li>
+            <li>{t('onboarding.welcome.llm')}</li>
+            <li>{t('onboarding.welcome.edit')}</li>
           </ul>
-          <p className="mt-4">使い始める前に、いくつかの許可と設定を行います。</p>
+          <p className="mt-4">{t('onboarding.welcome.setup')}</p>
         </Step>
       );
       break;
-    case 'マイク':
+    case 'microphone':
       body = (
         <Step
-          title="マイクを選ぶ"
+          title={t('onboarding.mic.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                {p.microphone === 'granted' && heard ? '次へ' : 'あとで'}
+                {t(p.microphone === 'granted' && heard ? 'onboarding.next' : 'onboarding.later')}
               </Button>
             </>
           }
         >
-          <p>話した声を録音するために、マイクを使います。録音はこの Mac の中で書き起こし、外には送りません。</p>
-          <Status ok={p.microphone === 'granted'} okText="マイクの使用が許可されています" ngText="まだ許可されていません" />
+          <p>{t('onboarding.mic.body')}</p>
+          <Status ok={p.microphone === 'granted'} okText={t('onboarding.mic.allowed')} ngText={t('onboarding.notAllowed')} />
           {p.microphone !== 'granted' ? (
             <Button variant="primary" onClick={() => void (p.microphone === 'undetermined' ? window.longhand.requestPermission('microphone') : window.longhand.openExternal('microphone'))}>
-              {p.microphone === 'undetermined' ? '許可する' : 'システム設定を開く'}
+              {t(p.microphone === 'undetermined' ? 'onboarding.allow' : 'common.openSystemSettings')}
             </Button>
           ) : snap.status.helper === 'running' ? (
             <MicCheck snap={snap} update={update} onHeard={onHeard} />
           ) : (
-            <Status ok={false} okText="" ngText="ヘルパーが動いているときに、マイクの音を確かめられます" />
+            <Status ok={false} okText="" ngText={t('onboarding.mic.needsHelper')} />
           )}
         </Step>
       );
       break;
-    case 'アクセシビリティ':
+    case 'accessibility':
       body = (
         <Step
-          title="アクセシビリティを許可する"
+          title={t('onboarding.accessibility.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                {p.accessibility ? '次へ' : 'あとで'}
+                {t(p.accessibility ? 'onboarding.next' : 'onboarding.later')}
               </Button>
             </>
           }
         >
-          <p>{activate} キーの検出、書き起こした文章の入力、入力欄の文脈の読み取りに必要です。</p>
+          <p>{t('onboarding.accessibility.body', { activate })}</p>
           <ol className="mt-3 list-decimal space-y-1 pl-5 text-[13px]">
-            <li>下のボタンでシステム設定を開きます。</li>
-            <li>「プライバシーとセキュリティ」→「アクセシビリティ」で、Longhand（開発中は Electron）をオンにします。</li>
-            <li>オンにすると、この画面に自動で戻って次へ進みます。</li>
+            <li>{t('onboarding.accessibility.step1')}</li>
+            <li>{t('onboarding.accessibility.step2')}</li>
+            <li>{t('onboarding.accessibility.step3')}</li>
           </ol>
-          <Status ok={p.accessibility} okText="アクセシビリティが許可されています" ngText="まだ許可されていません" />
+          <Status ok={p.accessibility} okText={t('onboarding.accessibility.allowed')} ngText={t('onboarding.notAllowed')} />
           {!p.accessibility && (
             <Button variant="primary" onClick={() => void window.longhand.requestPermission('accessibility').then(() => window.longhand.openExternal('accessibility'))}>
-              システム設定を開く
+              {t('common.openSystemSettings')}
             </Button>
           )}
         </Step>
       );
       break;
-    case '地球儀キー':
+    case 'globe':
       body = (
         <Step
-          title="地球儀キーの設定"
+          title={t('onboarding.globe.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                次へ
+                {t('onboarding.next')}
               </Button>
             </>
           }
         >
-          <p>fn（地球儀）キーを押すと、macOS が絵文字ピッカーや入力ソースの切り替えを開くことがあります。音声入力とぶつからないように止めておきます。</p>
+          <p>{t('onboarding.globe.body')}</p>
           <ol className="mt-3 list-decimal space-y-1 pl-5 text-[13px]">
-            <li>システム設定 →「キーボード」を開きます。</li>
-            <li>「🌐キーを押して」を「何もしない」にします。</li>
+            <li>{t('onboarding.globe.step1')}</li>
+            <li>{t('onboarding.globe.step2')}</li>
           </ol>
           <div className="mt-4 flex gap-2">
-            <Button onClick={() => void window.longhand.openExternal('keyboard')}>キーボードの設定を開く</Button>
+            <Button onClick={() => void window.longhand.openExternal('keyboard')}>{t('onboarding.globe.openKeyboard')}</Button>
           </div>
           <div className="mt-5 flex items-start justify-between gap-6 rounded-lg bg-black/[0.03] px-4 py-3 dark:bg-white/[0.04]">
             <div className="text-[13px]">
-              <div>自動で止める（試験的）</div>
-              <div className="mt-0.5 text-[12px] text-neutral-500">Longhand の起動中だけ「何もしない」にし、終了時に戻します。macOS の更新で動かなくなる可能性があります。</div>
+              <div>{t('onboarding.globe.auto')}</div>
+              <div className="mt-0.5 text-[12px] text-neutral-500">{t('onboarding.globe.autoHint')}</div>
             </div>
-            <Toggle label="地球儀キーを自動で止める" checked={snap.settings.suppressGlobe} onChange={(v) => void update({ suppressGlobe: v })} />
+            <Toggle label={t('onboarding.globe.autoLabel')} checked={snap.settings.suppressGlobe} onChange={(v) => void update({ suppressGlobe: v })} />
           </div>
         </Step>
       );
       break;
-    case 'キーのテスト':
+    case 'keyTest':
       body = (
         <Step
-          title="キーのテスト"
+          title={t('onboarding.keyTest.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                {keySeen ? '次へ' : 'あとで'}
+                {t(keySeen ? 'onboarding.next' : 'onboarding.later')}
               </Button>
             </>
           }
         >
-          <p>話すキーを押して、検出されるか確かめます。ここでは録音しません。</p>
+          <p>{t('onboarding.keyTest.body')}</p>
           {snap.status.helper === 'running' && p.accessibility ? (
             <KeyTest activeKeys={hk.activate[0] ?? ['Fn']} lockLabel={lockLabel} onDetected={onKeySeen} />
           ) : (
-            <Status ok={false} okText="" ngText="アクセシビリティが許可され、ヘルパーが動いているときにテストできます" />
+            <Status ok={false} okText="" ngText={t('onboarding.keyTest.unavailable')} />
           )}
-          <p className="text-[12.5px] text-neutral-500">fn キーのない外付けキーボードでは、設定 → キーボード で別のキー（例: 右⌥ や 左⌃+左⌥）を割り当ててください。</p>
+          <p className="text-[12.5px] text-neutral-500">{t('onboarding.keyTest.externalKeyboard')}</p>
         </Step>
       );
       break;
-    case 'LLM':
+    case 'llm':
       body = (
         <Step
-          title="整形に使う LLM"
+          title={t('onboarding.llm.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                {snap.status.llmConfigured ? '次へ' : 'あとで設定する'}
+                {t(snap.status.llmConfigured ? 'onboarding.next' : 'onboarding.setUpLater')}
               </Button>
             </>
           }
         >
-          <p className="mb-4">書き起こした文章から言いよどみを除き、句読点を整えるために使います。設定しなくても、書き起こしをそのまま入力して使えます。</p>
+          <p className="mb-4">{t('onboarding.llm.body')}</p>
           <LlmSettingsSection snap={snap} update={update} compact />
         </Step>
       );
       break;
-    case '音声認識':
+    case 'asr':
       body = (
         <Step
-          title="音声認識の準備"
+          title={t('onboarding.asr.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={next}>
-                次へ
+                {t('onboarding.next')}
               </Button>
             </>
           }
         >
-          <p className="mb-4">書き起こしはこの Mac の中で行います。初回はモデルの読み込みに少し時間がかかります。</p>
+          <p className="mb-4">{t('onboarding.asr.body')}</p>
           <AsrSettingsSection snap={snap} update={update} />
         </Step>
       );
       break;
-    case '試す': {
-      // 飛ばした手順を完了の前に知らせる
+    case 'try': {
+      // Point out skipped steps before finishing
       const skipped = [
-        p.microphone !== 'granted' && 'マイクの許可',
-        !p.accessibility && 'アクセシビリティの許可',
-        !snap.status.llmConfigured && 'LLM の設定（整形なしで入力します）',
-        snap.status.asr !== 'ready' && snap.status.asr !== 'loading' && snap.status.asr !== 'starting' && '音声認識の準備',
+        p.microphone !== 'granted' && t('onboarding.skipped.microphone'),
+        !p.accessibility && t('onboarding.skipped.accessibility'),
+        !snap.status.llmConfigured && t('onboarding.skipped.llm'),
+        snap.status.asr !== 'ready' && snap.status.asr !== 'loading' && snap.status.asr !== 'starting' && t('onboarding.skipped.asr'),
       ].filter(Boolean) as string[];
       body = (
         <Step
-          title="試してみましょう"
+          title={t('onboarding.try.title')}
           footer={
             <>
               {backBtn}
               <Button variant="primary" onClick={finish}>
-                完了
+                {t('onboarding.done')}
               </Button>
             </>
           }
@@ -454,20 +474,20 @@ export function Onboarding({ snap, update, onDone }: { snap: AppSnapshot; update
           <TryIt snap={snap} activate={activate} paste={paste} />
           <div className="mt-6 flex items-center justify-between gap-6 rounded-lg bg-black/[0.03] px-4 py-3 dark:bg-white/[0.04]">
             <div className="text-[13px]">
-              <div>ログイン時に Longhand を起動する</div>
-              <div className="mt-0.5 text-[12px] text-neutral-500">Mac を起動したら、すぐに {activate} キーで話せるようにします。あとから設定の「一般」で変えられます。</div>
+              <div>{t('onboarding.try.launchAtLogin')}</div>
+              <div className="mt-0.5 text-[12px] text-neutral-500">{t('onboarding.try.launchHint', { activate })}</div>
             </div>
-            <Toggle label="ログイン時に Longhand を起動する" checked={launch} onChange={setLaunch} />
+            <Toggle label={t('onboarding.try.launchAtLogin')} checked={launch} onChange={setLaunch} />
           </div>
           {skipped.length > 0 && (
             <div className="mt-4 rounded-lg bg-amber-500/10 px-4 py-3 text-[12.5px]">
-              <div className="font-medium">まだ終わっていない設定があります</div>
+              <div className="font-medium">{t('onboarding.try.unfinished')}</div>
               <ul className="mt-1 list-disc pl-5">
                 {skipped.map((x) => (
                   <li key={x}>{x}</li>
                 ))}
               </ul>
-              <div className="mt-1 text-neutral-600 dark:text-neutral-400">左の手順から戻って設定できます。</div>
+              <div className="mt-1 text-neutral-600 dark:text-neutral-400">{t('onboarding.try.unfinishedHint')}</div>
             </div>
           )}
         </Step>
@@ -484,14 +504,14 @@ export function Onboarding({ snap, update, onDone }: { snap: AppSnapshot; update
             <li key={s} className={cx('no-drag flex items-center gap-2 rounded-md px-2 py-1 text-[13px]', j === i ? 'font-medium' : 'text-neutral-500')}>
               <span
                 className={cx(
-                  'grid h-5 w-5 place-items-center rounded-full text-[11px]',
+                  'grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px]',
                   j < i ? 'bg-emerald-500 text-white' : j === i ? 'bg-blue-500 text-white' : 'bg-black/[0.07] dark:bg-white/10',
                 )}
               >
                 {j < i ? '✓' : j + 1}
               </span>
-              <button onClick={() => setI(j)} aria-current={j === i ? 'step' : undefined}>
-                {s}
+              <button className="text-left" onClick={() => setI(j)} aria-current={j === i ? 'step' : undefined}>
+                {t(STEP_LABEL[s])}
               </button>
             </li>
           ))}

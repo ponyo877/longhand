@@ -1,17 +1,17 @@
 /**
- * 貼り付けた文と、ユーザーが手直しした後の文を比べて、「置き換えられた語」の組を取り出す（LRN-1）。
+ * Compares the pasted text with the text after the user's correction and extracts pairs of replaced words (LRN-1).
  */
 import type { Tokenizer } from '../textfix/types';
 import { editDistance, hasKanji, hiraToKata, soundForm } from '../vocab/kana';
 
 export interface Replacement {
-  /** 貼り付けたときの語（誤認識） */
+  /** The word as pasted (misrecognized) */
   from: string;
-  /** 手直し後の語 */
+  /** The word after the correction */
   to: string;
-  /** 手直し後の文のうち、この置き換えを含む前後（LLM に判定させるときの文脈） */
+  /** The part of the corrected text around this replacement (context for the LLM's judgment) */
   context: string;
-  /** 文の中での読み（カタカナ）。単語分割で分かったときだけ入る（extractRewrites） */
+  /** Reading in the sentence (katakana). Set only when the tokenizer found it (extractRewrites) */
   fromReading?: string;
   toReading?: string;
 }
@@ -20,16 +20,16 @@ export interface EditedRegion {
   original: string;
   edited: string;
   /**
-   * 範囲の見つけ方。diff: 変わっていない部分を錨にして位置を写した / prefix: 前後の共通部分（錨が使えないときの代替）/
-   * search: 貼り付けた文を探した（貼り付けが遅れて反映された場合）
+   * How the region was found. diff: positions mapped using unchanged parts as anchors / prefix: common prefix and suffix (fallback when anchors cannot be used) /
+   * search: searched for the pasted text (when the paste showed up late)
    */
   method: 'diff' | 'prefix' | 'search';
 }
 
 export interface RegionOptions {
-  /** 貼り付けた文（コマンド記法を除いたもの）。貼り付けの位置が前後の比較で分からないときに探す */
+  /** The pasted text (without command syntax). Searched for when comparing before and after does not reveal the paste position */
   inserted?: string;
-  /** before の中の貼り付けの位置（文字単位）。貼り付けた文が複数見つかったときに、近いものを選ぶ */
+  /** Paste position in before (in characters). When the pasted text is found more than once, the closest one is chosen */
   near?: number;
 }
 
@@ -46,7 +46,7 @@ function commonSuffix(a: string[], b: string[], limitA: number, limitB: number):
   return i;
 }
 
-/** 文字単位の差分の塊（a の [aStart, aEnd) が b の [bStart, bEnd) に変わった） */
+/** A character-level diff hunk ([aStart, aEnd) in a became [bStart, bEnd) in b) */
 interface Hunk {
   aStart: number;
   aEnd: number;
@@ -55,8 +55,8 @@ interface Hunk {
 }
 
 /**
- * Myers の差分。変更が少ないほど速い（O((N+M)D)）。変更の量が maxD を超えたら null。
- * 長い入力欄（最大 2 万字）の全文どうしを比べても、手直しが少なければすぐ終わる。
+ * Myers diff. Faster with fewer changes (O((N+M)D)). null if the amount of change exceeds maxD.
+ * Comparing the full text of a long field (up to 20,000 characters) finishes quickly when the corrections are few.
  */
 export function diffHunks(a: string[], b: string[], maxD = 2000): Hunk[] | null {
   const pre = commonPrefix(a, b);
@@ -94,7 +94,7 @@ export function diffHunks(a: string[], b: string[], maxD = 2000): Hunk[] | null 
   }
   if (found < 0) return null;
 
-  // 後ろからたどって、削除と挿入の 1 文字ずつの操作を集める
+  // Walk back from the end, collecting single-character delete and insert operations
   type Edit = { kind: 'del' | 'ins'; a: number; b: number };
   const edits: Edit[] = [];
   let x = N;
@@ -113,7 +113,7 @@ export function diffHunks(a: string[], b: string[], maxD = 2000): Hunk[] | null 
   }
   edits.reverse();
 
-  // 隣り合う操作を塊にまとめる
+  // Group adjacent operations into hunks
   const hunks: Hunk[] = [];
   for (const e of edits) {
     const last = hunks[hunks.length - 1];
@@ -130,9 +130,9 @@ export function diffHunks(a: string[], b: string[], maxD = 2000): Hunk[] | null 
 }
 
 /**
- * a の位置を b の位置に写す。範囲の始まり（start）と終わり（end）で、境界にかかる塊の扱いを変える。
- * - 範囲の中の文字を消した（置き換えた）塊は範囲に含める
- * - 範囲の端にちょうど足しただけの塊（純粋な挿入）は範囲に含めない（貼り付けの前後に書き足した文）
+ * Maps a position in a to a position in b. Hunks on the boundary are treated differently for the start and the end of the region.
+ * - Hunks that delete (replace) characters inside the region are included
+ * - Hunks that only add text right at the edge of the region (pure insertions) are not included (text added before or after the paste)
  */
 function mapPosition(hunks: Hunk[], pos: number, side: 'start' | 'end'): number {
   let delta = 0;
@@ -152,7 +152,7 @@ function mapPosition(hunks: Hunk[], pos: number, side: 'start' | 'end'): number 
 
 type Op = { kind: 'eq' | 'del' | 'ins'; text: string };
 
-/** 文字単位の差分（LCS）。手直しの対象は短いので O(n*m) で足りる。長すぎる場合は null */
+/** Character-level diff (LCS). Corrections are short, so O(n*m) is enough. null if too long */
 export function charDiff(a: string, b: string): Op[] | null {
   const A = Array.from(a);
   const B = Array.from(b);
@@ -189,7 +189,7 @@ export function charDiff(a: string, b: string): Op[] | null {
   return ops;
 }
 
-/** 2 つの文がどれだけ残っているか（一致した文字数 ÷ 長い方の文字数） */
+/** How much of two texts is kept (matching characters ÷ length of the longer one) */
 export function keptRatio(a: string, b: string): number {
   const ops = charDiff(a, b);
   if (!ops) return 0;
@@ -197,7 +197,7 @@ export function keptRatio(a: string, b: string): number {
   return kept / Math.max(Array.from(a).length, Array.from(b).length, 1);
 }
 
-/** 貼り付けた文から、コマンド記法と前後の空白を除く */
+/** Removes command syntax and leading and trailing whitespace from the pasted text */
 export function stripPasteTokens(s: string): string {
   return s
     .replace(/<\|[A-Z_0-9]+\|>/g, '')
@@ -214,7 +214,7 @@ function indexOfSeq(hay: string[], needle: string[], from = 0): number {
   return -1;
 }
 
-/** needle の出現のうち、near に一番近いものの位置 */
+/** Position of the occurrence of needle closest to near */
 function closestIndexOf(hay: string[], needle: string[], near: number): number {
   let best = -1;
   for (let i = indexOfSeq(hay, needle); i >= 0; i = indexOfSeq(hay, needle, i + 1)) {
@@ -223,7 +223,7 @@ function closestIndexOf(hay: string[], needle: string[], near: number): number {
   return best;
 }
 
-/** 貼り付けで入った範囲を ref（貼り付け後の全文）の中で探す */
+/** Finds the range added by the paste in ref (the full text after the paste) */
 function locateInsertion(before: string[], ref: string[], inserted: string[] | null, near?: number): [number, number] | null {
   const p = commonPrefix(before, ref);
   const s = commonSuffix(before, ref, p, p);
@@ -231,11 +231,11 @@ function locateInsertion(before: string[], ref: string[], inserted: string[] | n
   const end = ref.length - s;
   if (end > start) {
     if (!inserted?.length) return [start, end];
-    // 範囲の中に貼り付けた文がそのままあれば、そこに絞る（アプリが貼り付けの近くを書き換えた分を除く）
+    // If the pasted text appears as is within the range, narrow to it (excluding changes the app made near the paste)
     const seg = ref.slice(start, end);
     const i = indexOfSeq(seg, inserted);
     if (i >= 0) return [start + i, start + i + inserted.length];
-    // 貼り付けた文と大きく違わなければ、前後の比較で見つかった範囲を使う。大きく違えば、貼り付けた文を探す
+    // If it is not very different from the pasted text, use the range found by comparing before and after. Otherwise, search for the pasted text
     if (keptRatio(seg.join('').trim(), inserted.join('')) >= 0.5) return [start, end];
   }
   if (inserted?.length) {
@@ -245,7 +245,7 @@ function locateInsertion(before: string[], ref: string[], inserted: string[] | n
   return end > start ? [start, end] : null;
 }
 
-/** 以前の方法: 前後の共通部分で範囲を決め、範囲の外に手直しが及んでいたら null */
+/** The older method: determines the range from the common prefix and suffix, null if the correction reaches outside the range */
 function regionByPrefix(ref: string[], final: string[], insStart: number, insEnd: number): [number, number] | null {
   const ep = commonPrefix(ref, final);
   const es = commonSuffix(ref, final, ep, ep);
@@ -256,10 +256,10 @@ function regionByPrefix(ref: string[], final: string[], insStart: number, insEnd
 }
 
 /**
- * 入力欄の全文の変化から、貼り付けた部分が手直しでどう変わったかを取り出す（G4-02）。
- * before: 貼り付け前、afterPaste: 貼り付け直後（または利用者が打ち始める直前）、final: 監視の終わり。
- * afterPaste と final の差分を取り、変わっていない部分を錨にして、貼り付けた範囲の位置を final に写す。
- * 範囲の外（件名や宛名など）を直していても、範囲の中の手直しだけを取り出せる。
+ * From changes to the field's full text, extracts how the corrections changed the pasted part (G4-02).
+ * before: before the paste, afterPaste: right after the paste (or right before the user starts typing), final: end of the watch.
+ * Diffs afterPaste and final, and maps the pasted range onto final using the unchanged parts as anchors.
+ * Even if the user also edited outside the range (a subject line or recipient, for example), only the corrections inside the range are extracted.
  */
 export function locateEditedRegion(before: string, afterPaste: string, final: string, opts: RegionOptions = {}): EditedRegion | null {
   const B0 = Array.from(before);
@@ -269,7 +269,7 @@ export function locateEditedRegion(before: string, afterPaste: string, final: st
 
   const ins = locateInsertion(B0, R, inserted, opts.near);
   if (!ins) {
-    // 貼り付け直後の読み取りに貼り付けが入っていなかった（反映が遅れた）。貼り付け前と最後の差分を、貼り付けた文と比べる
+    // The reading right after the paste did not include it (it showed up late). Compare the diff between before and final with the pasted text
     if (!inserted?.length) return null;
     const p = commonPrefix(B0, F);
     const s = commonSuffix(B0, F, p, p);
@@ -287,7 +287,7 @@ export function locateEditedRegion(before: string, afterPaste: string, final: st
   if (hunks) {
     let s = mapPosition(hunks, insStart, 'start');
     let e = mapPosition(hunks, insEnd, 'end');
-    // 範囲の端にちょうど接する置き換えの塊に、範囲の外へ書き足した語や文がくっついていたら切り離す
+    // If a replacement hunk touching the edge of the range carries words or text added outside the range, cut them off
     const hs = hunks.find((h) => h.aStart === insStart && h.aEnd > h.aStart && h.bEnd > h.bStart);
     const he = hunks.find((h) => h.aEnd === insEnd && h.aEnd > h.aStart && h.bEnd > h.bStart);
     const cut = (h: Hunk, left: boolean, right: boolean) => trimInsertion(R.slice(h.aStart, h.aEnd).join(''), F.slice(h.bStart, h.bEnd), left, right);
@@ -304,7 +304,7 @@ export function locateEditedRegion(before: string, afterPaste: string, final: st
   return { original, edited, method };
 }
 
-/** locateEditedRegion の結果から original と edited だけを返す（以前からの呼び出し方） */
+/** Returns only original and edited from locateEditedRegion's result (the older calling style) */
 export function extractEditedRegion(before: string, afterPaste: string, final: string, opts: RegionOptions = {}): { original: string; edited: string } | null {
   const r = locateEditedRegion(before, afterPaste, final, opts);
   return r ? { original: r.original, edited: r.edited } : null;
@@ -320,7 +320,7 @@ function scriptOf(ch: string): Script {
   return 'other';
 }
 
-/** 位置 [start, end) を、同じ文字種の連続（語らしい単位）まで左右に広げる。ひらがなは語の切れ目とみなして広げない */
+/** Expands [start, end) left and right over the run of the same script (a word-like unit). Hiragana counts as a word break and is not expanded into */
 function expandToWord(chars: string[], start: number, end: number): [number, number] {
   let a = start;
   let b = end;
@@ -333,14 +333,14 @@ function expandToWord(chars: string[], start: number, end: number): [number, num
     const ref = scriptOf(chars[b - 1]);
     while (b < chars.length && growable(chars[b], ref)) b++;
   }
-  // 漢字の直後のカタカナ／英字、英字の直後のカタカナなど、複合語もひとまとまりにする
+  // Also keep compounds together, such as katakana or Latin right after kanji, or katakana right after Latin
   const word = (c: string | undefined) => !!c && ['kanji', 'kata', 'latin'].includes(scriptOf(c));
   while (a > 0 && a < chars.length && word(chars[a - 1]) && word(chars[a])) a--;
   while (b > 0 && b < chars.length && word(chars[b]) && word(chars[b - 1])) b++;
   return [a, b];
 }
 
-/** 1 文字の一致が語の途中にあるか（前後が同じ文字種）。語の途中なら、その前後の差分を 1 つの塊につなぐ */
+/** Whether a one-character match is inside a word (same script on both sides). If so, the diffs around it are joined into one hunk */
 function insideWord(chars: string[], pos: number): boolean {
   const c = chars[pos];
   if (!c) return false;
@@ -348,7 +348,7 @@ function insideWord(chars: string[], pos: number): boolean {
   return s !== 'other' && pos > 0 && scriptOf(chars[pos - 1]) === s && pos + 1 < chars.length && scriptOf(chars[pos + 1]) === s;
 }
 
-/** 2 つの語の近さ（0〜1）。音の形と文字の両方で比べ、近いほうを使う */
+/** Similarity of two words (0 to 1). Compares both sound forms and characters, and uses the closer one */
 function similarity(a: string, b: string): number {
   const sa = soundForm(a);
   const sb = soundForm(b);
@@ -360,9 +360,9 @@ function similarity(a: string, b: string): number {
 }
 
 /**
- * 置き換えの塊の挿入側（ins）から、消した文字（del）に対応する部分を選ぶ。残りは書き足した部分とみなす。
- * left なら先頭側を、right なら末尾側を切り離してよい。挿入を語（漢字、カタカナ、英字の連続）、ひらがな、
- * 記号と空白の連続に分け、del と一番近い連続した部分を選ぶ。戻り値は ins の中の [開始, 終了)。
+ * From the insertion side (ins) of a replacement hunk, picks the part that corresponds to the deleted characters (del). The rest counts as added text.
+ * With left, the start may be cut off; with right, the end. Splits the insertion into runs of words (kanji, katakana, Latin), hiragana,
+ * and symbols and whitespace, and picks the contiguous part closest to del. Returns [start, end) within ins.
  */
 export function trimInsertion(del: string, ins: string[], left: boolean, right: boolean): [number, number] {
   const full: [number, number] = [0, ins.length];
@@ -402,18 +402,18 @@ export function trimInsertion(del: string, ins: string[], left: boolean, right: 
 
 const PUNCT_ONLY = /^[\s\p{P}\p{S}]*$/u;
 
-/** 推敲（書き直し）とみなす変化の量 */
+/** Amount of change that counts as rewriting */
 const MAX_HUNKS = 5;
 const MAX_CHANGED_CHARS = 40;
 
-/** 大文字小文字の形に意味がある英字の語か（iPhone、macOS、CPU など）。文頭の大文字化だけの直しは除く */
+/** Whether a Latin word's case carries meaning (iPhone, macOS, CPU and so on). Capitalizing the start of a sentence does not count */
 export function hasDistinctiveCase(word: string): boolean {
   if (!/^[A-Za-z0-9 .+#&'_-]+$/.test(word)) return false;
   const letters = word.replace(/[^A-Za-z0-9]/g, '');
   return /[a-z][A-Z]/.test(word) || (/^[A-Z0-9]{2,}$/.test(letters) && /[A-Z]/.test(letters));
 }
 
-/** 語ではなく文や句らしいか（ひらがなを含んで長い、文の区切りを含む） */
+/** Whether it looks like a sentence or phrase rather than a word (long with hiragana, or containing a sentence break) */
 function looksLikePhrase(s: string): boolean {
   if (/[。、！？!?\n]/.test(s)) return true;
   return /[぀-ゟ]/.test(s) && Array.from(s).length > 8;
@@ -427,10 +427,10 @@ interface Pair {
 }
 
 /**
- * 元の文と手直し後の文から、語の置き換えを取り出す（G4-04）。
- * - 置き換えの塊が 1 つなら、文の長さに関係なく候補にする（短い発話や、語だけの発話も学習する）
- * - 塊が多すぎる、変わった文字が多すぎる、違う置き換えが 2 つ以上あって元の文がほとんど残っていない場合は、推敲とみなして何も返さない
- * - 文の前後に書き足しただけの部分は数えない
+ * Extracts word replacements from the original text and the corrected text (G4-04).
+ * - With a single replacement hunk, it is a candidate regardless of text length (short utterances and single-word utterances are learned too)
+ * - With too many hunks, too many changed characters, or two or more different replacements leaving little of the original, it counts as rewriting and nothing is returned
+ * - Text only added before or after does not count
  */
 export function extractReplacements(original: string, edited: string): Replacement[] {
   const set = buildPairs(original, edited);
@@ -444,13 +444,13 @@ export function extractReplacements(original: string, edited: string): Replaceme
     if (!isRealChange(from, to)) continue;
     const toLen = Array.from(to).length;
     if (toLen < 2 || toLen > 40) continue;
-    if (/^[぀-ゟ]+$/.test(to)) continue; // ひらがなだけの語は辞書に入れる意味が薄い
-    if (looksLikePhrase(to) || looksLikePhrase(from)) continue; // 語ではなく文や句の書き直し
+    if (/^[぀-ゟ]+$/.test(to)) continue; // A hiragana-only word is of little use in the dictionary
+    if (looksLikePhrase(to) || looksLikePhrase(from)) continue; // A rewrite of a sentence or phrase, not a word
     const ctxStart = Math.max(0, p.b0 - 40);
     const ctxEnd = Math.min(B.length, p.b1 + 40);
     out.push({ from, to, context: B.slice(ctxStart, ctxEnd).join('') });
   }
-  // 同じ語の重複を除く（最初の組を残す）
+  // Drop duplicates of the same word (keep the first pair)
   const seen = new Set<string>();
   return out.filter((r) => {
     const key = r.to.toLowerCase();
@@ -460,15 +460,15 @@ export function extractReplacements(original: string, edited: string): Replaceme
   });
 }
 
-/** 語句の書き換えとして扱う長さの上限（これより長いものは、文の書き直しとみなす） */
+/** Maximum length treated as a phrase rewrite (anything longer counts as rewriting a sentence) */
 const MAX_REWRITE_CHARS = 24;
 
 /**
- * 元の文と手直し後の文から、語句の書き換えを取り出す。辞書に入れる語に限らず、かなの表記や、同じ読みの語への直しも拾う。
- * 整形の書き換えを元に戻した手直しと、同じ読みの語の取り違えを見つけるために使う。
- * - 単語分割があれば、塊を語の単位に広げる（「何」→「なん」ではなく、「何か」→「なんか」として取り出す）
- * - 間に 2 字以下しか挟まない塊は、1 つの書き換えにまとめる（「分からないので」→「わかんないんで」）
- * - 推敲とみなす条件は extractReplacements と同じ
+ * Extracts phrase rewrites from the original text and the corrected text. Not limited to dictionary words: also picks up kana spellings and fixes to words with the same reading.
+ * Used to find corrections that undo a formatter rewrite and mix-ups between words with the same reading.
+ * - With a tokenizer, hunks are expanded to whole words (extracted as 「何か」→「なんか」, not 「何」→「なん」)
+ * - Hunks separated by 2 characters or fewer are merged into one rewrite (「分からないので」→「わかんないんで」)
+ * - The conditions for rewriting are the same as in extractReplacements
  */
 export function extractRewrites(original: string, edited: string, tokenizer?: Tokenizer | null): Replacement[] {
   const set = buildPairs(original, edited, { tokenizer: tokenizer ?? null, mergeGap: 2 });
@@ -497,30 +497,30 @@ export function extractRewrites(original: string, edited: string, tokenizer?: To
   return out;
 }
 
-/** 中身のある書き換えか（空、同じ、記号だけ、全角と半角だけ、文頭の大文字化だけ、句読点と空白だけの違いを除く） */
+/** Whether it is a real rewrite (excluding empty, identical, symbols only, full-width/half-width only, sentence-start capitalization only, and punctuation and whitespace only) */
 function isRealChange(from: string, to: string): boolean {
-  if (!from || !to || from === to) return false; // 純粋な追加や削除は手直しの学習に使わない
+  if (!from || !to || from === to) return false; // Pure additions and deletions are not used for learning from corrections
   if (PUNCT_ONLY.test(to) || PUNCT_ONLY.test(from)) return false;
   const nf = from.normalize('NFKC');
   const nt = to.normalize('NFKC');
-  if (nf === nt) return false; // 全角と半角だけの違い
-  if (nf.toLowerCase() === nt.toLowerCase() && !hasDistinctiveCase(nt)) return false; // 文頭の大文字化など、大文字小文字だけの違い
-  if (nf.replace(/\p{P}/gu, '').replace(/\s/g, '') === nt.replace(/\p{P}/gu, '').replace(/\s/g, '') && !/^[A-Za-z0-9]+$/.test(nt)) return false; // 句読点と空白だけの違い
+  if (nf === nt) return false; // Only full-width/half-width differences
+  if (nf.toLowerCase() === nt.toLowerCase() && !hasDistinctiveCase(nt)) return false; // Only case differences, such as sentence-start capitalization
+  if (nf.replace(/\p{P}/gu, '').replace(/\s/g, '') === nt.replace(/\p{P}/gu, '').replace(/\s/g, '') && !/^[A-Za-z0-9]+$/.test(nt)) return false; // Only punctuation and whitespace differences
   if (nf.replace(/[\s\p{P}]/gu, '') === nt.replace(/[\s\p{P}]/gu, '') && /\p{P}/u.test(nf + nt)) return false;
   return true;
 }
 
 interface PairOptions {
-  /** 単語分割。あれば、塊を語（形態素）の単位にも広げる */
+  /** Tokenizer. If present, hunks are also expanded to whole words (morphemes) */
   tokenizer?: Tokenizer | null;
-  /** 2 つの組の間の一致がこの字数以下なら、1 つの組にまとめる */
+  /** Two pairs are merged when the match between them is this many characters or fewer */
   mergeGap?: number;
 }
 
-/** 語の範囲 [開始, 終了)（文字の位置）と、その読み */
+/** A word's range [start, end) (character positions) and its reading */
 type Span = [number, number, string];
 
-/** 文字（コードポイント）の位置で表した、語の範囲の一覧。単語分割が使えなければ null */
+/** Word ranges in character (code point) positions. null if the tokenizer is unavailable */
 function tokenSpans(text: string, tokenizer?: Tokenizer | null): Span[] | null {
   let tokens: { start: number; end: number; surface: string; reading: string }[] | null = null;
   try {
@@ -529,7 +529,7 @@ function tokenSpans(text: string, tokenizer?: Tokenizer | null): Span[] | null {
     tokens = null;
   }
   if (!tokens?.length) return null;
-  // 単語分割の位置は文字列の添字（UTF-16）なので、コードポイントの位置に直す
+  // Tokenizer positions are string indices (UTF-16), so convert them to code point positions
   const cp: number[] = [];
   let n = 0;
   for (let i = 0; i < text.length; n++) {
@@ -538,11 +538,11 @@ function tokenSpans(text: string, tokenizer?: Tokenizer | null): Span[] | null {
     i += step;
   }
   cp[text.length] = n;
-  // 読みの分からない漢字の語は、読みを空にしておく（その語を含む範囲の読みは分からないとする）
+  // Kanji words with unknown readings get an empty reading (ranges containing them have no known reading)
   return tokens.map((t) => [cp[t.start] ?? 0, cp[t.end] ?? n, t.reading || (hasKanji(t.surface) ? '' : hiraToKata(t.surface))]);
 }
 
-/** 範囲 [start, end) の読み。範囲が語の切れ目に合っていない、読みの分からない語がある、単語分割が使えないときは null */
+/** Reading of [start, end). null if the range does not align with word breaks, contains a word with an unknown reading, or the tokenizer is unavailable */
 function rangeReading(spans: Span[] | null, start: number, end: number): string | null {
   if (!spans || end <= start) return null;
   let out = '';
@@ -553,15 +553,15 @@ function rangeReading(spans: Span[] | null, start: number, end: number): string 
     out += reading;
     covered += e - s;
   }
-  // 空白は単語分割に出てこないことがあるので、語が範囲のほとんどを覆っていればよいとする
+  // Whitespace sometimes does not appear in the tokens, so it is enough for the words to cover most of the range
   return out && covered >= (end - start) * 0.8 ? out : null;
 }
 
 /**
- * 組の両端から、両方の文で同じ語を落とす（「期間システム」→「基幹システム」を、「期間」→「基幹」にする）。
- * 語の単位で比べるので、「何か」→「なんか」の「か」は落とさない（「なんか」で 1 語のため）。
- * どちらかの側が 1 語になったら、そこで止める。残りが 1 字になる語も落とさない（「3時」→「三時」を、「3」→「三」にしない）。
- * 単語分割が使えなければ、そのまま返す。
+ * Drops words that are the same in both texts from both ends of a pair (「期間システム」→「基幹システム」 becomes 「期間」→「基幹」).
+ * Compares whole words, so the 「か」 in 「何か」→「なんか」 is not dropped (「なんか」 is one word).
+ * Stops once either side is down to one word. Does not drop a word if only one character would remain (「3時」→「三時」 does not become 「3」→「三」).
+ * Returns the pair unchanged if the tokenizer is unavailable.
  */
 function trimCommonTokens(A: string[], spansA: Span[] | null, B: string[], spansB: Span[] | null, p: Pair): Pair {
   if (!spansA || !spansB) return p;
@@ -589,7 +589,7 @@ function trimCommonTokens(A: string[], spansA: Span[] | null, B: string[], spans
   }
 }
 
-/** 位置 [start, end) に重なる語の範囲まで広げる。空の範囲（純粋な挿入や削除）は広げない */
+/** Expands [start, end) to the words it overlaps. Empty ranges (pure insertions or deletions) are not expanded */
 function expandToTokens(spans: Span[] | null, start: number, end: number): [number, number] {
   if (!spans || end <= start) return [start, end];
   let a = start;
@@ -603,8 +603,8 @@ function expandToTokens(spans: Span[] | null, start: number, end: number): [numb
 }
 
 /**
- * 差分の塊を、語の単位の組にする（extractReplacements と extractRewrites の共通部分）。
- * 推敲とみなしたときと、差分が取れなかったときは null。
+ * Turns diff hunks into word-level pairs (shared by extractReplacements and extractRewrites).
+ * null when it counts as rewriting or the diff could not be computed.
  */
 function buildPairs(original: string, edited: string, opts: PairOptions = {}): { A: string[]; B: string[]; pairs: Pair[]; spansA: Span[] | null; spansB: Span[] | null } | null {
   const ops = charDiff(original, edited);
@@ -612,7 +612,7 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
   const A = Array.from(original);
   const B = Array.from(edited);
 
-  // 塊（隣り合う del / ins）を位置つきで集める。語の途中の 1 文字だけが一致して細切れになった差分はつなぐ
+  // Collect hunks (adjacent del / ins) with positions. Diffs split up by a single matching character inside a word are joined
   type H = { ai: number; del: number; bi: number; ins: number; eqBefore: number; eqAfter: number };
   const hunks: H[] = [];
   let ai = 0;
@@ -647,7 +647,7 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
     bi = h.bi + h.ins;
     hunks.push(h);
   }
-  // 塊の前後の一致の長さ（語の単位に広げるときの上限）
+  // Lengths of the matches before and after each hunk (the limit when expanding to whole words)
   for (let i = 0; i < hunks.length; i++) {
     const end = hunks[i].ai + hunks[i].del;
     const nextStart = i + 1 < hunks.length ? hunks[i + 1].ai : A.length;
@@ -656,7 +656,7 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
     hunks[i].eqBefore = hunks[i].ai - prevEnd;
   }
 
-  // 文の端の置き換えに、書き足した語や文がくっついていたら切り離す（「でーたどっぐ」→「Datadogで確認します」）
+  // If a replacement at the edge of the text carries added words or text, cut them off (「でーたどっぐ」→「Datadogで確認します」)
   let trimmed = 0;
   for (const h of hunks) {
     if (!h.del || !h.ins) continue;
@@ -669,7 +669,7 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
     h.ins = s1 - s0;
   }
 
-  // 前後に書き足しただけの塊（純粋な挿入で、文の端にあるもの）は除く
+  // Drop hunks that only add text before or after (pure insertions at the edge of the text)
   const core = hunks.filter((h, i) => {
     if (h.del > 0) return true;
     const atStart = i === 0 && h.ai === 0;
@@ -678,11 +678,11 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
   });
   if (!core.length) return null;
 
-  // 推敲かどうか
+  // Whether it is rewriting
   const appended = hunks.filter((h) => !core.includes(h)).reduce((n, h) => n + h.ins, trimmed);
   const changed = core.reduce((n, h) => n + Math.max(h.del, h.ins), 0);
   if (core.length > MAX_HUNKS || changed > MAX_CHANGED_CHARS) return null;
-  // 違う置き換えが 2 つ以上あって、元の文がほとんど残っていなければ推敲（同じ直しの繰り返しは 1 つと数える）
+  // Two or more different replacements leaving little of the original count as rewriting (repeats of the same fix count as one)
   const distinct = new Set(core.map((h) => `${A.slice(h.ai, h.ai + h.del).join('')}\u0000${B.slice(h.bi, h.bi + h.ins).join('')}`));
   if (distinct.size >= 2) {
     const kept = ops.filter((o) => o.kind === 'eq').reduce((n, o) => n + Array.from(o.text).length, 0);
@@ -690,7 +690,7 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
     if (kept / longer < 0.4) return null;
   }
 
-  // 塊を語の単位に広げる。広げた分の一致部分は、元の文と手直し後の文の両方に同じだけ含める（「Post Grace」→「Postgres」）
+  // Expand hunks to whole words. The matching part added by the expansion is included equally in the original and the corrected text (「Post Grace」→「Postgres」)
   const spansA = tokenSpans(original, opts.tokenizer);
   const spansB = tokenSpans(edited, opts.tokenizer);
   const grow = (chars: string[], spans: Span[] | null, start: number, end: number): [number, number] => {
@@ -705,8 +705,8 @@ function buildPairs(original: string, edited: string, opts: PairOptions = {}): {
     const R = Math.min(h.eqAfter, Math.max(a1 - (h.ai + h.del), b1 - (h.bi + h.ins)));
     return { a0: h.ai - L, a1: h.ai + h.del + R, b0: h.bi - L, b1: h.bi + h.ins + R };
   });
-  // 手直し後の範囲が重なる組（同じ語に対応する複数の塊）は 1 組にまとめる（「Grow fauna」→「Grafana」）
-  // mergeGap があれば、間の一致が短い組もまとめる（間の一致は、両方の文で同じ長さ）
+  // Merge pairs whose corrected ranges overlap (several hunks for the same word) into one (「Grow fauna」→「Grafana」)
+  // With mergeGap, also merge pairs separated by a short match (the match between them has the same length in both texts)
   const gap = opts.mergeGap ?? 0;
   const merged: Pair[] = [];
   for (const p of pairs) {

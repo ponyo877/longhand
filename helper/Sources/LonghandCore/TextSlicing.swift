@@ -1,9 +1,9 @@
 import Foundation
 
-// AX のテキスト範囲は UTF-16 単位。サロゲートペアを途中で切らないように範囲を調整して切り出す。
+// AX text ranges are in UTF-16 units. Ranges are adjusted before slicing so that surrogate pairs are never split.
 
 public enum TextSlicing {
-    /// UTF-16 単位の範囲 [start, end) を、サロゲートペアを割らないように内側へ縮める
+    /// Shrinks the UTF-16 range [start, end) inward so that it does not split a surrogate pair
     public static func safeRange(in utf16: [UInt16], start: Int, end: Int) -> Range<Int> {
         var s = max(0, min(start, utf16.count))
         var e = max(s, min(end, utf16.count))
@@ -22,17 +22,17 @@ public enum TextSlicing {
         return String(decoding: units[r], as: UTF16.self)
     }
 
-    /// キャレットの手前 maxChars 単位
+    /// maxChars units before the caret
     public static func before(_ string: String, location: Int, maxChars: Int) -> String {
         substring(string, utf16Start: location - maxChars, end: location)
     }
 
-    /// 位置 location から後ろ maxChars 単位
+    /// maxChars units after position location
     public static func after(_ string: String, location: Int, maxChars: Int) -> String {
         substring(string, utf16Start: location, end: location + maxChars)
     }
 
-    /// center を中心に最大 maxChars 単位の窓を切り出す。全体が収まればそのまま返す
+    /// Cuts a window of at most maxChars units centered on center. Returns the whole string if it fits
     public static func window(_ string: String, center: Int, maxChars: Int) -> String {
         let units = Array(string.utf16)
         if units.count <= maxChars { return string }
@@ -43,7 +43,7 @@ public enum TextSlicing {
         return String(decoding: units[r], as: UTF16.self)
     }
 
-    /// 前後の空白・改行の違い、CRLF と LF、Unicode 正規化の違いを無視して比べる（編集モードの選択範囲の確認）
+    /// Compares while ignoring differences in surrounding whitespace and newlines, CRLF versus LF, and Unicode normalization (for checking the selection in edit mode)
     public static func looselyEqual(_ a: String, _ b: String) -> Bool {
         func norm(_ s: String) -> String {
             s.replacingOccurrences(of: "\r\n", with: "\n")
@@ -54,7 +54,7 @@ public enum TextSlicing {
         return norm(a) == norm(b)
     }
 
-    /// 長さの上限で切る（説明やタイトル用）
+    /// Cuts at the length limit (for descriptions and titles)
     public static func truncate(_ s: String, max: Int) -> String {
         if s.count <= max { return s }
         return String(s.prefix(max))

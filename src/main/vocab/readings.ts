@@ -1,7 +1,7 @@
 /**
- * 辞書の英字の語に、音声認識が書きそうなカタカナの読みを LLM で作る（G4-11）。
- * 作った読みは「確かめていない読み」として保存し、照合の候補にだけ使う（置き換えには使わない）。
- * 利用者がスタイル画面で採用した読みだけが、LLM を使わないときの置き換えに使われる。
+ * Uses the LLM to make katakana readings that speech recognition is likely to write for Latin dictionary words (G4-11).
+ * The readings are saved as unconfirmed and used only for match candidates (not for replacement).
+ * Only readings the user accepted in the Style page are used for replacement without the LLM.
  */
 import { parseJsonObject } from '../format/postprocess';
 import type { LlmProvider } from '../llm/types';
@@ -33,13 +33,13 @@ const SYSTEM = `あなたは日本語の音声認識の辞書係です。
 - カタカナ以外の文字は使わない
 出力は {"items": [{"word": "<渡された語>", "readings": ["<カタカナ>", ...]}]} の JSON だけにしてください。`;
 
-/** 読みを作る対象の語か（英字を含み、かなだけではない語） */
+/** Whether to make readings for the word (it contains Latin letters and is not kana only) */
 export function needsReading(word: string): boolean {
   return /[A-Za-z]/.test(word) && word.length <= 60;
 }
 
 /**
- * 語のカタカナの読みを LLM で作る。1 回に最大 50 語。失敗したら空のオブジェクトを返す（呼び出し側は次の機会に作り直す）。
+ * Makes katakana readings for words with the LLM. Up to 50 words at a time. Returns an empty object on failure (the caller tries again next time).
  */
 export async function generateReadings(words: string[], provider: LlmProvider, timeoutMs = 20000): Promise<Record<string, string[]>> {
   const targets = [...new Set(words.filter(needsReading))].slice(0, 50);

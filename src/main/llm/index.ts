@@ -1,4 +1,5 @@
 import type { LlmSettings } from '../../shared/settings';
+import { t } from '../i18n';
 import { AnthropicProvider } from './anthropic';
 import { AzureOpenAiProvider } from './azure-openai';
 import { CustomHttpProvider } from './custom-http';
@@ -8,8 +9,8 @@ import { LlmError, type FetchLike, type LlmProvider } from './types';
 export * from './types';
 
 /**
- * 設定から LlmProvider を作る。外部への通信はこのモジュール配下からだけ行う（OPS-1）。
- * fetchImpl には Electron の net.fetch を渡す（OPS-2）。
+ * Creates an LlmProvider from the settings. Outside requests are made only from under this module (OPS-1).
+ * Pass Electron's net.fetch as fetchImpl (OPS-2).
  */
 export function createProvider(cfg: LlmSettings, apiKey: string, fetchImpl: FetchLike): LlmProvider {
   switch (cfg.provider) {
@@ -22,11 +23,11 @@ export function createProvider(cfg: LlmSettings, apiKey: string, fetchImpl: Fetc
     case 'custom-http':
       return new CustomHttpProvider(cfg, apiKey, fetchImpl);
     default:
-      throw new LlmError('config', `未知のプロバイダです: ${String((cfg as { provider: unknown }).provider)}`);
+      throw new LlmError('config', t('engine.llm.unknownProvider', { provider: String((cfg as { provider: unknown }).provider) }));
   }
 }
 
-/** LLM の設定が最低限そろっているか */
+/** Whether the LLM settings have the minimum needed */
 export function isLlmConfigured(cfg: LlmSettings, hasKey: boolean): boolean {
   if (!cfg.model && cfg.provider !== 'azure-openai' && cfg.provider !== 'custom-http') return false;
   if (cfg.provider === 'anthropic') return hasKey || !!cfg.headers['authorization'] || !!cfg.headers['Authorization'];

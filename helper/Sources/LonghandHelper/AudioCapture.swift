@@ -4,11 +4,11 @@ import CoreAudio
 import Foundation
 import LonghandCore
 
-/// AVAudioEngine でマイクを録音し、16kHz モノラル Float32 に変換して 100ms（1600 サンプル）ごとに audio_chunk を送る。
+/// Records the microphone with AVAudioEngine, converts it to 16kHz mono Float32 and sends an audio_chunk every 100ms (1600 samples).
 ///
-/// - 制御（start / stop / デバイス変化）は control キューで順に処理する。
-/// - 変換とチャンク化は tap のスレッドで行い、セッションの状態は stateLock で守る。
-/// - エンジンは同じデバイスなら使い回し、停止後も prepare しておいて次の開始を速くする。
+/// - Control (start / stop / device changes) is handled in order on the control queue.
+/// - Conversion and chunking run on the tap thread, and stateLock guards the session state.
+/// - The engine is reused for the same device and stays prepared after stopping, so the next start is faster.
 final class AudioCapture: @unchecked Sendable {
     static let shared = AudioCapture()
 
@@ -21,7 +21,7 @@ final class AudioCapture: @unchecked Sendable {
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioCapture.sampleRate,
                                           channels: 1, interleaved: false)!
 
-    // control キューだけが触る
+    // Only the control queue touches these
     private var engine: AVAudioEngine?
     private var engineDevice: AudioDevices.Device?
     private var configObserver: NSObjectProtocol?
@@ -29,18 +29,18 @@ final class AudioCapture: @unchecked Sendable {
     private var configCheck: DispatchWorkItem?
     private var restartTimes: [Double] = []
 
-    // stateLock で守る（tap のスレッドからも触る）
+    // Guarded by stateLock (the tap thread touches these too)
     private var converter: AVAudioConverter?
     private var session: Session?
     private var lastBufferAt: Double = 0
     private var lastBufferDuration: Double = 0.02
-    /// 終わったセッション（audio_stop に答えるため）
+    /// Sessions that have ended (to answer audio_stop)
     private var ended: [Int: (status: String, chunks: Int)] = [:]
 
     private struct Session {
         let id: Int
         var device: AudioDevices.Device
-        /// main が指定したデバイス（nil ならシステム既定に追従）
+        /// The device main asked for (nil follows the system default)
         let requestedUID: String?
         var seq = 0
         var chunker = AudioChunker(chunkSize: AudioCapture.chunkSamples)
@@ -49,19 +49,19 @@ final class AudioCapture: @unchecked Sendable {
         var firstBufferAt: Double?
     }
 
-    // MARK: - 公開 API（stdin スレッドから呼ぶ）
+    // MARK: - Public API (called from the stdin thread)
 
-    /// requestId は audio_start の id。audio_started と、開始時の audio_error にそのまま付ける
+    /// requestId is the id of audio_start. It is attached as is to audio_started and to an audio_error at start
     func start(sessionId: Int, deviceUID: String?, requestId: String?) {
         control.async { [self] in startOnControl(sessionId: sessionId, deviceUID: deviceUID, requestId: requestId) }
     }
 
-    /// requestId は audio_stop の id。audio_stopped にそのまま付ける
+    /// requestId is the id of audio_stop. It is attached as is to audio_stopped
     func stop(sessionId: Int, requestId: String?) {
         control.async { [self] in stopOnControl(sessionId: sessionId, requestId: requestId) }
     }
 
-    /// 終了時。録音中なら止める（audio_stopped は送らない）
+    /// On exit. Stops recording if it is running (does not send audio_stopped)
     func shutdown() {
         control.sync {
             if let engine, engine.isRunning { engine.stop() }
@@ -69,7 +69,7 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    /// デバイス一覧が変わったとき（AudioDevices の監視から呼ぶ）
+    /// When the device list changes (called from AudioDevices' monitoring)
     func devicesChanged() {
         control.async { [self] in
             guard let s = stateLock.withLock({ session }), !s.failed else { return }
@@ -79,7 +79,7 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    // MARK: - 開始
+    // MARK: - Start
 
     private func startOnControl(sessionId: Int, deviceUID: String?, requestId: String?) {
         let sw = Stopwatch()
@@ -88,7 +88,7 @@ final class AudioCapture: @unchecked Sendable {
             finishSession(status: current.failed ? "incomplete" : "flushed", emitStopped: true)
         }
 
-        // マイクの権限
+        // Microphone permission
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             break
@@ -109,7 +109,7 @@ final class AudioCapture: @unchecked Sendable {
             return
         }
 
-        // デバイスの決定
+        // Choose the device
         var device: AudioDevices.Device?
         if let uid = deviceUID {
             device = AudioDevices.device(uid: uid)
@@ -150,8 +150,8 @@ final class AudioCapture: @unchecked Sendable {
                                                                  deviceName: device.name, transport: device.transport))
     }
 
-    /// エンジンを始める。デバイスの切り替え直後や他のアプリがマイクを掴んだ直後は一時的に失敗することがあるので、
-    /// 100ms おきに最大 5 回試す。失敗したらエンジンを作り直してから試し直す
+    /// Starts the engine. It can fail for a moment right after a device switch or right after another app grabs the microphone, so
+    /// it tries every 100ms, up to 5 times. After a failure it rebuilds the engine before trying again
     static let startAttempts = 5
     static let startRetryIntervalUs: useconds_t = 100_000
 
@@ -177,7 +177,7 @@ final class AudioCapture: @unchecked Sendable {
         throw lastError
     }
 
-    /// 指定デバイス用のエンジンを用意する（同じデバイスなら使い回す）
+    /// Sets up the engine for the given device (reused for the same device)
     private func ensureEngine(for device: AudioDevices.Device) throws {
         if engine != nil, engineDevice?.id == device.id { return }
         teardownEngine()
@@ -200,7 +200,7 @@ final class AudioCapture: @unchecked Sendable {
         conv.downmix = true
         stateLock.withLock { converter = conv }
 
-        // 20ms 程度のバッファを頼む（実際の大きさは OS が決める）
+        // Ask for buffers of about 20ms (the OS decides the actual size)
         let bufferSize = AVAudioFrameCount(max(256, hwFormat.sampleRate * 0.02))
         input.installTap(onBus: 0, bufferSize: bufferSize, format: hwFormat) { [weak self] buffer, _ in
             self?.process(buffer)
@@ -230,7 +230,7 @@ final class AudioCapture: @unchecked Sendable {
         stateLock.withLock { converter = nil }
     }
 
-    // MARK: - 変換（tap のスレッド）
+    // MARK: - Conversion (tap thread)
 
     private final class OnceFlag: @unchecked Sendable { var done = false }
 
@@ -251,7 +251,7 @@ final class AudioCapture: @unchecked Sendable {
         session = s
     }
 
-    /// endOfStream が true のときは、変換器に残ったサンプルを吐き出させる
+    /// When endOfStream is true, drains the samples left in the converter
     private func convert(_ buffer: AVAudioPCMBuffer?, with converter: AVAudioConverter, endOfStream: Bool) -> [Float] {
         let inFrames = Double(buffer?.frameLength ?? 0)
         let ratio = outFormat.sampleRate / converter.inputFormat.sampleRate
@@ -289,7 +289,7 @@ final class AudioCapture: @unchecked Sendable {
         (Double(v) * 10000).rounded() / 10000
     }
 
-    // MARK: - 停止
+    // MARK: - Stop
 
     private func stopOnControl(sessionId: Int, requestId: String?) {
         guard let s = stateLock.withLock({ session }), s.id == sessionId else {
@@ -299,7 +299,7 @@ final class AudioCapture: @unchecked Sendable {
             return
         }
         if !s.failed {
-            // 停止要求の時点までの音声が tap に届くのを少し待つ
+            // Wait a little for the audio up to the stop request to reach the tap
             let tail = stateLock.withLock { lastBufferDuration }
             let waitMs = min(150, max(30, tail * 1000 + 15))
             usleep(useconds_t(waitMs * 1000))
@@ -307,8 +307,8 @@ final class AudioCapture: @unchecked Sendable {
         finishSession(status: s.failed ? "incomplete" : "flushed", emitStopped: true, requestId: requestId)
     }
 
-    /// エンジンを止め、残りを吐き出してセッションを閉じる
-    /// requestId は audio_stop への返答のときだけ渡す（割り込みで閉じるときは nil）
+    /// Stops the engine, drains the rest and closes the session
+    /// requestId is passed only when answering audio_stop (nil when closing because of an interruption)
     private func finishSession(status: String, emitStopped: Bool, requestId: String? = nil) {
         stopWatchdog()
         if let engine, engine.isRunning { engine.stop() }
@@ -328,7 +328,7 @@ final class AudioCapture: @unchecked Sendable {
             if ended.count > 16 { ended.removeAll() }
             return (s.id, finalStatus, s.seq)
         }
-        // 次の開始を速くするため、止めたエンジンを prepare しておく
+        // Prepare the stopped engine so the next start is faster
         engine?.prepare()
         guard let result else { return }
         Log.info("audio session \(result.id) stopped: \(result.status), \(result.chunks) chunks")
@@ -337,10 +337,10 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    // MARK: - デバイスの変化と異常
+    // MARK: - Device changes and failures
 
-    /// 構成変更の通知はまとめて（150ms）処理する。macOS では開始直後にも 1 回届くことがある
-    /// （入力と出力が別デバイスのとき、エンジンが CADefaultDeviceAggregate を作るため）
+    /// Configuration change notifications are coalesced (150ms). On macOS one can also arrive right after starting
+    /// (when input and output are different devices, because the engine creates CADefaultDeviceAggregate)
     private func scheduleConfigurationCheck() {
         configCheck?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.handleConfigurationChange() }
@@ -383,8 +383,8 @@ final class AudioCapture: @unchecked Sendable {
         return f.sampleRate != conv.inputFormat.sampleRate || f.channelCount != conv.inputFormat.channelCount
     }
 
-    /// 録音中のデバイスが消えた。指定のデバイスで録音していた場合も含め、別の入力に切り替えて続ける
-    /// （それまでの音声は捨てない。main には致命的でない device_lost で知らせる）
+    /// The recording device disappeared. Switches to another input and continues, even if a specific device was selected
+    /// (audio so far is kept. main is told with a non-fatal device_lost)
     private func handleDeviceLoss(reason: String) {
         guard let s = stateLock.withLock({ session }), !s.failed else { return }
         if let next = Self.fallbackInput(excluding: s.device) {
@@ -396,7 +396,7 @@ final class AudioCapture: @unchecked Sendable {
         markFailed(code: "device_lost", message: reason)
     }
 
-    /// 切り替え先: 既定の入力（消えたデバイスでなければ）、なければ仮想でない生きている入力の最初のもの
+    /// Where to switch: the default input (unless it is the lost device), otherwise the first live input that is not virtual
     static func fallbackInput(excluding lost: AudioDevices.Device) -> AudioDevices.Device? {
         if let def = AudioDevices.defaultInputDevice(), def.uid != lost.uid, def.isAlive { return AudioDevices.avoidingClosedLid(def) }
         return AudioDevices.list().first { $0.uid != lost.uid && !$0.isVirtual }.map(AudioDevices.avoidingClosedLid)
@@ -421,7 +421,7 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    /// セッションを失敗扱いにする（それまでの音声は吐き出す）。audio_stop が来たら incomplete で答える
+    /// Marks the session as failed (audio so far is flushed). Answers incomplete when audio_stop comes
     private func markFailed(code: String, message: String) {
         guard let id = stateLock.withLock({ session?.id }) else { return }
         sendError(id, code, message, fatal: true)
@@ -450,7 +450,7 @@ final class AudioCapture: @unchecked Sendable {
         watchdog = nil
     }
 
-    /// 音声が届かなくなったら（Bluetooth の切断など）異常として扱う
+    /// Treats it as a failure when audio stops arriving (a Bluetooth disconnect, for example)
     private func checkStall() {
         let (s, last) = stateLock.withLock { (session, lastBufferAt) }
         guard let s, !s.failed else { return }
@@ -466,7 +466,7 @@ final class AudioCapture: @unchecked Sendable {
         }
     }
 
-    /// id は audio_start への返答として失敗を返すときだけ付ける（録音中の異常は id なしのイベント）
+    /// id is attached only when returning a failure as the answer to audio_start (failures during recording are events without an id)
     private func sendError(_ sessionId: Int?, _ code: String, _ message: String, fatal: Bool, id: String? = nil) {
         Log.warn("audio_error \(code): \(message)")
         Output.shared.send("audio_error", id: id, AudioErrorPayload(sessionId: sessionId, code: code, message: message, fatal: fatal))

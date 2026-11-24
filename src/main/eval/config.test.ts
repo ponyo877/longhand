@@ -4,10 +4,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { expandHome, parseEvalConfig, resolveRunDir, validateEvalConfig } from './config';
 
-describe('評価の設定', () => {
+describe('evaluation config', () => {
   const base = { name: 'run', datasets: ['d1'], llm: 'off' };
 
-  it('必要な項目を確かめ、辞書のパスの ~ を開く', () => {
+  it('checks the required fields and expands ~ in the dictionary path', () => {
     const c = validateEvalConfig({ ...base, vocab: '~/words.txt' });
     expect(c.vocab).toBe(path.join(os.homedir(), 'words.txt'));
     expect(c.readings).toBeNull();
@@ -17,10 +17,10 @@ describe('評価の設定', () => {
     expect(() => validateEvalConfig({ ...base, llm: 'on' })).toThrow(/llm/);
     expect(() => validateEvalConfig({ ...base, split: 'test' })).toThrow(/split/);
     expect(() => validateEvalConfig({ ...base, maxLlmCalls: -1 })).toThrow(/maxLlmCalls/);
-    expect(() => validateEvalConfig([])).toThrow(/オブジェクト/);
+    expect(() => validateEvalConfig([])).toThrow(/JSON object/);
   });
 
-  it('末尾の切り落としは、postRoll か 0 以上の数だけを受け付ける', () => {
+  it('accepts only postRoll or a number of 0 or more for the tail cut', () => {
     expect(validateEvalConfig({ ...base, truncateTail: 'postRoll' }).truncateTail).toBe('postRoll');
     expect(validateEvalConfig({ ...base, truncateTail: 300 }).truncateTail).toBe(300);
     expect(validateEvalConfig(base).truncateTail).toBeUndefined();
@@ -29,7 +29,7 @@ describe('評価の設定', () => {
     expect(() => validateEvalConfig({ ...base, truncateTail: Number.NaN })).toThrow(/truncateTail/);
   });
 
-  it('JSON そのものからも、ファイルからも読める', () => {
+  it('reads from JSON itself and from a file', () => {
     expect(parseEvalConfig(JSON.stringify(base)).name).toBe('run');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-eval-config-'));
     try {
@@ -54,22 +54,22 @@ describe('resolveRunDir', () => {
     make('2026-01-01T09-00-00-base');
     make('2026-01-01T10-00-00-base');
     make('2026-01-01T11-00-00-asr-base');
-    make('2026-01-01T12-00-00-base', false); // 行の無い（途中で落ちた）実行
+    make('2026-01-01T12-00-00-base', false); // a run with no rows (it crashed halfway)
   });
   afterEach(() => {
     fs.rmSync(runs, { recursive: true, force: true });
   });
 
-  it('フォルダのパスと、フォルダ名で探せる', () => {
+  it('finds a run by folder path and by folder name', () => {
     const dir = path.join(runs, '2026-01-01T09-00-00-base');
     expect(resolveRunDir(dir, runs)).toBe(dir);
     expect(resolveRunDir('2026-01-01T09-00-00-base', runs)).toBe(dir);
   });
 
-  it('実行の名前で探すと、その名前の最も新しい実行になる。名前の一部が同じだけの実行は拾わない', () => {
+  it('finds the latest run with a name and ignores runs whose name only partly matches', () => {
     expect(resolveRunDir('base', runs)).toBe(path.join(runs, '2026-01-01T10-00-00-base'));
     expect(resolveRunDir('asr-base', runs)).toBe(path.join(runs, '2026-01-01T11-00-00-asr-base'));
-    expect(() => resolveRunDir('se', runs)).toThrow(/見つかりません/);
-    expect(() => resolveRunDir('none', runs)).toThrow(/見つかりません/);
+    expect(() => resolveRunDir('se', runs)).toThrow(/not found/);
+    expect(() => resolveRunDir('none', runs)).toThrow(/not found/);
   });
 });

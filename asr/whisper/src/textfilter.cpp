@@ -17,7 +17,7 @@ std::u32string utf8_to_u32(const std::string & s) {
         else if ((c >> 5) == 0x6) { cp = c & 0x1F; n = 2; }
         else if ((c >> 4) == 0xE) { cp = c & 0x0F; n = 3; }
         else if ((c >> 3) == 0x1E) { cp = c & 0x07; n = 4; }
-        else { ++i; continue; }  // 不正なバイトは捨てる
+        else { ++i; continue; }  // Drop invalid bytes
         if (i + n > s.size()) break;
         bool ok = true;
         for (int k = 1; k < n; ++k) {
@@ -54,12 +54,12 @@ std::string u32_to_utf8(const std::u32string & s) {
 
 static bool is_punct_or_symbol(char32_t c) {
     if (c < 0x80) return !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
-    if (c == 0x30FC) return false;                                // 長音符は文字として残す
-    if (c >= 0x3000 && c <= 0x303F) return !(c == 0x3005 || c == 0x3006 || c == 0x3007);  // 々〆〇は残す
+    if (c == 0x30FC) return false;                                // Keep the long vowel mark as a letter
+    if (c >= 0x3000 && c <= 0x303F) return !(c == 0x3005 || c == 0x3006 || c == 0x3007);  // Keep 々〆〇
     if (c == 0x30FB) return true;                                 // ・
-    if (c >= 0x2000 && c <= 0x2BFF) return true;                  // 一般句読点、矢印、記号、♪ など
+    if (c >= 0x2000 && c <= 0x2BFF) return true;                  // General punctuation, arrows, symbols, ♪ and so on
     if (c >= 0xFE30 && c <= 0xFE4F) return true;
-    if (c >= 0x1F000) return true;                                // 絵文字
+    if (c >= 0x1F000) return true;                                // Emoji
     if (c == 0x00A0 || c == 0x00B7) return true;
     return false;
 }
@@ -68,7 +68,7 @@ std::u32string normalize_for_match(const std::string & s) {
     std::u32string in = utf8_to_u32(s), out;
     out.reserve(in.size());
     for (char32_t c : in) {
-        if (c >= 0xFF01 && c <= 0xFF5E) c = c - 0xFF01 + 0x21;  // 全角 ASCII → 半角
+        if (c >= 0xFF01 && c <= 0xFF5E) c = c - 0xFF01 + 0x21;  // Full-width ASCII to half-width
         if (c == 0x3000) c = ' ';
         if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
         if (is_punct_or_symbol(c)) continue;
@@ -79,14 +79,14 @@ std::u32string normalize_for_match(const std::string & s) {
 
 namespace {
 
-// 含まれていたら必ず捨てる語句（動画の字幕データ由来で、口述ではまず出ない）
+// Phrases that are always dropped when present (they come from video subtitle data and almost never occur in dictation)
 const char * kAlwaysDrop[] = {
     "ご視聴", "ご覧いただきありがとう", "チャンネル登録", "高評価", "字幕", "次回もお楽しみに", "次の動画",
     "おやすみなさいませ", "thanksforwatching", "thankyouforwatching", "subtitlesby", "subtitledby", "amaraorg",
     "pleasesubscribe", "音楽", "拍手",
 };
 
-// 区間全体がこれと一致し、かつ発話の証拠が弱いときだけ捨てる語句（実際に言うこともあるため）
+// Phrases dropped only when the whole segment matches and the evidence of speech is weak (people do actually say them)
 const char * kDropIfWeak[] = {
     "ありがとうございました", "ありがとうございます", "おやすみなさい", "お疲れ様でした", "それではまた", "ではまた",
     "またね", "バイバイ", "thankyou", "bye", "you", "えー", "あー", "笑",
@@ -101,7 +101,7 @@ std::string hallucination_reason(const std::string & text, const SegmentEvidence
         const std::u32string pn = normalize_for_match(p);
         if (n.find(pn) != std::u32string::npos) return std::string("blocklist:") + p;
     }
-    // 発話の証拠が弱い: 無音らしさが高い、確信度が低い、または VAD の発話長に対して文字が多すぎる（日本語は毎秒 8〜10 文字程度）
+    // Weak evidence of speech: likely silence, low confidence, or too many characters for the VAD speech length (Japanese is about 8 to 10 characters per second)
     const bool too_dense = ev.speech_sec > 0.0f && (float) n.size() > ev.speech_sec * 14.0f + 2.0f;
     const bool weak = ev.no_speech_prob > 0.2f || ev.avg_logprob < -0.7f || too_dense;
     if (weak) {
@@ -109,7 +109,7 @@ std::string hallucination_reason(const std::string & text, const SegmentEvidence
             if (n == normalize_for_match(p)) return std::string("weak:") + p;
         }
     }
-    // 初期プロンプトのおうむ返し（プロンプトの 8 割以上をそのまま出力した区間）
+    // Echo of the initial prompt (a segment that outputs 80% or more of the prompt verbatim)
     if (!prompt_norm.empty() && n.size() >= 10 && n.size() * 10 >= prompt_norm.size() * 8 &&
         prompt_norm.find(n) != std::u32string::npos) {
         return "prompt-echo";

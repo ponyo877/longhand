@@ -1,12 +1,12 @@
 /**
- * 評価のファイルの読み書き。個人の書き起こしを含むので、フォルダは 0700、ファイルは 0600 で作る。
+ * Reading and writing evaluation files. They hold personal transcripts, so folders are created 0700 and files 0600.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-/** 評価のデータの置き場所（リポジトリの外）。LONGHAND_EVAL_ROOT で変えられる（テスト用） */
+/** Where the evaluation data lives (outside the repository). LONGHAND_EVAL_ROOT changes it (for tests) */
 export function evalRoot(): string {
   return process.env.LONGHAND_EVAL_ROOT || path.join(os.homedir(), 'longhand-eval');
 }
@@ -16,7 +16,7 @@ export function ensurePrivateDir(dir: string): string {
   return dir;
 }
 
-/** 一時ファイルに書いてから置き換える（途中で止まっても壊れたファイルを残さない） */
+/** Writes to a temporary file and then replaces the file (stopping halfway never leaves a broken file) */
 export function writePrivate(file: string, data: string): void {
   ensurePrivateDir(path.dirname(file));
   const tmp = `${file}.tmp-${process.pid}`;
@@ -42,7 +42,7 @@ export function sha256Hex(data: string | Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
-/** キーの順をそろえた JSON（同じ中身なら同じ文字列になる）。undefined の項目は落とす */
+/** JSON with sorted keys (the same content gives the same string). Drops undefined fields */
 export function stableStringify(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
   if (Array.isArray(v)) return `[${v.map((x) => stableStringify(x)).join(',')}]`;
@@ -53,13 +53,13 @@ export function stableStringify(v: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`).join(',')}}`;
 }
 
-/** ファイルの大きさと更新時刻（ビルドやモデルが変わったことを見分ける。コミットの代わり） */
+/** Size and modification time of a file (tells that a build or a model changed, in place of a commit) */
 export interface FileSig {
   size: number;
   mtimeMs: number;
 }
 
-/** ファイルなら大きさと更新時刻。フォルダなら、直下のファイルの大きさの合計と、最も新しい更新時刻。なければ null */
+/** For a file, its size and modification time. For a folder, the total size of the files directly in it and the latest modification time. null if missing */
 export function fileSig(p: string): FileSig | null {
   try {
     const st = fs.statSync(p);
@@ -79,8 +79,8 @@ export function fileSig(p: string): FileSig | null {
 }
 
 /**
- * フォルダの中身のハッシュ（相対パスと内容。テストは除く）。
- * リポジトリにコミットが無いので、どの版のコードで測ったかの記録に使う
+ * Hash of a folder's contents (relative paths and contents, excluding tests).
+ * The repository has no commits, so this records which version of the code was measured
  */
 export function hashTree(dir: string): string {
   const h = createHash('sha256');

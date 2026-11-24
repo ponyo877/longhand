@@ -1,12 +1,12 @@
 /**
- * 評価の結果の使い回し。音声認識と LLM の結果を、入力から決まるキーで保存する。
+ * Reuse of evaluation results. Speech recognition and LLM results are saved under a key determined by their inputs.
  *
- * - 音声認識: 音声のハッシュ、エンジン、モデルとワーカーの大きさと更新時刻、オプション、言語、ヒント、prompt から決まる
- * - LLM: プロバイダの種類、モデル、プロンプト、出力の形式、出力の上限、Anthropic の設定、extraBody、試行番号から決まる。
- *   API キー、ヘッダ、接続先はキーにも保存する中身にも入れない
- * - 失敗は保存しない（次の実行でやり直せるように）
+ * - Speech recognition: determined by the audio hash, the engine, the size and modification time of the model and the worker, the options, the language, the hints and the prompt
+ * - LLM: determined by the provider kind, the model, the prompt, the output format, the output limit, the Anthropic settings, extraBody and the attempt number.
+ *   The API key, headers and endpoint go into neither the key nor the saved content
+ * - Failures are not saved (so that the next run can retry them)
  *
- * 保存先は個人の書き起こしを含むので、リポジトリの外（~/longhand-eval/cache）に 0600 で置く。
+ * The cache holds personal transcripts, so it lives outside the repository (~/longhand-eval/cache) with mode 0600.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,7 +14,7 @@ import type { LlmSettings } from '../../shared/settings';
 import { LlmError, type LlmErrorKind, type LlmProvider, type LlmRequest, type LlmResponse } from '../llm/types';
 import { sha256Hex, stableStringify, writePrivate, type FileSig } from './files';
 
-/** キーごとに 1 つの JSON ファイルを置く保存先 */
+/** Storage with one JSON file per key */
 export class JsonCache<T> {
   constructor(private readonly dir: string) {}
 
@@ -36,36 +36,36 @@ export class JsonCache<T> {
 }
 
 // ---------------------------------------------------------------------------
-// 音声認識
+// Speech recognition
 // ---------------------------------------------------------------------------
 
-/** 書き起こしの手順（pipeline.ts の transcribeLikeApp）を変えたら上げる */
+/** Bump this when the transcription steps (transcribeLikeApp in pipeline.ts) change */
 export const ASR_CACHE_VERSION = 2;
 
 export interface AsrKeyInput {
   audioSha256: string;
   engine: string;
-  /** モデルのファイル名と、大きさと更新時刻 */
+  /** File name of the model, and its size and modification time */
   modelName: string;
   model: FileSig | null;
   worker: FileSig | null;
-  /** ワーカーの load.options（default.json の値に設定を重ねたもの） */
+  /** The worker's load.options (the values in default.json with the settings applied on top) */
   options: Record<string, unknown>;
   language: string;
   hints: readonly string[];
   prompt?: string | null;
-  /** 要求に付ける任意の指定（プロンプトの様式、聞き直し、別候補）。既定のままなら undefined（以前のキーと同じになる） */
+  /** Optional settings added to the request (prompt style, rehearing, alternatives). undefined when left at the defaults (the key stays the same as before) */
   extras?: Record<string, unknown>;
-  /** 長い録音を区切って書き起こすか（設定の asr.incremental） */
+  /** Whether long recordings are transcribed in segments (the asr.incremental setting) */
   incremental: boolean;
-  /** 書き起こす前に音声の末尾から切り落とした長さ（ms）。切り落とさなければ undefined（キーは変わらない） */
+  /** Length cut from the end of the audio before transcribing (ms). undefined when nothing is cut (the key does not change) */
   truncateTailMs?: number;
   /**
-   * ヒントが効いた所だけを取り込む書き起こし（asr.hintMode の selective）。
-   * いつもヒントありの書き起こしと、ヒントが無い発話では undefined（キーは変わらない）
+   * Transcription that takes only the parts where the hints helped (asr.hintMode selective).
+   * undefined for transcription that always uses hints, and for utterances without hints (the key does not change)
    */
   hintMode?: 'selective' | 'selective-2';
-  /** 書き起こさずに捨てる録音の判定に使う設定 */
+  /** Settings used to decide which recordings are dropped without transcribing */
   minRecordingMs: number;
   silenceDetection: boolean;
 }
@@ -78,14 +78,14 @@ export function asrCacheKey(k: AsrKeyInput): string {
 // LLM
 // ---------------------------------------------------------------------------
 
-/** LLM の結果を左右する接続の設定のうち、秘密でないもの。キャッシュのキーと、実行の記録に使う */
+/** The non-secret connection settings that affect LLM results. Used for the cache key and for the run record */
 export interface LlmIdentity {
-  /** プロバイダの種類（anthropic など） */
+  /** Provider kind (anthropic and so on) */
   kind: string;
   model: string;
-  /** Anthropic の設定（effort、thinking、promptCaching）。ほかのプロバイダでは null */
+  /** Anthropic settings (effort, thinking, promptCaching). null for other providers */
   anthropic: LlmSettings['anthropic'] | null;
-  /** extraBody（リクエストに足す JSON）のハッシュ。中身は残さない */
+  /** Hash of extraBody (JSON added to the request). The content itself is not kept */
   extraBodySha256: string;
 }
 
@@ -115,7 +115,7 @@ export function llmCacheKey(id: LlmIdentity, req: Pick<LlmRequest, 'system' | 'u
   );
 }
 
-/** 1 回の実行で LLM を呼んでよい回数。使い切ったら実行を止める */
+/** Number of LLM calls allowed in one run. The run stops when they are used up */
 export class CallBudget {
   used = 0;
 
@@ -125,9 +125,9 @@ export class CallBudget {
     return this.used >= this.max;
   }
 
-  /** 1 回分を使う。残っていなければ例外 */
+  /** Uses one call. Throws when none are left */
   take(): void {
-    if (this.exhausted) throw new Error(`LLM の呼び出しが上限（${this.max} 回）に達しました`);
+    if (this.exhausted) throw new Error(`LLM call limit reached (${this.max} calls)`);
     this.used++;
   }
 }
@@ -141,12 +141,12 @@ interface LlmCacheEntry {
   createdAt: string;
 }
 
-/** 直前の complete の様子（実行の行に残す） */
+/** How the last complete went (kept in the run's row) */
 export interface LlmCallInfo {
   cached: boolean;
-  /** LLM の応答にかかった時間（保存済みの結果なら、保存したときの値） */
+  /** Time the LLM took to respond (for a saved result, the value from when it was saved) */
   elapsedMs: number;
-  /** 実際に呼んだ回数（保存済みの結果なら 0） */
+  /** Number of actual calls (0 for a saved result) */
   tries: number;
   errorKind?: LlmErrorKind | 'cache-miss' | 'budget';
 }
@@ -154,17 +154,17 @@ export interface LlmCallInfo {
 export interface CachingOptions {
   dir: string;
   identity: LlmIdentity;
-  /** 試行番号。同じ入力で別の結果を取りたいときに変える */
+  /** Attempt number. Change it to get a different result for the same input */
   attempt?: number;
   budget?: CallBudget;
   /**
-   * 呼び出しを、この包みで数えるか（既定は数える）。
-   * 通信の入口（fetch）で数えているときは false にする。その場合、この包みは上限に達したかどうかだけを見る
+   * Whether this wrapper counts the calls (it does by default).
+   * Set to false when calls are counted at the network entry point (fetch). This wrapper then only checks whether the limit is reached
    */
   countCalls?: boolean;
-  /** やり直しの回数（timeout、network、rate_limit、5xx）。既定は 2 */
+  /** Number of retries (timeout, network, rate_limit, 5xx). Defaults to 2 */
   retries?: number;
-  /** やり直す前に待つ時間。テストでは 0 にする */
+  /** Time to wait before a retry. 0 in tests */
   backoffMs?: (retry: number, kind: LlmErrorKind) => number;
 }
 
@@ -178,12 +178,12 @@ function retryable(e: LlmError): boolean {
 const defaultBackoff = (retry: number, kind: LlmErrorKind) => (kind === 'rate_limit' ? 10_000 : 1_500) * retry;
 
 /**
- * LlmProvider を包み、結果を保存して使い回す。
- * - 保存済みならそれを返し、LLM は呼ばない
- * - inner が null なら保存済みの結果だけを使う（無ければ失敗を返し、その数を数える）
- * - timeout、network、rate_limit、5xx は retries 回までやり直す
- * - auth と config、呼び出しの上限は、その場で実行を止める印（fatal）を立てる。
- *   formatText は LLM の失敗を握って生テキストに落とすので、呼び出し側は 1 件ごとに fatal を見て止める
+ * Wraps an LlmProvider and saves its results for reuse.
+ * - Returns a saved result when there is one, without calling the LLM
+ * - When inner is null, uses saved results only (returns a failure when there is none, and counts it)
+ * - Retries timeout, network, rate_limit and 5xx up to `retries` times
+ * - auth, config and the call limit set a flag (fatal) that stops the run at once.
+ *   formatText swallows LLM failures and falls back to the raw text, so the caller checks fatal after each item and stops
  */
 export class CachingProvider implements LlmProvider {
   readonly kind: string;
@@ -202,7 +202,7 @@ export class CachingProvider implements LlmProvider {
     this.attempt = opts.attempt ?? 0;
   }
 
-  /** 直前の complete の様子を取り出して消す。LLM が呼ばれなかった（近道など）なら null */
+  /** Takes and clears how the last complete went. null when the LLM was not called (a shortcut, for example) */
   takeLast(): LlmCallInfo | null {
     const l = this.last;
     this.last = null;
@@ -227,13 +227,13 @@ export class CachingProvider implements LlmProvider {
     this.stats.misses++;
     if (!this.inner) {
       this.last = { cached: false, elapsedMs: 0, tries: 0, errorKind: 'cache-miss' };
-      throw new LlmError('config', '保存済みの結果がありません（保存済みの結果だけを使う指定）');
+      throw new LlmError('config', 'No saved result (only saved results are allowed)');
     }
     const retries = this.opts.retries ?? 2;
     const budget = this.opts.budget;
     let tries = 0;
     for (let retry = 0; ; retry++) {
-      if (budget?.exhausted) this.stop('budget', `LLM の呼び出しが上限（${budget.max} 回）に達しました`);
+      if (budget?.exhausted) this.stop('budget', `LLM call limit reached (${budget.max} calls)`);
       if (budget && this.opts.countCalls !== false) budget.take();
       this.stats.calls++;
       tries++;

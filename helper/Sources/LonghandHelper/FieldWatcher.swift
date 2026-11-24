@@ -3,35 +3,35 @@ import CoreGraphics
 import Foundation
 import LonghandCore
 
-/// 貼り付け後に入力欄を監視し、ユーザーの手直しを含む最後の内容を field_watch_result で返す（学習機能、PST-9）。
+/// Watches the input field after a paste and returns its final content, including the user's edits, in field_watch_result (learning, PST-9).
 ///
-/// - 同時に監視するのは 1 つだけ。判定は LonghandCore の FieldWatchTracker が行う。
-/// - 読み直しの間隔: 貼り付けた文字列が見えるまでは 100ms、送信の確かめ中は 150ms、キー入力の 250ms 後、それ以外は 500ms。
-/// - 利用者のキー入力は HotkeyEngine の tap から noteKey で受け取る。Return のときは、アプリに届く前に（最大 30ms 待って）欄を読む。
-/// - フォーカスが移った、要素が消えた、欄が空になった（送信）、時間が来た（変化が落ち着くのを最大 1.5 秒待つ）で終える。
+/// - Only one watch runs at a time. LonghandCore's FieldWatchTracker makes the decisions.
+/// - Reread interval: 100ms until the pasted text is visible, 150ms while confirming a send, 250ms after a keystroke, 500ms otherwise.
+/// - The user's keystrokes come from HotkeyEngine's tap through noteKey. On Return, the field is read before the app gets the key (waiting up to 30ms).
+/// - Ends when the focus moves, the element disappears, the field becomes empty (sent), or time is up (waiting up to 1.5 seconds for changes to settle).
 final class FieldWatcher: @unchecked Sendable {
     static let shared = FieldWatcher()
 
     private let queue = DispatchQueue(label: "longhand.fieldwatch", qos: .userInitiated)
-    /// 監視中か（tap スレッドから、キューに入らずに確かめるため）
+    /// Whether a watch is running (so the tap thread can check without going through the queue)
     private let active = LockedValue(false)
     private var current: Watch?
 
-    /// Return の keyDown のときに、欄を読み終えるのを待つ上限
+    /// Longest wait for the field read to finish on a Return keyDown
     static let enterReadWaitMs = 30
 
     struct Request {
         let pasteId: String
         let element: AXRef
         let pid: pid_t
-        /// 貼り付け直前の欄の全文
+        /// Full text of the field just before the paste
         let before: String
-        /// before の中での貼り付け位置（選択範囲の先頭、UTF-16）
+        /// Paste position within before (start of the selection, UTF-16)
         let insertOffset: Int?
         let insertReplacedLength: Int?
-        /// 貼った文字列（コマンド記法を除く）
+        /// The pasted text (without command notation)
         let inserted: String
-        /// 貼り付け直後の読み取り
+        /// The read right after the paste
         let initial: String?
         let watchMs: Int
     }
@@ -67,7 +67,7 @@ final class FieldWatcher: @unchecked Sendable {
         }
     }
 
-    /// 欄が読めないので監視しなかったことを知らせる（main が待っている監視の結果を片付けられるように）
+    /// Reports that no watch ran because the field is unreadable (so main can clear the watch result it is waiting for)
     func reportUnreadable(pasteId: String, inserted: String) {
         Log.info("field watch for paste \(pasteId) not started: field is unreadable")
         Output.shared.send("field_watch_result", FieldWatchResultPayload(
@@ -77,13 +77,13 @@ final class FieldWatcher: @unchecked Sendable {
         ))
     }
 
-    /// 監視中なら終える（新しい貼り付けが来たときなど）。読み取り中の AX 呼び出しを待たないよう、非同期に終える
-    /// （後から呼んだ start より先に処理される）
+    /// Ends the running watch, if any (when a new paste comes, for example). Ends asynchronously so as not to wait for an AX call in progress
+    /// (it is still handled before a start called later)
     func cancel() {
         queue.async { [self] in finish(.cancelled) }
     }
 
-    /// 利用者のキー入力（tap スレッドから呼ぶ。自分の合成、キーリピート、飲み込んだホットキーは渡さない）
+    /// A keystroke from the user (called from the tap thread; our own synthesized keys, key repeats and swallowed hotkeys are not passed)
     func noteKey(_ key: String, flags: CGEventFlags, at t: Double) {
         guard active.get() else { return }
         let kind = WatchKey.classify(keyName: key, command: flags.contains(.maskCommand),
@@ -92,7 +92,7 @@ final class FieldWatcher: @unchecked Sendable {
         case .ignore:
             return
         case .enter:
-            // 送信で欄が空になる前に読む。tap のコールバックが返るまで、アプリにはこの Return が届かない
+            // Read before sending empties the field. The app does not get this Return until the tap callback returns
             let done = DispatchSemaphore(value: 0)
             queue.async { [self] in
                 defer { done.signal() }
@@ -113,19 +113,19 @@ final class FieldWatcher: @unchecked Sendable {
         }
     }
 
-    // MARK: - キューの中
+    // MARK: - On the queue
 
     private func poll() {
         guard let w = current else { return }
         let now = Clock.nowMs()
         guard now >= w.nextReadAt else { return }
         let el = w.req.element.element
-        // 要素が消えたか
+        // Has the element disappeared?
         let (err, _) = AX.copy(el, kAXRoleAttribute)
         if err == .invalidUIElement {
             return finish(.elementGone)
         }
-        // フォーカスが別の要素・別のアプリに移ったか。移った後でも、要素が残っていれば最後に 1 回読む
+        // Has the focus moved to another element or app? Even after it moved, read once more at the end if the element is still there
         let focusMoved: Bool = {
             if let pid = AX.focusedAppPid(), pid != w.req.pid { return true }
             if let focused = AX.focusedElement(appPid: w.req.pid), !CFEqual(focused, el) { return true }

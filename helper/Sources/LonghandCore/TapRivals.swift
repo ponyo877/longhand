@@ -1,19 +1,19 @@
-// event tap の「先頭の取り合い」の判定（HK-4）。OS から切り離した純粋なロジックで、XCTest で検証する。
+// Decides the "fight for the front" between event taps (HK-4). Pure logic kept apart from the OS, verified with XCTest.
 //
-// HID 層の tap は、先に並んでいるものからイベントを受け取る。前に能動型（listen-only でない）の tap があると、
-// その tap がキーを飲み込んだり書き換えたりした後のイベントしか届かない。
-// CGGetEventTapList の並び順を処理の順序とみなし、自分の tap より前に競合があれば作り直して先頭に戻る。
-// 相手も先頭を取り返しに来る場合に備えて、同じ相手への張り直しには回数の上限を付ける。
+// HID-level taps receive events in the order they are lined up. If an active (not listen-only) tap is ahead of ours,
+// we only get events after that tap has swallowed or rewritten keys.
+// We take the order of CGGetEventTapList as the processing order, and if a rival is ahead of our tap, recreate ours to get back to the front.
+// In case the rival also fights to get the front back, re-creating against the same rival is capped.
 
-/// CGEventTapInformation から必要な項目だけを写したもの
+/// The fields we need, copied from CGEventTapInformation
 public struct TapEntry: Equatable, Sendable {
-    /// kCGHIDEventTap = 0、kCGSessionEventTap = 1、kCGAnnotatedSessionEventTap = 2
+    /// kCGHIDEventTap = 0, kCGSessionEventTap = 1, kCGAnnotatedSessionEventTap = 2
     public var tapPoint: UInt32
-    /// kCGEventTapOptionDefault = 0（能動型）、kCGEventTapOptionListenOnly = 1
+    /// kCGEventTapOptionDefault = 0 (active), kCGEventTapOptionListenOnly = 1
     public var options: UInt32
     public var enabled: Bool
     public var eventsOfInterest: UInt64
-    /// tap を作ったプロセス
+    /// The process that created the tap
     public var tappingPid: Int32
 
     public init(tapPoint: UInt32, options: UInt32, enabled: Bool, eventsOfInterest: UInt64, tappingPid: Int32) {
@@ -29,10 +29,10 @@ public struct TapEntry: Equatable, Sendable {
 }
 
 public enum RivalTapFinder {
-    /// 自分の HID 層の tap より前に並んでいる競合を返す。
-    /// - 競合: HID 層、有効、能動型、見るイベントが自分のマスクと重なる、自分以外のプロセス
-    /// - 自分の tap に先に行き当たったら nil（先頭にいる）
-    /// - 自分の tap が一覧に見つからなければ nil（判断できないので何もしない）
+    /// Returns a rival lined up ahead of our HID-level tap.
+    /// - Rival: HID level, enabled, active, events of interest overlapping our mask, another process
+    /// - nil if our own tap comes first (we are at the front)
+    /// - nil if our tap is not in the list (we cannot tell, so do nothing)
     public static func rivalInFront(_ entries: [TapEntry], ownPid: Int32, ownMask: UInt64) -> TapEntry? {
         var candidate: TapEntry?
         for e in entries where e.tapPoint == TapEntry.hidTapPoint {
@@ -48,14 +48,14 @@ public enum RivalTapFinder {
     }
 }
 
-/// 同じ相手への張り直しを、windowMs の間に maxMoves 回までに抑える
+/// Limits re-creating against the same rival to maxMoves times within windowMs
 public struct RivalBackoff: Sendable {
     public enum Decision: Equatable, Sendable {
-        /// 張り直してよい
+        /// OK to re-create
         case move
-        /// 上限を超えた。初めて超えたときだけ返す（main に知らせる合図）
+        /// Over the limit. Returned only the first time (the signal to tell main)
         case giveUp
-        /// すでに諦めた相手。何もしない
+        /// A rival we already gave up on. Do nothing
         case ignore
     }
 
@@ -81,13 +81,13 @@ public struct RivalBackoff: Sendable {
         return .move
     }
 
-    /// 相手のプロセスが終わったとき（同じ PID が別のプロセスに使い回されることに備える）
+    /// When the rival process exits (in case the same PID is reused by another process)
     public mutating func forget(pid: Int32) {
         moves[pid] = nil
         gaveUp.remove(pid)
     }
 
-    /// 今いるプロセスの一覧に含まれない相手の記録を消す
+    /// Drops records of rivals not in the list of running processes
     public mutating func retain(onlyPids alive: Set<Int32>) {
         for pid in Array(moves.keys) where !alive.contains(pid) { moves[pid] = nil }
         gaveUp = gaveUp.filter { alive.contains($0) }
@@ -95,6 +95,6 @@ public struct RivalBackoff: Sendable {
 
     public func hasGivenUp(on pid: Int32) -> Bool { gaveUp.contains(pid) }
 
-    /// 記録を持っている相手
+    /// Rivals we hold records for
     public var trackedPids: Set<Int32> { Set(moves.keys).union(gaveUp) }
 }

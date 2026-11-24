@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { app } from 'electron';
 
-/** アプリが使うディレクトリ。app.getPath は ready 前でも使える */
+/** Directories the app uses. app.getPath works before ready */
 export const paths = {
   get userData(): string {
     return app.getPath('userData');
@@ -15,14 +15,14 @@ export const paths = {
   get models(): string {
     return path.join(app.getPath('userData'), 'models');
   },
-  /** アプリに同梱したモデルの場所（npm run bundle:models で用意する。なければ存在しない） */
+  /** Models bundled with the app (prepared by npm run bundle:models; absent otherwise) */
   get bundledModels(): string {
     return app.isPackaged ? path.join(process.resourcesPath, 'models') : path.join(app.getAppPath(), 'resources/models');
   },
   file(name: string): string {
     return path.join(app.getPath('userData'), name);
   },
-  /** 同梱リソース（ヘルパー、ASR ワーカー）の場所。開発中はリポジトリのビルド成果物を使う */
+  /** Location of bundled resources (the helper, ASR workers). During development, the repository's build output */
   get nativeRoot(): string {
     return app.isPackaged ? process.resourcesPath : app.getAppPath();
   },
@@ -32,7 +32,7 @@ export const paths = {
       ? path.join(process.resourcesPath, 'LonghandHelper.app/Contents/MacOS/LonghandHelper')
       : path.join(app.getAppPath(), 'helper/build/LonghandHelper.app/Contents/MacOS/LonghandHelper');
   },
-  /** textfix の単語分割の WASM（lindera、辞書は IPADIC）。配布パッケージでは Resources に置く（forge の extraResource） */
+  /** WASM of textfix's tokenizer (lindera, with the IPADIC dictionary). In the distributed package it is in Resources (forge's extraResource) */
   get linderaWasm(): string {
     return app.isPackaged ? path.join(process.resourcesPath, 'lindera_wasm_bg.wasm') : path.join(app.getAppPath(), 'node_modules/lindera-wasm-ipadic-web/lindera_wasm_bg.wasm');
   },

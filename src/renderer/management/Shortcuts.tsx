@@ -1,41 +1,45 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Binding, HotkeyAction } from '../../shared/protocol';
 import { DEFAULT_HOTKEYS, type Settings } from '../../shared/settings';
+import type { MessageKey } from '../../shared/i18n';
 import { bindingLabel, isRiskyBinding, keyLabel, sortKeys } from '../common/keys';
+import { useLocale, useT } from '../common/i18n';
 import { Button, Row } from '../common/ui';
 
 export function Keys({ keys }: { keys: string[] }) {
+  const locale = useLocale();
   return (
     <span className="inline-flex items-center gap-1">
       {sortKeys(keys).map((k) => (
         <kbd key={k} className="key">
-          {keyLabel(k)}
+          {keyLabel(k, locale)}
         </kbd>
       ))}
     </span>
   );
 }
 
-const ACTIONS: { id: HotkeyAction; label: string; hint: string }[] = [
-  { id: 'activate', label: '話す（押している間）', hint: '押している間だけ録音します。2 回続けて押すとハンズフリーになります。' },
-  { id: 'lock', label: 'ハンズフリー', hint: '押すと録音を始め、もう一度押すと確定します。' },
-  { id: 'cancel', label: '取り消す', hint: '録音中と処理中だけ有効です。' },
-  { id: 'paste_last', label: '直前の書き起こしを貼り付け', hint: '入力できなかったときに使います。' },
+const ACTIONS: { id: HotkeyAction; label: MessageKey; hint: MessageKey }[] = [
+  { id: 'activate', label: 'shortcuts.action.activate', hint: 'shortcuts.action.activateHint' },
+  { id: 'lock', label: 'shortcuts.action.lock', hint: 'shortcuts.action.lockHint' },
+  { id: 'cancel', label: 'shortcuts.action.cancel', hint: 'shortcuts.action.cancelHint' },
+  { id: 'paste_last', label: 'shortcuts.action.pasteLast', hint: 'shortcuts.action.pasteLastHint' },
 ];
 
 function sameBinding(a: Binding, b: Binding): boolean {
   return a.length === b.length && sortKeys(a).join('+') === sortKeys(b).join('+');
 }
 
-/** キー割り当ての変更（HK-8）。押したキーの組み合わせをヘルパーから受け取って記録する */
+/** Changes a key binding (HK-8). Records the key combination that the helper reports while keys are pressed */
 function Recorder({ onDone, onCancel }: { onDone: (keys: string[]) => void; onCancel: () => void }) {
+  const t = useT();
   const [keys, setKeys] = useState<string[]>([]);
   const done = useRef(false);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
   useEffect(() => {
     void window.longhand.recordShortcut(true);
-    // 5 秒で自動解除されるので、記録中は送り直す
+    // Recording turns itself off after 5 seconds, so keep renewing it while recording
     const renew = setInterval(() => void window.longhand.recordShortcut(true), 4000);
     const off = window.longhand.onShortcutKeys((p) => {
       setKeys(p.done ? p.combo : p.keys.length ? p.keys : p.combo);
@@ -53,40 +57,43 @@ function Recorder({ onDone, onCancel }: { onDone: (keys: string[]) => void; onCa
   return (
     <span className="inline-flex items-center gap-2">
       <span className="inline-flex min-w-[120px] items-center justify-center rounded-md bg-blue-500/10 px-2 py-1 text-[12px] text-blue-700 ring-1 ring-blue-500/40 dark:text-blue-300">
-        {keys.length ? <Keys keys={keys} /> : 'キーを押してください…'}
+        {keys.length ? <Keys keys={keys} /> : t('shortcuts.recorder.pressKeys')}
       </span>
       <Button small variant="ghost" onClick={onCancel}>
-        やめる
+        {t('shortcuts.recorder.stop')}
       </Button>
     </span>
   );
 }
 
 export function ShortcutSettings({ settings, update }: { settings: Settings; update: (hotkeys: Settings['hotkeys']) => void }) {
+  const t = useT();
+  const locale = useLocale();
   const [recording, setRecording] = useState<{ action: HotkeyAction; index: number } | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  /** 起動キーを変えたときに、ハンズフリーのキーも合わせるかの提案（S2） */
+  /** Kept as a key, so that the message follows a change of interface language. action: the action that already uses the keys */
+  const [message, setMessage] = useState<{ key: MessageKey; action?: MessageKey } | null>(null);
+  /** Offer to change the hands-free key as well when the talk key changes (S2) */
   const [suggest, setSuggest] = useState<{ index: number; keys: string[] } | null>(null);
 
   const commit = (action: HotkeyAction, index: number, keys: string[]) => {
     setRecording(null);
     if (keys.length > 5) {
-      setMessage('1 つのショートカットは 5 キーまでです');
+      setMessage({ key: 'shortcuts.tooManyKeys' });
       return;
     }
     for (const a of ACTIONS) {
       const list = settings.hotkeys[a.id];
       if (list.some((b, i) => sameBinding(b, keys) && !(a.id === action && i === index))) {
-        setMessage(`その組み合わせは「${a.label}」で使っています`);
+        setMessage({ key: 'shortcuts.inUse', action: a.label });
         return;
       }
     }
-    setMessage(isRiskyBinding(keys) ? '修飾キーを含まない組み合わせは、普段の入力とぶつかる可能性があります' : null);
+    setMessage(isRiskyBinding(keys) ? { key: 'shortcuts.risky' } : null);
     const list = [...settings.hotkeys[action]];
     const old = list[index];
     list[index] = keys;
     update({ ...settings.hotkeys, [action]: list });
-    // ハンズフリーが「元の起動キー＋Space」のままなら、新しい起動キーに合わせるか尋ねる
+    // If hands-free is still the old talk key + Space, ask whether to move it to the new talk key
     setSuggest(null);
     if (action === 'activate' && old && !keys.includes('Space')) {
       const lockIndex = settings.hotkeys.lock.findIndex((b) => sameBinding(b, [...old, 'Space']));
@@ -100,7 +107,7 @@ export function ShortcutSettings({ settings, update }: { settings: Settings; upd
     if (!suggest) return;
     const lock = [...settings.hotkeys.lock];
     lock[suggest.index] = suggest.keys;
-    // update は呼んだ時点の settings を元にするので、起動キーの変更を含む最新の割り当てに重ねる
+    // update starts from the settings at the time of the call, so build on the latest bindings, which include the talk key change
     update({ ...settings.hotkeys, lock });
     setSuggest(null);
   };
@@ -110,7 +117,7 @@ export function ShortcutSettings({ settings, update }: { settings: Settings; upd
       {ACTIONS.map((a) => {
         const list = settings.hotkeys[a.id];
         return (
-          <Row key={a.id} label={a.label} hint={a.hint}>
+          <Row key={a.id} label={t(a.label)} hint={t(a.hint)}>
             <div className="flex flex-col items-end gap-1.5">
               {list.map((b, i) =>
                 recording?.action === a.id && recording.index === i ? (
@@ -119,14 +126,14 @@ export function ShortcutSettings({ settings, update }: { settings: Settings; upd
                   <span key={i} className="inline-flex items-center gap-1.5">
                     <Keys keys={b} />
                     <Button small variant="ghost" onClick={() => setRecording({ action: a.id, index: i })}>
-                      変更
+                      {t('shortcuts.change')}
                     </Button>
                     <Button
                       small
                       variant="ghost"
-                      // 起動キーと取り消しキーは、最後の 1 つを消せないようにする（S3）
+                      // The last talk key and the last cancel key cannot be deleted (S3)
                       disabled={list.length === 1 && (a.id === 'activate' || a.id === 'cancel')}
-                      title={list.length === 1 && (a.id === 'activate' || a.id === 'cancel') ? '最後の 1 つは削除できません。変更してください' : '削除'}
+                      title={list.length === 1 && (a.id === 'activate' || a.id === 'cancel') ? t('shortcuts.cannotDeleteLast') : t('shortcuts.delete')}
                       onClick={() => update({ ...settings.hotkeys, [a.id]: list.filter((_, j) => j !== i) })}
                     >
                       ×
@@ -137,7 +144,7 @@ export function ShortcutSettings({ settings, update }: { settings: Settings; upd
               {recording?.action === a.id && recording.index === list.length && <Recorder onDone={(k) => commit(a.id, list.length, k)} onCancel={() => setRecording(null)} />}
               {list.length < 3 && !(recording?.action === a.id) && (
                 <Button small variant="ghost" onClick={() => setRecording({ action: a.id, index: list.length })}>
-                  ＋ 追加
+                  {t('shortcuts.add')}
                 </Button>
               )}
             </div>
@@ -146,21 +153,21 @@ export function ShortcutSettings({ settings, update }: { settings: Settings; upd
       })}
       {suggest && (
         <div className="flex items-center justify-between gap-3 bg-blue-500/[0.06] px-4 py-2.5 text-[12.5px]">
-          <span>ハンズフリーのキーも {bindingLabel(suggest.keys)} に変えますか？</span>
+          <span>{t('shortcuts.suggestLock', { keys: bindingLabel(suggest.keys, locale) })}</span>
           <span className="flex gap-1.5">
             <Button small variant="primary" onClick={applySuggest}>
-              変える
+              {t('shortcuts.suggestLockApply')}
             </Button>
             <Button small variant="ghost" onClick={() => setSuggest(null)}>
-              そのまま
+              {t('shortcuts.suggestLockKeep')}
             </Button>
           </span>
         </div>
       )}
       <div className="flex items-center justify-between px-4 py-2.5">
-        <span className="text-[12px] text-amber-600 dark:text-amber-400">{message}</span>
+        <span className="text-[12px] text-amber-600 dark:text-amber-400">{message && t(message.key, message.action ? { action: t(message.action) } : undefined)}</span>
         <Button small variant="ghost" onClick={() => update(DEFAULT_HOTKEYS)}>
-          既定に戻す
+          {t('shortcuts.restoreDefaults')}
         </Button>
       </div>
     </>

@@ -10,7 +10,7 @@ import { detectNumberStyles, isNumberNotationChange, type NumberStyleObservation
 
 const log = createLogger('learn');
 
-/** 1 回の手直しで学習する語の上限。これを超える置き換えは推敲とみなして何も学習しない（G4-16） */
+/** Maximum number of words learned from one correction. More replacements than this count as rewriting, and nothing is learned (G4-16) */
 export const MAX_WORDS_PER_EDIT = 3;
 
 const JUDGE_SCHEMA = {
@@ -47,7 +47,7 @@ const JUDGE_SYSTEM = `あなたは音声入力アプリの辞書係です。
 
 出力は {"words": [{"word": "<corrected の語>", "add": true または false}]} の JSON だけにしてください。`;
 
-/** 大文字小文字だけの直し（iPhone、macOS など、形に意味がある語に限る） */
+/** A case-only fix (limited to words whose case carries meaning, such as iPhone and macOS) */
 function caseOnlyFix(r: Replacement): boolean {
   const f = r.from.normalize('NFKC');
   const t = r.to.normalize('NFKC');
@@ -55,10 +55,10 @@ function caseOnlyFix(r: Replacement): boolean {
 }
 
 /**
- * LLM を使えないときの判定（G4-05）。聞き取った語と直した語の音が近いものだけを採る。
- * - 英字の語: 大文字小文字の形に意味があるか（iPhone、CPU）、かなで聞き取られた語を英字に直したもの
- * - カタカナの語: 3 文字以上で、かなで聞き取られた語を直したもの
- * 漢字を含む語は読みが分からないので採らない。言い換え（「打ち合わせ」→「ミーティング」）は音が違うので採らない。
+ * Judgment when the LLM is unavailable (G4-05). Accepts only pairs where the heard word and the corrected word sound alike.
+ * - Latin words: ones whose case carries meaning (iPhone, CPU), or a word heard as kana corrected into Latin letters
+ * - Katakana words: 3 or more characters, corrected from a word heard as kana
+ * Words with kanji are not accepted because their reading is unknown. Rewordings (「打ち合わせ」→「ミーティング」) sound different and are not accepted.
  */
 export function heuristicAccept(r: Replacement): boolean {
   if (hasKanji(r.from) || hasKanji(r.to)) return false;
@@ -73,49 +73,49 @@ export function heuristicAccept(r: Replacement): boolean {
 }
 
 export interface LearnContext {
-  /** 貼り付けた文（コマンド記法を除いたもの） */
+  /** The pasted text (without command syntax) */
   inserted: string;
   vocabulary: string[];
   blocked: string[];
   provider: LlmProvider | null;
   timeoutMs: number;
-  /** 整形の前の書き起こし（音声認識の出力）。整形の書き換えを元に戻した手直しを見分けるのに使う。なければ見分けない */
+  /** Transcript before formatting (speech recognition output). Used to spot corrections that undo a formatter rewrite. Without it, no such check */
   rawText?: string;
-  /** 読みを調べるための単語分割。なければ、漢字を含む語句の読みは分からないものとして扱う */
+  /** Tokenizer for looking up readings. Without it, readings of phrases with kanji are treated as unknown */
   tokenizer?: Tokenizer | null;
-  /** 学習した時刻。省けば今（評価では、結果が実行のたびに変わらないように、決まった時刻を渡す） */
+  /** Time of learning. Now if omitted (evaluation passes a fixed time so results do not change between runs) */
   now?: number;
 }
 
-/** すでに辞書にある語の、新しい聞き違えた形 */
+/** A new misheard form of a word already in the dictionary */
 export interface MisheardForm {
   word: string;
   from: string;
 }
 
-/** 音声認識の取り違えを直した組（辞書には入れない） */
+/** A pair that fixes a recognition mix-up (not added to the dictionary) */
 export interface CorrectionPair {
   heard: string;
   corrected: string;
 }
 
-/** 整形の書き換えを元に戻した語句 */
+/** A phrase whose formatter rewrite was undone */
 export interface KeptPair {
   phrase: string;
   changedTo: string;
 }
 
-/** 1 回の手直しで覚える、取り違えの組と、書き換えない語句の上限（それぞれ）。超えたら推敲とみなして覚えない */
+/** Maximum number of mix-up pairs and of phrases not to rewrite learned from one correction (each). Beyond this it counts as rewriting, and none are learned */
 export const MAX_PAIRS_PER_EDIT = 3;
 
-/** 比べるときの形（全角と半角、大文字と小文字、空白と句読点の違いを無視する） */
+/** Form used for comparison (ignores full-width/half-width, case, whitespace and punctuation) */
 const norm = (s: string) =>
   s
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[\s\p{P}]+/gu, '');
 
-/** 数が違うか。数の直しは、聞き違いでも文脈からは決められないので、取り違えの組にしない */
+/** Whether the numbers differ. A number fix cannot be decided from context even if it was a mishearing, so it does not become a mix-up pair */
 function numbersDiffer(a: string, b: string): boolean {
   const digits = (s: string) => s.normalize('NFKC').replace(/[^0-9]/g, '');
   if (digits(a) !== digits(b)) return true;
@@ -123,7 +123,7 @@ function numbersDiffer(a: string, b: string): boolean {
   return !!kanji(a) && !!kanji(b) && kanji(a) !== kanji(b);
 }
 
-/** 語句の読み。漢字を含むのに読みが分からなければ null */
+/** Reading of a phrase. null if it contains kanji and the reading is unknown */
 function readingOf(text: string, known: string | undefined, tokenizer: Tokenizer | null | undefined): string | null {
   if (known) return known;
   if (!hasKanji(text)) return text;
@@ -143,8 +143,8 @@ function readingOf(text: string, known: string | undefined, tokenizer: Tokenizer
 }
 
 /**
- * 音が同じか、ごく近いか（同じ読みの別の語、表記の違い、1 音だけの聞き違い）。
- * 1 音だけの違いは、ある程度の長さの語に限る。短い語（「出し」と「足し」など）は、たまたま似ているだけのことが多い
+ * Whether two phrases sound the same or very close (another word with the same reading, a spelling difference, a one-sound mishearing).
+ * A one-sound difference counts only for reasonably long words. Short words (「出し」 and 「足し」, for example) are often alike by chance
  */
 export function closeSound(a: string, b: string): boolean {
   const fa = soundForm(a);
@@ -154,43 +154,43 @@ export function closeSound(a: string, b: string): boolean {
   return Math.min(fa.length, fb.length) >= 5 && editDistance(fa, fb) <= 1;
 }
 
-/** 句読点をまたぐ組は、語句の直しではなく、文の区切りの直しが混ざっている */
+/** A pair spanning punctuation mixes in a fix to sentence breaks, not just to a phrase */
 const crossesPunctuation = (r: Replacement) => /[、。，．,]/.test(r.from + r.to);
 
-/** 覚える語句として短すぎないか（2 字以上か、漢字 1 字） */
+/** Whether a phrase is long enough to learn (2 or more characters, or a single kanji) */
 const longEnough = (s: string) => Array.from(s).length >= 2 || hasKanji(s);
 
-/** 学習しなかった理由（ログ用） */
+/** Why nothing was learned (for logs) */
 export type SkipReason = 'unreadable' | 'no_keystrokes' | 'no_region' | 'removed' | 'no_candidates' | 'too_many' | 'declined';
 
-/** 何も学習しなかったときの結果 */
+/** Result when nothing was learned */
 const nothing = (): Pick<LearnResult, 'words' | 'forms' | 'corrections' | 'kept' | 'numbers'> => ({ words: [], forms: [], corrections: [], kept: [], numbers: [] });
 
 export interface LearnResult {
   words: LearnedWord[];
-  /** すでに辞書にある語の、新しい聞き違えた形 */
+  /** New misheard forms of words already in the dictionary */
   forms: MisheardForm[];
-  /** 音声認識の取り違えを直した組（同じ読みの別の語、表記の好み） */
+  /** Pairs that fix recognition mix-ups (another word with the same reading, a spelling preference) */
   corrections: CorrectionPair[];
-  /** 整形の書き換えを元に戻した語句 */
+  /** Phrases whose formatter rewrite was undone */
   kept: KeptPair[];
   /** Number notations the correction asked for ("2つ" to "二つ") */
   numbers: NumberStyleObservation[];
   skipped?: SkipReason;
-  /** 範囲の見つけ方（ログ用） */
+  /** How the region was found (for logs) */
   method?: string;
   candidates: number;
 }
 
 /**
- * 監視の結果から、手直しの前後の文を取り出す。
- * 利用者が打ち始める前の読み取り（baseline）があれば、それを基準にする（アプリによる変化を除く、G4-03）。
- * 送信（enter、sent）では final が送信直前の読み取りになっている。古いヘルパーとの互換のため、
- * final で範囲が消えていて preSend が別にあれば、preSend も試す（G4-01）。
+ * Extracts the text before and after the correction from the watch result.
+ * If there is a reading from before the user started typing (baseline), it is the reference (excluding changes made by the app, G4-03).
+ * On send (enter, sent), final is the reading right before sending. For compatibility with older helpers,
+ * if the region is gone in final and preSend differs, preSend is tried too (G4-01).
  */
 export function regionFromWatch(w: FieldWatchResultPayload, inserted: string) {
   const ref = w.baseline || w.afterPaste;
-  // ヘルパーが報告した貼り付けの位置（UTF-16）を、文字（コードポイント）の位置にする
+  // Convert the paste position reported by the helper (UTF-16) to a character (code point) position
   const near = typeof w.insertOffset === 'number' ? Array.from(w.before.slice(0, w.insertOffset)).length : undefined;
   const opts = { inserted: w.inserted || inserted, near };
   let region = locateEditedRegion(w.before, ref, w.final, opts);
@@ -202,17 +202,17 @@ export function regionFromWatch(w: FieldWatchResultPayload, inserted: string) {
 }
 
 /**
- * 貼り付け後の手直しから語を学習する（LRN-1）。理由つきの結果を返す。
- * 差分の抽出は端末内で行い、LLM には直した語の組と前後の短い文脈だけを送って採否を判定させる。
+ * Learns words from corrections after a paste (LRN-1). Returns the result with reasons.
+ * The diff is extracted on the device; the LLM gets only the corrected word pairs and short surrounding context to judge them.
  */
 export async function learnFromWatchDetailed(w: FieldWatchResultPayload, ctx: LearnContext): Promise<LearnResult> {
   if (w.reason === 'unreadable') return { ...nothing(), skipped: 'unreadable', candidates: 0 };
-  // 利用者がキーを押していない変化は、アプリの自動整形や遅れて入った貼り付けなので学習しない
+  // Changes without user keystrokes come from the app's auto-formatting or a late paste, so nothing is learned
   if (w.keystrokes === 0) return { ...nothing(), skipped: 'no_keystrokes', candidates: 0 };
 
   const region = regionFromWatch(w, ctx.inserted);
   if (!region) return { ...nothing(), skipped: 'no_region', candidates: 0 };
-  // 貼り付けた範囲が消えた（送信された、別の文に置き換わった）場合は学習しない
+  // Nothing is learned when the pasted region is gone (sent, or replaced with other text)
   if (!region.edited.trim()) return { ...nothing(), skipped: 'removed', method: region.method, candidates: 0 };
 
   const r = await learnFromEdit(region.original, region.edited, ctx);
@@ -220,12 +220,12 @@ export async function learnFromWatchDetailed(w: FieldWatchResultPayload, ctx: Le
 }
 
 /**
- * 元の文と手直し後の文から学習する。貼り付け後の監視と、履歴の画面での手直し（G4-08）の両方から使う。
- * ctx.inserted は使わない。手直しを、次の 5 つに振り分ける。
- * - 新しい語（words）: 辞書に入れる語。LLM が使えれば LLM が、使えなければ規則が採否を決める
- * - 聞き違えた形（forms）: すでに辞書にある語に直した手直し。音が近ければ、その語の聞き違えた形として覚える
- * - 取り違えの組（corrections）: 辞書に入れない語句への直しのうち、読みが同じか、ごく近いもの（同じ読みの別の語、表記の好み）
- * - 書き換えない語句（kept）: 整形が書き換えた所を、書き起こしのとおりに戻した手直し
+ * Learns from the original text and the corrected text. Used both by the post-paste watch and by corrections in the history page (G4-08).
+ * ctx.inserted is not used. Corrections are sorted into these five groups:
+ * - New words (words): words for the dictionary. The LLM decides if available, otherwise the rules do
+ * - Misheard forms (forms): corrections to a word already in the dictionary. If they sound alike, learned as a misheard form of that word
+ * - Mix-up pairs (corrections): fixes to phrases not added to the dictionary whose readings are the same or very close (another word with the same reading, a spelling preference)
+ * - Phrases not to rewrite (kept): corrections that put a formatter rewrite back the way it was transcribed
  * - Number notations (numbers): changes that only rewrite how a number is written, such as "2つ" to "二つ"
  */
 export async function learnFromEdit(original: string, edited: string, ctx: Omit<LearnContext, 'inserted'>): Promise<LearnResult> {
@@ -233,11 +233,11 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
   const blocked = new Set(ctx.blocked.map((x) => x.toLowerCase()));
   const tokenizer = ctx.tokenizer ?? null;
   const raw = ctx.rawText ? norm(ctx.rawText) : '';
-  // 書き起こしにあった語句（to）を、整形が別の形（from）に変えていて、利用者がそれを戻した
+  // The formatter changed a phrase from the transcript (to) into another form (from), and the user changed it back
   const reverted = (r: Replacement) => !!raw && raw.includes(norm(r.to)) && !raw.includes(norm(r.from));
 
-  // 取り違えの組と、書き換えない語句は、語の単位に切り出せるときだけ覚える。
-  // 単語分割が無いと、語の途中で切れた組（「何」→「なん」）を覚えてしまう
+  // Mix-up pairs and phrases not to rewrite are learned only when they can be cut at word boundaries.
+  // Without a tokenizer, pairs cut mid-word (「何」→「なん」) would be learned
   let canSplit = false;
   try {
     canSplit = !!tokenizer?.tokenize(edited)?.length;
@@ -255,7 +255,7 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
   const candidates = wordPairs.filter((r) => !known.has(r.to.toLowerCase()) && !blocked.has(r.to.toLowerCase()));
   if (candidates.length > MAX_WORDS_PER_EDIT) return { ...nothing(), skipped: 'too_many', candidates: candidates.length };
 
-  // すでに辞書にある語への直し。音が近ければ、聞き違えた形として覚える（別の語への言い換えは覚えない）
+  // Fixes to a word already in the dictionary. If they sound alike, learn a misheard form (rewording into another word is not learned)
   const forms: MisheardForm[] = wordPairs
     .filter((r) => known.has(r.to.toLowerCase()) && !known.has(r.from.toLowerCase()))
     .filter((r) => {
@@ -267,7 +267,7 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
 
   let accepted: Replacement[] = [];
   if (candidates.length) {
-    log.info(`手直しから候補を ${candidates.length} 件見つけました`);
+    log.info(`Found ${candidates.length} candidate(s) in the correction`);
     if (ctx.provider) {
       try {
         const res = await ctx.provider.complete({
@@ -282,7 +282,7 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
         const yes = new Set(words.filter((x) => x.add === true && typeof x.word === 'string').map((x) => String(x.word)));
         accepted = candidates.filter((c) => yes.has(c.to));
       } catch (e) {
-        log.warn('学習語の判定に失敗しました。規則で判定します', e);
+        log.warn('Could not judge the learned words. Judging with the rules instead', e);
         accepted = candidates.filter(heuristicAccept);
       }
     } else {
@@ -300,8 +300,8 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
     })
     .map((c) => ({ word: c.to, from: c.from, learnedAt: now }));
 
-  // 辞書に入れなかった直しのうち、読みが同じか、ごく近いものは、取り違えの組として覚える。
-  // 辞書の語どうしの取り違えも、ここに入る（どちらも正しい語なので、文脈で決める）
+  // Fixes not added to the dictionary whose readings are the same or very close are learned as mix-up pairs.
+  // Mix-ups between two dictionary words land here too (both are real words, so context decides)
   const taken = [...words.map((w) => w.word), ...forms.map((f) => f.word), ...kept.map((k) => k.phrase)].map(norm);
   let corrections: CorrectionPair[] = rewrites
     .filter((r) => !reverted(r) && !blocked.has(r.to.toLowerCase()) && longEnough(r.from) && longEnough(r.to) && !crossesPunctuation(r))
@@ -321,11 +321,11 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
   return { words, forms, corrections, kept, numbers, skipped, candidates: candidates.length };
 }
 
-/** 貼り付け後の手直しから語を学習する（LRN-1）。学習した語だけを返す（以前からの呼び出し方） */
+/** Learns words from corrections after a paste (LRN-1). Returns only the learned words (the older calling style) */
 export async function learnFromWatch(watch: FieldWatchResultPayload, ctx: LearnContext): Promise<LearnedWord[]> {
   const r = await learnFromWatchDetailed(watch, ctx);
   if (r.skipped && r.skipped !== 'no_candidates') {
-    log.info(`学習しませんでした（${r.skipped}${r.method ? `、範囲: ${r.method}` : ''}${r.candidates ? `、候補 ${r.candidates} 件` : ''}）`);
+    log.info(`Learned nothing (${r.skipped}${r.method ? `, region: ${r.method}` : ''}${r.candidates ? `, ${r.candidates} candidate(s)` : ''})`);
   }
   return r.words;
 }

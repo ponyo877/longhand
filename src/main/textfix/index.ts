@@ -1,11 +1,11 @@
 /**
- * 書き起こしの語ごとの補正（textfix）。
+ * Word-level transcript fixes (textfix).
  *
- * 同期で動く純粋な関数 fixText だけを外に出す。規則はそれぞれ「直す前の文字列」に対して直す箇所を提案し、
- * ここで、触らない範囲（利用者の辞書の語、置換のきっかけ、辞書照合の候補）、利用者が止めた箇所、
- * 先の規則との重なりを除いてから、まとめて当てる。位置はどれも直す前の文字列の添字なので、規則どうしは独立している。
+ * Exports only fixText, a pure synchronous function. Each rule proposes fixes against the text before fixing, and this module
+ * drops the ones in protected ranges (user dictionary words, replacement triggers, dictionary match candidates), the ones the user turned off,
+ * and the ones overlapping an earlier rule, then applies the rest at once. All positions are indices into the text before fixing, so the rules are independent.
  *
- * 控えめに直すのが方針である。決まった一覧に一致した所と、確信度の低い所だけを直し、迷う所は LLM への候補にとどめる。
+ * The policy is to fix conservatively. Only spots that match a fixed list or have low confidence are fixed; unclear spots stay as candidates for the LLM.
  */
 import { fixFillers } from './fillers';
 import { fixLatin } from './latin';
@@ -16,24 +16,24 @@ import { FIX_RULES, fixKey, type FixEdit, type FixInput, type FixOutput, type Fi
 export type { FixEdit, FixInput, FixOutput, FixRule, LexiconCandidate, Token, Tokenizer } from './types';
 export { FIX_RULES, fixKey } from './types';
 
-/** 規則に渡す文脈 */
+/** Context passed to a rule */
 export interface RuleContext {
   text: string;
   input: FixInput;
-  /** 単語分割の結果。単語分割がないか失敗したら null */
+  /** Tokenizer output. null if there is no tokenizer or it failed */
   tokens(): Token[] | null;
 }
 
 export interface RuleResult {
   edits: FixEdit[];
   candidates?: LexiconCandidate[];
-  /** 規則を飛ばした理由 */
+  /** Why the rule was skipped */
   skipped?: string;
 }
 
 type RuleFn = (ctx: RuleContext) => RuleResult;
 
-/** 規則の実装。並びが優先順位（重なったら先の規則の提案を採る） */
+/** Rule implementations. The order is the priority (on overlap, the earlier rule's proposal wins) */
 const RULES: Record<FixRule, RuleFn | null> = {
   latin: fixLatin,
   fillers: fixFillers,
@@ -41,12 +41,12 @@ const RULES: Record<FixRule, RuleFn | null> = {
   particles: fixParticles,
 };
 
-/** 規則を差し替える（テスト用） */
+/** Replaces a rule (for tests) */
 export function setRuleForTest(rule: FixRule, fn: RuleFn | null): void {
   RULES[rule] = fn;
 }
 
-/** 文中に出てくる、守る語句の範囲 */
+/** Ranges of protected phrases in the text */
 function protectedRanges(text: string, phrases: readonly string[] | undefined): [number, number][] {
   const out: [number, number][] = [];
   const lower = text.toLowerCase();
@@ -76,7 +76,7 @@ export function fixText(input: FixInput): FixOutput {
       try {
         cached = input.tokenizer?.tokenize(text) ?? null;
       } catch {
-        // 単語分割が失敗しても、ほかの規則は続ける（音声入力を止めない）
+        // Keep running the other rules if the tokenizer fails (do not stop dictation)
         cached = null;
       }
       return cached;
@@ -100,7 +100,7 @@ export function fixText(input: FixInput): FixOutput {
       if (text.slice(e.start, e.end) !== e.before) continue;
       if (guard.some(([s, en]) => overlaps(e, s, en))) continue;
       if (blocked.has(fixKey(e))) continue;
-      // 長さ 0 の挿入は、同じ位置の挿入とだけぶつかる
+      // A zero-length insertion conflicts only with an insertion at the same position
       if (accepted.some((a) => overlaps(a, e.start, e.end) || (a.start === e.start && (a.end === a.start || e.end === e.start)))) continue;
       accepted.push(e);
     }
@@ -119,7 +119,7 @@ export function fixText(input: FixInput): FixOutput {
   return out;
 }
 
-/** 1 か所だけを当てた文（評価で、直した箇所ごとの正否を見るのに使う） */
+/** The text with only one fix applied (used in evaluation to judge each fix on its own) */
 export function applyOne(text: string, edit: FixEdit): string {
   return text.slice(0, edit.start) + edit.after + text.slice(edit.end);
 }

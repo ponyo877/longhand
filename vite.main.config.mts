@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   build: {
     rollupOptions: {
-      // SDK は依存が軽いのでバンドルに含める。electron と node 組み込みは plugin-vite が外す
+      // SDKs have few dependencies, so they are bundled. plugin-vite leaves out electron and the Node built-ins
       external: [],
     },
   },

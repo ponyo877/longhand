@@ -1,8 +1,8 @@
-// SpeechAnalyzer + SpeechTranscriber / DictationTranscriber による書き起こし。
+// Transcription with SpeechAnalyzer + SpeechTranscriber / DictationTranscriber.
 //
-// - モデルは OS が管理する（AssetInventory）。未導入なら load で Apple のサーバーから取得する。
-// - SpeechAnalyzer は 1 回の解析ごとに作り直す（finish したアナライザは再利用できない）。
-//   modelRetention = .processLifetime にして、モデル自体はプロセスが生きている間メモリに残す。
+// - The OS manages the models (AssetInventory). If not installed, load downloads them from Apple's servers.
+// - A new SpeechAnalyzer is created for every analysis (a finished analyzer cannot be reused).
+//   With modelRetention = .processLifetime, the model itself stays in memory while the process lives.
 
 import AVFoundation
 import CoreMedia
@@ -16,25 +16,25 @@ enum TranscriberKind: String {
 
 struct EngineConfig {
     var kind: TranscriberKind = .speech
-    /// DictationTranscriber の句読点（SpeechTranscriber は常に句読点を付けるので無関係）
+    /// Punctuation for DictationTranscriber (irrelevant to SpeechTranscriber, which always adds punctuation)
     var punctuation: Bool = true
-    /// DictationTranscriber の contentHints（"shortForm" | "farField" | "atypicalSpeech"）
+    /// contentHints for DictationTranscriber ("shortForm" | "farField" | "atypicalSpeech")
     var contentHints: [String] = []
-    /// これより短い音声は推論せずに空文字を返す
+    /// Audio shorter than this is not transcribed; returns an empty string
     var minDurationMs: Double = 200
-    /// ピークがこれより小さい音声（ほぼ無音）は推論せずに空文字を返す
+    /// Audio whose peak is below this (nearly silent) is not transcribed; returns an empty string
     var silencePeakDbfs: Double = -50
-    /// 末尾に足す無音（ミリ秒）。語尾の取りこぼし対策
+    /// Silence appended at the end (milliseconds), so the last word is not lost
     var padMs: Double = 0
-    /// 未導入のアセットを load で取得するか
+    /// Whether load downloads assets that are not installed
     var installAssets: Bool = true
-    /// load の最後に短い推論を 1 回して、初回の遅れをなくすか
+    /// Whether load ends with one short transcription to remove the first-run delay
     var warmup: Bool = true
-    /// 解析ごとに prepareToAnalyze を呼ぶか（呼ばなくても start 時に準備される）
+    /// Whether to call prepareToAnalyze for every analysis (preparation happens at start even without it)
     var prepareEachRequest: Bool = false
-    /// 日本語と英字の間などに入る空白を取り除く（英単語どうしの空白は残す）
+    /// Remove spaces such as those between Japanese and Latin letters (spaces between English words stay)
     var normalizeSpacing: Bool = true
-    /// アナライザに渡す 1 バッファの長さ（秒）。0 なら全体を 1 バッファで渡す（長い音声で先頭が欠けるので非推奨）
+    /// Length of each buffer passed to the analyzer (seconds). 0 passes everything as one buffer (not recommended: the start of long audio goes missing)
     var inputChunkSec: Double = 1.0
 
     static func from(_ options: [String: Any]?) throws -> EngineConfig {
@@ -66,7 +66,7 @@ struct Segment {
     var text: String
 }
 
-/// SpeechTranscriber.Result と DictationTranscriber.Result を同じに扱うための共通部分。
+/// What SpeechTranscriber.Result and DictationTranscriber.Result have in common, so they can be handled the same way.
 protocol TranscriptResult: SpeechModuleResult {
     var text: AttributedString { get }
 }
@@ -74,7 +74,7 @@ protocol TranscriptResult: SpeechModuleResult {
 extension SpeechTranscriber.Result: TranscriptResult {}
 extension DictationTranscriber.Result: TranscriptResult {}
 
-/// モジュールの結果を最後まで読み、確定した結果だけを区間として返す。
+/// Reads all of the module's results and returns only the final ones as segments.
 func collectFinalResults<M: SpeechModule>(_ module: M) async throws -> [Segment] where M.Result: TranscriptResult {
     var segments: [Segment] = []
     let debug = ProcessInfo.processInfo.environment["LONGHAND_APPLE_DEBUG"] == "1"
@@ -99,7 +99,7 @@ func localeFor(language: String) throws -> Locale {
     case "ja", "auto", "": return Locale(identifier: "ja_JP")
     case "en": return Locale(identifier: "en_US")
     default:
-        // "ja-JP" や "en_GB" のような指定もそのまま受け付ける
+        // Identifiers such as "ja-JP" or "en_GB" are accepted as is
         return Locale(identifier: language)
     }
 }
@@ -107,12 +107,12 @@ func localeFor(language: String) throws -> Locale {
 final class AppleSpeechEngine {
     private(set) var config = EngineConfig()
     private(set) var defaultLocale: Locale?
-    /// 準備済み（アセット導入済み）のロケールと、そのアナライザ入力形式
+    /// Prepared locales (assets installed) and their analyzer input formats
     private var preparedFormats: [String: AVAudioFormat] = [:]
 
     var isLoaded: Bool { defaultLocale != nil }
 
-    // MARK: - モジュールの生成
+    // MARK: - Creating modules
 
     private func makeSpeechTranscriber(_ locale: Locale) -> SpeechTranscriber {
         SpeechTranscriber(
@@ -149,9 +149,9 @@ final class AppleSpeechEngine {
         }
     }
 
-    // MARK: - 読み込み
+    // MARK: - Loading
 
-    /// ロケールの対応を確かめ、必要ならアセットを導入し、入力形式を決める。
+    /// Checks that the locale is supported, installs assets if needed, and picks the input format.
     private func prepare(locale requested: Locale) async throws -> (Locale, AVAudioFormat) {
         let supported: Locale?
         switch config.kind {
@@ -175,7 +175,7 @@ final class AppleSpeechEngine {
         if status == .unsupported {
             throw AsrError(code: .modelNotFound, message: "speech assets for \(locale.identifier) are unsupported on this device")
         }
-        // 導入済みでも request が返ることがある（その場合 downloadAndInstall はすぐ終わる）
+        // A request can come back even when installed (downloadAndInstall then finishes immediately)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
             guard config.installAssets || status == .installed else {
                 throw AsrError(code: .modelNotFound, message: "speech assets for \(locale.identifier) are not installed (installAssets=false)")
@@ -191,7 +191,7 @@ final class AppleSpeechEngine {
             }
             log(String(format: "asset installation request finished in %.1f s", Date().timeIntervalSince(t0)))
         }
-        // 予約しておくと、OS が容量確保のためにアセットを消しにくくなる
+        // Reserving makes the OS less likely to delete the assets to free up space
         do {
             let reserved = try await AssetInventory.reserve(locale: locale)
             log("reserve(\(locale.identifier)) -> \(reserved)")
@@ -213,7 +213,7 @@ final class AppleSpeechEngine {
         let (locale, _) = try await prepare(locale: try localeFor(language: language))
         defaultLocale = locale
         if config.warmup {
-            // 小さなノイズで 1 回解析し、モデルを常駐させる
+            // Analyze faint noise once to keep the model resident
             let t0 = Date()
             var noise = [Float](repeating: 0, count: Int(SAMPLE_RATE * 0.5))
             for i in noise.indices { noise[i] = Float.random(in: -0.001...0.001) }
@@ -224,7 +224,7 @@ final class AppleSpeechEngine {
         return "\(name) \(locale.identifier) (Apple on-device)"
     }
 
-    // MARK: - 書き起こし
+    // MARK: - Transcription
 
     struct Output {
         var text: String
@@ -270,12 +270,12 @@ final class AppleSpeechEngine {
                 if config.normalizeSpacing { text = removeSpacesAroundJapanese(text) }
                 return Segment(start: seg.start, end: min(seg.end, stats.durationSec), text: text)
             }
-            // 雑音だけの音声で「。」だけが返ることがあるので、文字を含まない区間は捨てる
+            // Noise-only audio can return just 「。」, so drop segments that contain no letters
             .filter { hasLexicalContent($0.text) }
         return Output(text: joinSegments(segments.map(\.text)), language: langCode, segments: segments)
     }
 
-    /// 新しい SpeechAnalyzer を作り、音声 1 本を流して確定結果を集める。
+    /// Creates a new SpeechAnalyzer, feeds it one piece of audio, and collects the final results.
     private func analyze(samples: [Float], locale: Locale, hints: [String]) async throws -> [Segment] {
         let key = "\(config.kind.rawValue):\(locale.identifier)"
         guard let format = preparedFormats[key] else {
@@ -298,7 +298,7 @@ final class AppleSpeechEngine {
             options: SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .processLifetime)
         )
         if !hints.isEmpty {
-            // 語彙ヒント。DictationTranscriber では効くが、SpeechTranscriber（macOS 26）では効果が見られなかった
+            // Vocabulary hints. They work with DictationTranscriber, but showed no effect with SpeechTranscriber (macOS 26)
             let context = AnalysisContext()
             context.contextualStrings[.general] = hints
             try await analyzer.setContext(context)
@@ -310,8 +310,8 @@ final class AppleSpeechEngine {
         let collector = Task { try await collectFinalResults(module) }
         do {
             try await analyzer.start(inputSequence: stream)
-            // 録音全体を 1 つの AnalyzerInput で渡すと、長い音声（173 秒で確認）で先頭の結果が丸ごと出てこない。
-            // マイク入力と同じように、開始時刻付きの短いバッファに分けて流す。
+            // Passing the whole recording as one AnalyzerInput loses all results for the start of long audio (seen at 173 seconds).
+            // Feed it in short buffers with start times, as with microphone input.
             if config.inputChunkSec > 0 {
                 for (piece, start) in splitBuffer(buffer, seconds: config.inputChunkSec) {
                     continuation.yield(AnalyzerInput(buffer: piece, bufferStartTime: start))
@@ -334,7 +334,7 @@ final class AppleSpeechEngine {
     }
 }
 
-/// 区間の文字列をつなぐ。日本語は詰め、英数字どうしが接するときだけ空白を入れる。
+/// Joins segment texts. Japanese is joined directly; a space goes in only where two alphanumerics meet.
 func joinSegments(_ parts: [String]) -> String {
     var out = ""
     for part in parts where !part.isEmpty {
@@ -351,8 +351,8 @@ private func isAsciiAlnum(_ s: Unicode.Scalar) -> Bool {
     s.isASCII && (CharacterSet.alphanumerics.contains(s))
 }
 
-/// 日本語の文字や全角の記号に接する空白を取り除く。英字どうしの間の空白は残す。
-/// SpeechTranscriber は「この PCに入っている Google Chromeっていう」のように英字の前後に空白を入れるため。
+/// Removes spaces next to Japanese characters or full-width symbols. Spaces between Latin letters stay.
+/// Needed because SpeechTranscriber puts spaces around Latin words, as in 「この PCに入っている Google Chromeっていう」.
 func removeSpacesAroundJapanese(_ text: String) -> String {
     let scalars = Array(text.unicodeScalars)
     var out = String.UnicodeScalarView()
@@ -369,12 +369,12 @@ func removeSpacesAroundJapanese(_ text: String) -> String {
     return String(out)
 }
 
-/// 文字（かな、漢字、英字、数字）を 1 つでも含むか。句読点や記号だけの結果を捨てるのに使う。
+/// Whether the text contains at least one letter (kana, kanji, Latin letter or digit). Used to drop results that are only punctuation or symbols.
 func hasLexicalContent(_ text: String) -> Bool {
     text.unicodeScalars.contains { CharacterSet.letters.contains($0) || CharacterSet.decimalDigits.contains($0) }
 }
 
-/// バッファを一定の長さに分け、各片の開始時刻と組にして返す。
+/// Splits a buffer into pieces of fixed length and returns each with its start time.
 func splitBuffer(_ buffer: AVAudioPCMBuffer, seconds: Double) -> [(AVAudioPCMBuffer, CMTime)] {
     let format = buffer.format
     let total = Int(buffer.frameLength)

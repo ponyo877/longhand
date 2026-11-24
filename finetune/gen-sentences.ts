@@ -1,17 +1,20 @@
 /**
- * 微調整の学習用の文を作る。
+ * Builds the training sentences for fine-tuning.
  *
  *   npx tsx finetune/gen-sentences.ts [--out ~/longhand-eval/ft/sentences.jsonl] [--holdout-script scripts/review/script-v1.json]
  *
- * 作る文は 4 種類である。
- * - term:     用語集（src/main/textfix/lexicon/latin.ts の段階 1）の語を、文の型に当てはめた文。正解は英字の綴り、読み上げはカタカナの読み
- * - loanword: 同じ文の型に、カタカナのままにする一般的な外来語を当てはめた文。英字にしすぎないための反例
- * - general:  用語を含まない、ふだんの仕事の文
- * - plain:    公開データ（FLEURS の学習用）の文。読み上げの台本にだけ使う。正解は、元のモデルがその読み上げを書き起こしたものにする
- *             （合成音声でも、用語のない文は元のモデルと同じに書き起こすように。公開データの正解の書き方は学習させない）
+ * It builds four kinds of sentences.
+ * - term:     glossary words (tier 1 of src/main/textfix/lexicon/latin.ts) placed into sentence templates. The reference is the Latin
+ *             spelling; the text read aloud uses the katakana reading
+ * - loanword: the same templates with common loanwords that stay in katakana. Counterexamples so that the model does not overuse Latin letters
+ * - general:  everyday work sentences without terms
+ * - plain:    sentences from public data (the FLEURS training split), used only as the text to read aloud. The reference is what the base
+ *             model transcribes from that synthesized speech
+ *             (so that sentences without terms are transcribed as the base model does, even from synthesized speech; the notation of the
+ *             public data's references is not learned)
  *
- * 評価に使う台本（script-v1）の B の文に出てくる語は、学習に使わない（学習していない語での効果を測るため）。
- * 台本の文そのものと同じ文は作らない。文はすべてここで作ったもので、利用者の書き起こしは見ていない。
+ * Words that appear in the B sentences of the evaluation script (script-v1) are not used for training (to measure the effect on unseen words).
+ * No sentence identical to a script sentence is built. Every sentence is made here; no user transcripts are looked at.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,7 +35,7 @@ const { values: args } = parseArgs({
   },
 });
 
-// 同じ入力から同じ文が出るように、決まった乱数を使う
+// Use a fixed random sequence, so the same input gives the same sentences
 let seed = 20261123;
 const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 const pick = <T>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
@@ -45,7 +48,7 @@ const shuffle = <T>(xs: readonly T[]): T[] => {
   return a;
 };
 
-/** 語を 1 つ入れる文の型。{A} に、製品名でも一般的な外来語でも入る形にしてある */
+/** Templates with one word. {A} fits either a product name or a common loanword */
 const ONE: string[] = [
   '{A}の設定を見直します。',
   '{A}で確認してから返信します。',
@@ -129,7 +132,7 @@ const ONE: string[] = [
   'すみません、{A}の件を忘れていました。',
 ];
 
-/** 語を 2 つ入れる文の型 */
+/** Templates with two words */
 const TWO: string[] = [
   '{A}と{B}を連携させたいです。',
   '{A}から{B}に移行します。',
@@ -157,7 +160,7 @@ const TWO: string[] = [
   '{A}を使うなら、{B}も合わせて入れたほうがいいです。',
 ];
 
-/** カタカナのままにする一般的な外来語（英字にしない） */
+/** Common loanwords that stay in katakana (not Latin letters) */
 // prettier-ignore
 const LOANWORDS: string[] = [
   'ミーティング', 'スケジュール', 'サーバー', 'データベース', 'ブラウザ', 'アプリ', 'システム', 'ツール', 'サービス', 'プロジェクト',
@@ -168,7 +171,7 @@ const LOANWORDS: string[] = [
   'スプリント', 'イシュー', 'セキュリティ', 'モニタリング', 'ドメイン', 'プロキシ', 'ルーター', 'キーボード', 'ディスプレイ', 'プリンター',
 ];
 
-/** 用語を含まない、ふだんの仕事の文 */
+/** Everyday work sentences without terms */
 const GENERAL: string[] = [
   'お疲れさまです。本日の進み具合を共有します。',
   '明日の打ち合わせは、午後2時からに変更になりました。',
@@ -235,9 +238,9 @@ const GENERAL: string[] = [
 interface Sentence {
   id: string;
   kind: 'term' | 'loanword' | 'general' | 'plain';
-  /** 正解の文 */
+  /** Reference text */
   text: string;
-  /** 読み上げる文（英字の語をカタカナの読みに直したもの） */
+  /** Text to read aloud (Latin-letter words replaced by katakana readings) */
   say: string;
   terms: string[];
 }
@@ -260,7 +263,7 @@ function main(): void {
   });
   const reading = (e: (typeof terms)[number]) => ({ text: e.word, say: pick(e.readings) });
 
-  // 用語を 1 つ入れた文
+  // Sentences with one term
   const perTerm = Number(args['per-term']);
   for (const e of terms) {
     for (const tpl of shuffle(ONE).slice(0, perTerm)) {
@@ -268,20 +271,20 @@ function main(): void {
       add('term', s.text, s.say, [e.word]);
     }
   }
-  // 用語を 2 つ入れた文
+  // Sentences with two terms
   for (let i = 0; i < Number(args.pairs); i++) {
     const [a, b] = shuffle(terms).slice(0, 2);
     const s = fill(pick(TWO), reading(a), reading(b));
     add('term', s.text, s.say, [a.word, b.word]);
   }
-  // 一般的な外来語（カタカナのまま）。用語と同じ文の型を使う
+  // Common loanwords (kept in katakana), using the same templates as the terms
   for (const w of LOANWORDS) {
     for (const tpl of shuffle(ONE).slice(0, Number(args['per-loanword']))) {
       const s = fill(tpl, { text: w, say: w });
       add('loanword', s.text, s.say, []);
     }
   }
-  // 外来語と用語を 1 つずつ入れた文（同じ文の中で、書き分けられるように）
+  // Sentences with one loanword and one term (to learn to tell them apart within a sentence)
   for (let i = 0; i < 200; i++) {
     const e = pick(terms);
     const w = pick(LOANWORDS);
@@ -292,8 +295,8 @@ function main(): void {
     add('term', s.text, s.say, [e.word]);
   }
   for (const g of GENERAL) add('general', g, g, []);
-  // 公開データの学習用の文（英字を含まない、短めの文）。文の並びの順に、決まった数だけ使う。
-  // ここより上の文の番号を変えないように、最後に足す
+  // Training sentences from public data (shorter ones without Latin letters). A fixed number is taken in file order.
+  // Added last so that the numbering of the sentences above does not change
   const plainMax = Number(args.plain);
   if (plainMax > 0 && fs.existsSync(args['fleurs-tsv']!)) {
     let n = 0;
@@ -309,8 +312,8 @@ function main(): void {
   fs.writeFileSync(args.out!, `${out.map((s) => JSON.stringify(s)).join('\n')}\n`, { mode: 0o600 });
   const count = (k: string) => out.filter((s) => s.kind === k).length;
   console.log(
-    `${out.length} 文（用語 ${count('term')}、外来語 ${count('loanword')}、ふだんの文 ${count('general')}、公開データの文 ${count('plain')}）。` +
-      `用語集の語 ${terms.length} 語を使用${args['include-holdout'] ? '' : `（台本 B の語 ${LATIN_LEXICON.filter((e) => e.tier === 1 && holdout.has(e.word.toLowerCase())).length} 語は除外）`}`,
+    `${out.length} sentences (${count('term')} term, ${count('loanword')} loanword, ${count('general')} general, ${count('plain')} public data). ` +
+      `Used ${terms.length} glossary words${args['include-holdout'] ? '' : ` (excluded ${LATIN_LEXICON.filter((e) => e.tier === 1 && holdout.has(e.word.toLowerCase())).length} words from script B)`}`,
   );
 }
 

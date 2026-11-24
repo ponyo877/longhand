@@ -1,28 +1,30 @@
 /**
- * 評価を走らせる（LLM なし、または保存済みの LLM の結果だけで）。
+ * Runs an evaluation (without the LLM, or with saved LLM results only).
  *
  *   npx tsx scripts/eval-run.ts --name base --datasets user-v1,user-v2 --llm off
  *   npx tsx scripts/eval-run.ts --name base --datasets user-v1,user-v2 --llm cache-only
- *     --config <json>      設定のファイル（src/main/eval/run.ts の EvalConfig）。ほかの引数で上書きできる
- *     --name <名前>         実行の名前（結果のフォルダ名に入る）
- *     --datasets <a,b>     データセットの名前（~/longhand-eval/datasets/ の下）
- *     --llm <off|cache-only>  off は LLM なし。cache-only は、アプリの中で測ったときの保存済みの結果だけで集計し直す
- *     --vocab <file>       辞書の語（1 行 1 語。評価用の一覧は ~/longhand-eval/hints.txt）。無ければ辞書なし
- *     --readings <file>    読み（1 行に「語<TAB>読み,読み」）。確かめた読みとして扱う
- *     --settings <json>    アプリの既定の設定への上書き（JSON そのものか、ファイル）。例: '{"llmFastPath":false}'
- *     --split <dev|holdout|all>  開発用か確認用だけを測る
- *     --limit <n> / --ids <a,b>  発話を絞る
- *     --attempt <n>        LLM の試行番号（保存済みの結果のキーに入る）
- *     --asr cache-only     音声認識を動かさず、保存済みの結果だけを使う
- *     --recent <previous|none>  辞書の語の得点に使う「最近の書き起こし」
- *     --truncate-tail <postRoll|ms>  書き起こす前に、音声の末尾を切り落とす（実験用）。postRoll は、行ごとの「キーを離した後に録った長さ」
- *                          の分だけ。数値は、どの行もその長さ（ms）だけ。同じ録音で、離した後の録音の有無を比べる
+ *     --config <json>      config file (EvalConfig in src/main/eval/run.ts). Other arguments override it
+ *     --name <name>        run name (goes into the result folder name)
+ *     --datasets <a,b>     dataset names (under ~/longhand-eval/datasets/)
+ *     --llm <off|cache-only>  off runs without the LLM. cache-only re-scores using only the results saved when measuring inside the app
+ *     --vocab <file>       dictionary words (one per line; the list for evaluation is ~/longhand-eval/hints.txt). Without it, no dictionary
+ *     --readings <file>    readings (one "word<TAB>reading,reading" per line), treated as confirmed readings
+ *     --settings <json>    overrides of the app's default settings (JSON itself or a file), for example '{"llmFastPath":false}'
+ *     --split <dev|holdout|all>  measure only the dev or holdout split
+ *     --limit <n> / --ids <a,b>  narrow down the utterances
+ *     --attempt <n>        LLM attempt number (part of the key of saved results)
+ *     --asr cache-only     do not run speech recognition; use saved results only
+ *     --recent <previous|none>  the "recent transcripts" used to score dictionary words
+ *     --truncate-tail <postRoll|ms>  cut off the end of the audio before transcribing (experimental). postRoll cuts each row's
+ *                          "length recorded after the key was released"; a number cuts that length (ms) from every row. Compares the
+ *                          same recordings with and without the audio after release
  *
- * LLM を実際に呼ぶ評価は、開発版のアプリの中で走らせる（アプリに保存した接続設定とキーを使う。キーは読み出さない）:
+ * Evaluations that actually call the LLM run inside the development build of the app (they use the connection settings and key saved
+ * in the app; the key is never read out):
  *   LONGHAND_EVAL='{"name":"base","datasets":["user-v1","user-v2"],"llm":"live"}' npm start
- *   （開発版がすでに動いていて .vite/build が新しければ、LONGHAND_EVAL=… npx electron . でもよい）
+ *   (if the development build is already running and .vite/build is up to date, LONGHAND_EVAL=… npx electron . also works)
  *
- * 標準出力には数だけを出す。発話ごとの文は ~/longhand-eval/runs/<実行>/rows.jsonl にだけ書く。
+ * Standard output gets numbers only. Per-utterance sentences are written only to ~/longhand-eval/runs/<run>/rows.jsonl.
  */
 import fs from 'node:fs';
 import os from 'node:os';

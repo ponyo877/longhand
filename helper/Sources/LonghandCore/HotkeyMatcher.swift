@@ -1,21 +1,21 @@
-// ホットキーの判定（状態機械）。OS のイベントから切り離した純粋なロジックで、XCTest で検証する。
+// Hotkey matching (a state machine). Pure logic kept apart from OS events, verified with XCTest.
 //
-// 規則:
-// - Binding は「押されているキーがちょうどその Binding のキーだけ」になった瞬間に成立し、phase "down" を出す。
-//   成立のきっかけは押下だけ。キーを離した結果として短い Binding がちょうど成立しても発火しない
-//   （Fn+Space から Space だけ離しても activate は発火しない）。
-// - 文字キーやマウスボタンを含む Binding は、修飾キー以外のキーの押下でだけ成立する
-//   （Space を押したまま Fn を押しても Fn+Space は成立しない）。
-// - 成立した Binding は、そのキーのどれかが離されるまで「保持中」とし、離された時点で "up" を出す。
-// - 保持中にほかのキーが押されたとき:
-//   - そのキーで、保持中の Binding を含むより長い Binding がちょうど成立したら（Fn → Fn+Space）、
-//     長いほうの "down" だけを出す。短いほうは保持を続け、"up" も "interrupted" も出さない。
-//     短いほうの "up" は、それ自身のキー（Fn）が離されたときに出す。
-//     Fn → Space → Space を離す → Fn を離す、の順なら activate:down, lock:down, lock:up, activate:up になる。
-//   - そうでなければ、activate に限り "interrupted" を 1 回だけ出す（Fn+Delete など）。保持は続ける。
-// - 飲み込み: Binding を成立させた修飾キー以外のキー（Fn+Space の Space など）は、押下・リピート・解放をすべて飲み込む。
-//   cancel の Binding は PTT がセッション中（inactive 以外）のときだけ飲み込む。修飾キーは決して飲み込まない。
-// - recording（ショートカット記録中）は判定を止め、修飾キー以外のキーをすべて飲み込む。
+// Rules:
+// - A Binding matches the moment the pressed keys are exactly that Binding's keys, and emits phase "down".
+//   Only a key press can trigger a match. A shorter Binding that becomes an exact match because a key was released does not fire
+//   (releasing only Space from Fn+Space does not fire activate).
+// - A Binding that includes a character key or a mouse button matches only on the press of a non-modifier key
+//   (pressing Fn while holding Space does not match Fn+Space).
+// - A matched Binding stays "held" until any of its keys is released, and emits "up" at that point.
+// - When another key is pressed while a Binding is held:
+//   - If that key makes a longer Binding containing the held one an exact match (Fn → Fn+Space),
+//     only the longer one's "down" is emitted. The shorter one stays held and emits neither "up" nor "interrupted".
+//     The shorter one's "up" is emitted when its own key (Fn) is released.
+//     Fn → Space → release Space → release Fn gives activate:down, lock:down, lock:up, activate:up.
+//   - Otherwise, for activate only, "interrupted" is emitted once (Fn+Delete and so on). It stays held.
+// - Swallowing: a non-modifier key that completed a Binding (Space in Fn+Space and so on) has its press, repeats and release all swallowed.
+//   A cancel Binding is swallowed only while PTT is in a session (anything but inactive). Modifier keys are never swallowed.
+// - recording (recording a shortcut) stops matching and swallows every non-modifier key.
 
 public struct HotkeyEvent: Equatable, Sendable, CustomStringConvertible {
     public let action: HotkeyAction
@@ -31,7 +31,7 @@ public struct HotkeyEvent: Equatable, Sendable, CustomStringConvertible {
 
 public struct MatchOutput: Equatable, Sendable {
     public var events: [HotkeyEvent] = []
-    /// このイベントを飲み込むか
+    /// Whether to swallow this event
     public var swallow: Bool = false
 
     public init(events: [HotkeyEvent] = [], swallow: Bool = false) {
@@ -42,13 +42,13 @@ public struct MatchOutput: Equatable, Sendable {
 
 public struct HotkeyMatcher: Sendable {
     public private(set) var bindings: [Binding] = []
-    /// いま押されている物理キー
+    /// Physical keys pressed right now
     public private(set) var down: Set<String> = []
-    /// 押下を飲み込んだキー（リピートと解放も飲み込む）
+    /// Keys whose press was swallowed (their repeats and release are swallowed too)
     public private(set) var swallowed: Set<String> = []
-    /// 保持中の Binding（bindings の添字 → interrupted を出したか）
+    /// Held Bindings (index into bindings → whether interrupted was emitted)
     private var held: [Int: Bool] = [:]
-    /// 保持中の Binding が成立した順番。同時に離れたときは新しいものから "up" を出す（lock:up → activate:up）
+    /// The order in which held Bindings matched. When released together, "up" is emitted newest first (lock:up → activate:up)
     private var firedOrder: [Int: Int] = [:]
     private var orderCounter = 0
 
@@ -59,24 +59,24 @@ public struct HotkeyMatcher: Sendable {
         self.bindings = bindings
     }
 
-    /// 保持中の Binding
+    /// Held Bindings
     public var heldBindings: [Binding] { held.keys.sorted().map { bindings[$0] } }
 
-    /// 保持中の添字を、新しく成立したものから順に返す
+    /// Returns the held indices, newest match first
     private var heldNewestFirst: [Int] {
         held.keys.sorted { (firedOrder[$0] ?? 0) > (firedOrder[$1] ?? 0) }
     }
 
-    // MARK: - 設定
+    // MARK: - Configuration
 
-    /// Binding を差し替える。保持中のものには "up" を出す
+    /// Replaces the Bindings. Emits "up" for held ones
     public mutating func setBindings(_ newBindings: [Binding]) -> MatchOutput {
         let out = releaseAllHeld()
         bindings = newBindings
         return out
     }
 
-    /// 記録モードの切り替え。入るときは保持中の Binding に "up" を出す
+    /// Turns recording mode on or off. Entering it emits "up" for held Bindings
     public mutating func setRecording(_ on: Bool) -> MatchOutput {
         guard on != recording else { return MatchOutput() }
         recording = on
@@ -93,17 +93,17 @@ public struct HotkeyMatcher: Sendable {
         return out
     }
 
-    // MARK: - 入力
+    // MARK: - Input
 
-    /// ⌃⌥⌘⇧ だけの activate を、まだ interrupted を出さずに保持しているか
+    /// Whether an activate made only of ⌃⌥⌘⇧ is held without having emitted interrupted yet
     public var holdsPointerInterruptibleActivate: Bool {
         held.contains { idx, interrupted in
             !interrupted && bindings[idx].action == .activate && bindings[idx].isPlainModifierOnly
         }
     }
 
-    /// 保持中の、⌃⌥⌘⇧ だけの activate に "interrupted" を 1 回出す。
-    /// 押している間にクリックやスクロールがあったとき（⌘ を押したままのクリックなど。HK-1）。Fn を含むものには出さない
+    /// Emits "interrupted" once for a held activate made only of ⌃⌥⌘⇧.
+    /// Used when there is a click or scroll while it is held (a click with ⌘ held down and so on. HK-1). Not emitted for ones that include Fn
     public mutating func interruptOnPointer() -> MatchOutput {
         var out = MatchOutput()
         for idx in held.keys.sorted() where held[idx] == false {
@@ -115,14 +115,14 @@ public struct HotkeyMatcher: Sendable {
         return out
     }
 
-    /// キーの押下。isRepeat はキーリピート（kCGKeyboardEventAutorepeat）
+    /// A key press. isRepeat is a key repeat (kCGKeyboardEventAutorepeat)
     public mutating func press(_ key: String, isRepeat: Bool = false) -> MatchOutput {
         if isRepeat {
             return MatchOutput(swallow: swallowed.contains(key))
         }
         var out = MatchOutput()
         if down.contains(key) {
-            // 解放を取りこぼしていた。いったん離したことにしてから押下として扱う
+            // The release was missed. Treat the key as released first, then handle this as a press
             out = release(key)
         }
         down.insert(key)
@@ -136,18 +136,18 @@ public struct HotkeyMatcher: Sendable {
             return out
         }
 
-        // この押下でちょうど成立する Binding（保持中のものを除く）
+        // Bindings that this press makes an exact match (excluding held ones)
         var fired: [Int] = []
         for (idx, b) in bindings.enumerated() where held[idx] == nil {
             if b.hasNonModifier && isModifierKey { continue }
             if b.isExactlySatisfied(by: down) { fired.append(idx) }
         }
 
-        // 保持中の Binding への影響。押下で別の Binding が成立したなら（fired は down にちょうど一致するので、
-        // 保持中の b を包含する長い Binding）何も出さない。b の "up" は b 自身のキーが離されたときに出す
+        // Effect on held Bindings. If the press matched another Binding (fired exactly matches down, so it is
+        // a longer Binding containing the held b), emit nothing. b's "up" is emitted when b's own key is released
         for idx in held.keys.sorted() {
             let b = bindings[idx]
-            if b.isExactlySatisfied(by: down) { continue } // 左右両方の修飾キーなど
+            if b.isExactlySatisfied(by: down) { continue } // Left and right modifier keys both down, for example
             if fired.isEmpty && b.action == .activate && held[idx] == false {
                 held[idx] = true
                 out.events.append(HotkeyEvent(.activate, .interrupted))
@@ -168,7 +168,7 @@ public struct HotkeyMatcher: Sendable {
         return out
     }
 
-    /// キーの解放
+    /// A key release
     public mutating func release(_ key: String) -> MatchOutput {
         var out = MatchOutput()
         out.swallow = swallowed.remove(key) != nil
@@ -181,7 +181,7 @@ public struct HotkeyMatcher: Sendable {
         return out
     }
 
-    /// 押されていると思っているが実際には離されていたキーを解放する（取りこぼし対策）
+    /// Releases keys thought to be down that were actually released (guards against missed events)
     public mutating func releaseStale(_ keys: [String]) -> MatchOutput {
         var out = MatchOutput()
         for key in keys {

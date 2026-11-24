@@ -8,7 +8,7 @@ import { postAsrStages, transcribeLikeApp, type AppAsrOptions, type Transcriber 
 
 const SR = 16000;
 
-/** 発話の代わりに、振幅の揺れる正弦波を使う */
+/** A sine wave with wavering amplitude stands in for speech */
 function speech(sec: number, amp = 0.1): Float32Array {
   const out = new Float32Array(Math.round(sec * SR));
   for (let i = 0; i < out.length; i++) out[i] = amp * Math.sin((2 * Math.PI * 220 * i) / SR) * (0.6 + 0.4 * Math.sin((2 * Math.PI * 3 * i) / SR));
@@ -49,7 +49,7 @@ function fakeAsr(texts: string[]) {
 const OPTS: AppAsrOptions = { language: 'ja', hints: ['Longhand'], incremental: true, minRecordingMs: 300, silenceDetection: true };
 
 describe('transcribeLikeApp', () => {
-  it('28 秒以下の録音は、丸ごと 1 回で書き起こす。prompt は渡さない', async () => {
+  it('transcribes recordings of 28 seconds or less whole in one call, without a prompt', async () => {
     const { asr, calls } = fakeAsr(['  今日は晴れです  ']);
     const out = await transcribeLikeApp(asr, speech(3), OPTS);
     expect(calls.length).toBe(1);
@@ -59,7 +59,7 @@ describe('transcribeLikeApp', () => {
     expect(out.skipped).toBeUndefined();
   });
 
-  it('途中に区切りがあっても、28 秒以下なら丸ごと書き起こす', async () => {
+  it('transcribes recordings of 28 seconds or less whole even when they contain a pause', async () => {
     const { asr, calls } = fakeAsr(['丸ごと']);
     const out = await transcribeLikeApp(asr, concat([speech(21), silence(1), speech(3)]), OPTS);
     expect(calls.length).toBe(1);
@@ -67,7 +67,7 @@ describe('transcribeLikeApp', () => {
     expect(out.segments).toBe(1);
   });
 
-  it('28 秒を超える録音は、話の切れ目で区切って順に書き起こし、前の区切りの末尾を prompt に渡す', async () => {
+  it('cuts recordings longer than 28 seconds at pauses, transcribes them in order, and passes the end of the previous cut as the prompt', async () => {
     const first = 'あ'.repeat(250);
     const { asr, calls } = fakeAsr([first, '続きです']);
     const out = await transcribeLikeApp(asr, concat([speech(22), silence(1), speech(10)]), OPTS);
@@ -79,30 +79,30 @@ describe('transcribeLikeApp', () => {
     expect(calls[0].seconds + calls[1].seconds).toBeCloseTo(33, 5);
     expect(out.text).toBe(`${first}続きです`);
     expect(out.segments).toBe(2);
-    // 区切って書き起こしたときは、確信度を持たない（アプリと同じ）
+    // Transcription in cuts has no confidence (same as the app)
     expect(out.tokens).toBeUndefined();
   });
 
-  it('区切りを使わない設定なら、長い録音も丸ごと書き起こす', async () => {
+  it('transcribes long recordings whole when cutting is turned off', async () => {
     const { asr, calls } = fakeAsr(['丸ごと']);
     await transcribeLikeApp(asr, concat([speech(22), silence(1), speech(10)]), { ...OPTS, incremental: false });
     expect(calls.length).toBe(1);
     expect(calls[0].seconds).toBe(33);
   });
 
-  it('短すぎる録音、音の無い録音、話していない録音は書き起こさない', async () => {
+  it('does not transcribe recordings that are too short, have no sound, or have no speech', async () => {
     const { asr, calls } = fakeAsr(['出ないはず']);
     expect(await transcribeLikeApp(asr, speech(0.2), OPTS)).toMatchObject({ text: '', segments: 0, skipped: 'too-short' });
     expect(await transcribeLikeApp(asr, new Float32Array(2 * SR), OPTS)).toMatchObject({ text: '', skipped: 'silent' });
-    // ワーカーが声の検出を持たないエンジンでは、音の大きさで捨てる
+    // With engines whose worker has no voice detection, recordings are dropped by loudness
     expect(await transcribeLikeApp(asr, silence(2, 0.002), { ...OPTS, engine: 'apple' })).toMatchObject({ text: '', skipped: 'no-speech' });
     expect(calls.length).toBe(0);
-    // 無音の判定をオフにすると、書き起こす
+    // With silence detection off, it transcribes
     await transcribeLikeApp(asr, silence(2, 0.002), { ...OPTS, engine: 'apple', silenceDetection: false });
     expect(calls.length).toBe(1);
   });
 
-  it('whisper では、小さな音の録音を捨てずにワーカーに渡す（声の小さい録音を無音と取り違えないため。声の有無はワーカーが決める）', async () => {
+  it('passes quiet recordings to the worker with whisper instead of dropping them (so a quiet voice is not mistaken for silence; the worker decides whether there is voice)', async () => {
     const { asr, calls } = fakeAsr(['']);
     const out = await transcribeLikeApp(asr, silence(2, 0.002), OPTS);
     expect(calls.length).toBe(1);
@@ -110,7 +110,7 @@ describe('transcribeLikeApp', () => {
     expect(out.skipped).toBeUndefined();
   });
 
-  it('実験用の prompt を渡せる', async () => {
+  it('accepts an experimental prompt', async () => {
     const { asr, calls } = fakeAsr(['文']);
     await transcribeLikeApp(asr, speech(2), { ...OPTS, prompt: '直前の文' });
     expect(calls[0].opts.prompt).toBe('直前の文');
@@ -148,7 +148,7 @@ describe('postAsrStages', () => {
     };
   }
 
-  it('段階ごとの文を返す。LLM を使わない経路では照合で置き換え、使う経路では候補を LLM に渡す', async () => {
+  it('returns the text at each stage. The path without the LLM replaces by matching, and the path with the LLM passes candidates to it', async () => {
     const provider = fakeProvider('Kubernetesとスラックを使います。');
     const out = await postAsrStages({ rawText: ' くばねてすとスラックを使います ', settings, customizations, vocab, tokenizer: null, provider });
     expect(out.stages).toEqual({
@@ -165,14 +165,14 @@ describe('postAsrStages', () => {
     expect(out.llm?.prep?.candidates.length).toBe(1);
   });
 
-  it('LLM を使わない実行では、最終の文は LLM なしの文と同じ', async () => {
+  it('makes the final text the same as the text without the LLM in runs without the LLM', async () => {
     const out = await postAsrStages({ rawText: 'スラックで送ります', settings, customizations, vocab, tokenizer: null, provider: null });
     expect(out.stages.noLlm).toBe('Slackで送ります');
     expect(out.stages.final).toBe('Slackで送ります');
     expect(out.llm).toBeNull();
   });
 
-  it('書き起こしが空なら、どの段階も空で、LLM を呼ばない（アプリは何も入力しない）', async () => {
+  it('leaves every stage empty and does not call the LLM when the transcript is empty (the app enters nothing)', async () => {
     const provider = fakeProvider('何か');
     const out = await postAsrStages({ rawText: '  ', settings, customizations, vocab, tokenizer: null, provider });
     expect(out.stages).toEqual({ asr: '', match: '', noLlm: '', final: '' });
@@ -180,7 +180,7 @@ describe('postAsrStages', () => {
     expect(provider.calls.length).toBe(0);
   });
 
-  it('語ごとの確信度を、近道の判定に使う', async () => {
+  it('uses per-word confidence for the shortcut decision', async () => {
     const provider = fakeProvider('明日の会議は午後からです。');
     const raw = '明日の会議は午後からです。';
     const high = await postAsrStages({

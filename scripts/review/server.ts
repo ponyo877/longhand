@@ -1,15 +1,17 @@
 /**
- * 評価の正解を作るための、手元だけで動く確認用の画面。
+ * A local-only review page for building evaluation references.
  *
- *   npx tsx scripts/review/server.ts          # 起動して URL を表示する
- *   npx tsx scripts/review/server.ts --open   # 既定のブラウザで開く
+ *   npx tsx scripts/review/server.ts          # start and print the URL
+ *   npx tsx scripts/review/server.ts --open   # open in the default browser
  *
- * できること:
- * - 正解の確認: 取り込んだ録音（~/longhand-eval/datasets/）を聞き、入力されるべき文を確かめて ~/longhand-eval/truth.jsonl に追記する
- * - 台本の読み上げ: scripts/review/script-v1.json の文を Longhand で音声入力してもらい、その録音を script-v1 として取り込む
+ * What it does:
+ * - Reference review: listen to imported recordings (~/longhand-eval/datasets/), confirm the text that should be typed, and append it
+ *   to ~/longhand-eval/truth.jsonl
+ * - Script reading: the user dictates the sentences in scripts/review/script-v1.json with Longhand, and the recordings are imported as
+ *   script-v1
  *
- * 個人の書き起こしを扱うので、127.0.0.1 だけで待ち受け、URL に付けた合い言葉が合わない要求は断る。
- * 画面には何も保存しない（正解は追記だけのファイルに置くので、途中でやめても続きから再開できる）。
+ * It handles personal transcripts, so it listens on 127.0.0.1 only and rejects requests whose URL token does not match.
+ * The page stores nothing (references go to an append-only file, so you can stop at any point and resume later).
  */
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -26,7 +28,7 @@ const { values: args } = parseArgs({
     longhand: { type: 'string', default: path.join(os.homedir(), 'Library', 'Application Support', 'Longhand') },
     port: { type: 'string', default: '0' },
     open: { type: 'boolean', default: false },
-    // 起動し直しても同じ URL を使い続けたいときに、前回の合い言葉を渡す
+    // Pass the previous token to keep the same URL after a restart
     token: { type: 'string', default: '' },
   },
 });
@@ -38,7 +40,7 @@ const LONGHAND_APP = args.longhand!;
 const HERE = path.join(process.cwd(), 'scripts', 'review');
 const SCRIPT_FILE = path.join(HERE, 'script-v1.json');
 const SCRIPT_DATASET = 'script-v1';
-/** 正解の確認の対象にするデータセット（台本は、読んだ文がそのまま正解なので対象にしない） */
+/** Datasets to review (the script is excluded: the sentence read aloud is the reference) */
 const REVIEW_DATASETS = ['user-v1', 'user-v2', 'longhand-v1'];
 const TOKEN = /^[0-9a-f]{24,}$/.test(args.token!) ? args.token! : randomBytes(18).toString('hex');
 
@@ -59,11 +61,11 @@ interface Row {
 interface Truth {
   id: string;
   audioSha256: string;
-  /** 入力されるべき文 */
+  /** Text that should be typed */
   target: string;
-  /** 話したままの文（言い直しやつなぎ言葉がある発話だけ） */
+  /** Text as spoken (only for utterances with self-corrections or fillers) */
   spoken?: string;
-  /** 表記ゆれの別解 */
+  /** Alternatives that differ in notation */
   alt?: string[];
   tags?: string[];
   status: 'ok' | 'excluded';
@@ -96,7 +98,7 @@ function readRows(dataset: string): Row[] {
   return readJsonl<Row>(path.join(DATASETS, dataset, 'manifest.jsonl'));
 }
 
-/** 同じ id は最後の行が有効 */
+/** The last line for an id wins */
 function readTruth(): Map<string, Truth> {
   const map = new Map<string, Truth>();
   for (const t of readJsonl<Truth>(TRUTH)) map.set(t.id, t);
@@ -125,7 +127,7 @@ function readScript(): { categories: Record<string, string>; items: ScriptItem[]
 }
 
 // ---------------------------------------------------------------------------
-// 台本の録音の取り込み
+// Importing script recordings
 // ---------------------------------------------------------------------------
 
 interface LonghandHistoryItem {
@@ -151,8 +153,8 @@ function longhandHistory(): LonghandHistoryItem[] {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * since より後に始まった Longhand の録音のうち、いちばん新しいものを台本の文の録音として取り込む。
- * 履歴は少し遅れて書かれるので、見つかるまで待つ。
+ * Imports the newest Longhand recording that started after since as the recording of the script sentence.
+ * The history is written with a short delay, so it waits until one is found.
  */
 async function captureScript(item: ScriptItem, since: number): Promise<{ ok: true; durationSec: number } | { ok: false; reason: string }> {
   let found: LonghandHistoryItem | undefined;
@@ -162,9 +164,9 @@ async function captureScript(item: ScriptItem, since: number): Promise<{ ok: tru
       .sort((a, b) => b.timestamp - a.timestamp)[0];
     if (!found) await sleep(250);
   }
-  if (!found?.audioFile) return { ok: false, reason: 'Longhand の履歴に、この文の録音が見つかりませんでした。Longhand で話したかを確かめて、もう一度読んでください。' };
+  if (!found?.audioFile) return { ok: false, reason: 'No recording of this sentence was found in Longhand’s history. Check that you dictated it with Longhand, then read it again.' };
   const src = path.join(LONGHAND_APP, 'recordings', path.basename(found.audioFile));
-  if (!fs.existsSync(src)) return { ok: false, reason: '録音のファイルが見つかりませんでした。Longhand の設定で「録音を保存する」がオンかを確かめてください。' };
+  if (!fs.existsSync(src)) return { ok: false, reason: 'The recording file was not found. Check that “Save recordings” is on in Longhand’s settings.' };
   const buf = fs.readFileSync(src);
   const wav = decodeWav(buf);
   const dir = path.join(DATASETS, SCRIPT_DATASET);
@@ -177,7 +179,7 @@ async function captureScript(item: ScriptItem, since: number): Promise<{ ok: tru
     durationSec: Math.round((wav.samples.length / wav.sampleRate) * 10) / 10,
     timestamp: new Date(found.timestamp).toISOString(),
     kind: 'dictation',
-    // 録ったときの Longhand の出力（参考。正解は台本の文）
+    // Longhand's output at recording time (for reference; the reference text is the script sentence)
     rawText: found.rawText,
     longhandText: found.text,
     content: item.text,
@@ -185,14 +187,14 @@ async function captureScript(item: ScriptItem, since: number): Promise<{ ok: tru
     audioSha256: hash,
     sampleRate: wav.sampleRate,
     importedAt: new Date().toISOString(),
-    // キーを離した後も録音を続けた時間（末尾のこの長さを切り落とすと、続けなかった場合の録音になる）
+    // How long recording continued after the key was released (cutting this much from the end gives the recording without it)
     postRollMs: found.timings?.postRollMs,
     split: item.split,
     category: item.category,
     tags: item.tags ?? [],
     terms: item.terms,
   };
-  // 録り直しでは、同じ id の行を置き換える
+  // A re-recording replaces the row with the same id
   const rows = readRows(SCRIPT_DATASET).filter((r) => r.id !== item.id);
   rows.push(row);
   rows.sort((a, b) => a.id.localeCompare(b.id));
@@ -216,7 +218,7 @@ async function readBody(req: http.IncomingMessage): Promise<Record<string, unkno
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 256 * 1024) throw new Error('大きすぎます');
+    if (size > 256 * 1024) throw new Error('Request body too large');
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8');
@@ -232,7 +234,7 @@ const strings = (v: unknown): string[] =>
     : [];
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse, port: number): Promise<void> {
-  // ほかのサイトからの要求を断る（Host の確認と、合い言葉の確認）
+  // Reject requests from other sites (check Host and the token)
   const host = req.headers.host ?? '';
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return send(res, 403, { error: 'forbidden' });
   const url = new URL(req.url ?? '/', `http://${host}`);
@@ -276,7 +278,7 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse, port:
     const body = await readBody(req);
     const status = body.status === 'excluded' ? 'excluded' : 'ok';
     const target = typeof body.target === 'string' ? body.target.trim() : '';
-    if (status === 'ok' && !target) return send(res, 400, { error: '文が空です。話した内容を書くか、除外してください。' });
+    if (status === 'ok' && !target) return send(res, 400, { error: 'The text is empty. Write what was said, or exclude the recording.' });
     const spoken = typeof body.spoken === 'string' ? body.spoken.trim() : '';
     const alt = strings(body.alt).filter((a) => a !== target);
     const t: Truth = {
@@ -321,7 +323,7 @@ const server = http.createServer((req, res) => {
 server.listen(Number(args.port), '127.0.0.1', () => {
   const port = (server.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}/?t=${TOKEN}`;
-  console.log(`確認用の画面: ${url}`);
-  console.log('止めるときは Ctrl+C を押します。正解は 1 件ごとに保存されます。');
+  console.log(`Review page: ${url}`);
+  console.log('Press Ctrl+C to stop. Each reference is saved as soon as it is confirmed.');
   if (args.open) execFile('open', [url]);
 });

@@ -1,6 +1,6 @@
 /**
- * 2 つの実行の比較。発話ごとの誤り数を id で突き合わせ、対のブートストラップで差と 95% 区間を出す。
- * 正解が実行の間で変わった発話は、同じ物差しで比べられないので除く（件数を返す）。
+ * Compares two runs. Matches per-utterance edit counts by id and gives the difference and its 95% interval with a paired bootstrap.
+ * Utterances whose reference changed between the runs cannot be compared on the same scale, so they are left out (and counted).
  */
 import { pairedBootstrap, type BootstrapResult, type PairedItem } from './bootstrap';
 import type { RowRecord, StageName } from './score';
@@ -15,16 +15,16 @@ export interface CompareOptions {
 }
 
 export interface CompareResult {
-  /** 両方の実行にあり、正解が同じだった発話の比較 */
+  /** Utterances in both runs with the same reference */
   all: BootstrapResult;
   byDataset: Record<string, BootstrapResult>;
   bySplit: Record<string, BootstrapResult>;
-  /** 片方の実行にしかない発話 */
+  /** Utterances in only one of the runs */
   onlyA: number;
   onlyB: number;
-  /** 正解が変わっていたので除いた発話 */
+  /** Utterances left out because the reference changed */
   truthChanged: number;
-  /** 正解が仮の発話（比較した発話のうち） */
+  /** Utterances with a provisional reference (among the compared ones) */
   provisional: number;
 }
 
@@ -49,7 +49,7 @@ export function compareRuns(a: readonly Row[], b: readonly Row[], opts: CompareO
     }
     const sa = ra.scores[opts.stage][opts.metric];
     const sb = rb.scores[opts.stage][opts.metric];
-    // 別解があると、採った正解の長さが実行ごとに違うことがある。長さは A のものを使う
+    // With alternative references, the chosen reference's length can differ between runs. Use A's length
     pairs.push({ item: { a: sa.edits, b: sb.edits, len: sa.len }, dataset: ra.dataset, split: ra.split });
     if (ra.provisional) provisional++;
   }
@@ -74,14 +74,14 @@ const pt = (x: number | null) => (x === null ? '-' : `${(x * 100).toFixed(2)}%`)
 const signed = (x: number) => `${x > 0 ? '+' : ''}${Number.isInteger(x) ? x : x.toFixed(1)}`;
 const signedPt = (x: number | null) => (x === null ? '-' : `${x > 0 ? '+' : ''}${(x * 100).toFixed(2)}`);
 
-/** 比較の 1 行（数だけ） */
+/** One comparison line (numbers only) */
 export function formatComparison(name: string, r: BootstrapResult): string {
   const ci = `[${signed(r.ci[0])}, ${signed(r.ci[1])}]`;
   const rateCi = r.rateCi ? `[${signedPt(r.rateCi[0])}, ${signedPt(r.rateCi[1])}]` : '-';
-  const verdict = r.ci[1] < 0 ? 'B が良い' : r.ci[0] > 0 ? 'A が良い' : '差があるとは言えない';
+  const verdict = r.ci[1] < 0 ? 'B is better' : r.ci[0] > 0 ? 'A is better' : 'no clear difference';
   return (
-    `[${name}] ${r.n} 件  誤り数 A ${r.editsA} → B ${r.editsB}（差 ${signed(r.diff)}、95% 区間 ${ci}）  ` +
-    `誤り率 A ${pt(r.rateA)} → B ${pt(r.rateB)}（差 ${signedPt(r.rateDiff)} ポイント、95% 区間 ${rateCi}）  ` +
-    `取り直しで B が良かった割合 ${(r.bBetter * 100).toFixed(1)}%  判定: ${verdict}`
+    `[${name}] ${r.n} utterances  edits A ${r.editsA} → B ${r.editsB} (diff ${signed(r.diff)}, 95% interval ${ci})  ` +
+    `error rate A ${pt(r.rateA)} → B ${pt(r.rateB)} (diff ${signedPt(r.rateDiff)} points, 95% interval ${rateCi})  ` +
+    `resamples where B was better ${(r.bBetter * 100).toFixed(1)}%  verdict: ${verdict}`
   );
 }

@@ -1,5 +1,5 @@
 /**
- * 評価の実行を通しで確かめる。書き起こしと LLM は偽物、データセットは一時フォルダに作った短い音声。
+ * Checks an evaluation run end to end. The transcriber and the LLM are fakes, and the dataset is short audio made in a temporary folder.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,9 +24,9 @@ function speech(sec: number): Float32Array {
 
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 9, min)).toISOString();
 
-/** 音声の長さで決まった文を返す偽の書き起こし */
+/** Fake transcriber that returns text decided by the audio length */
 const ASR_TEXT: Record<string, string> = { '1.0': 'きょうは晴れです。', '1.2': 'えーと資料を送ります', '1.4': '会議は三時からです' };
-/** 書き起こしで決まった文を返す偽の LLM */
+/** Fake LLM that returns text decided by the transcription */
 const LLM_TEXT: Record<string, string> = { えーと資料を送ります: '資料を送ります。', 会議は三時からです: '会議は三時からでした。' };
 
 describe('runEval', () => {
@@ -51,7 +51,7 @@ describe('runEval', () => {
   };
   const env = (over: Partial<EvalEnv> = {}): EvalEnv => ({
     root,
-    // 単語分割の WASM もコードも無い場所を渡す（単語分割なしで動くことも確かめる）
+    // Passes a place with neither the tokenizer's WASM nor the code (also checks that it works without the tokenizer)
     repoRoot: path.join(root, 'no-repo'),
     modelsDir: path.join(root, 'no-models'),
     asr,
@@ -60,7 +60,7 @@ describe('runEval', () => {
     ...over,
   });
   const live = (): EvalEnv => env({ llm: { provider, identity: llmIdentity(DEFAULT_SETTINGS.llm), maxOutputTokens: 2048, appTimeoutMs: 8000 } });
-  // 整形を省く近道（既定はオフ）の動きも見るので、オンにして走らせる
+  // Also checks the fast path that skips formatting (off by default), so it runs with it on
   const config = (over: Partial<EvalConfig> = {}): EvalConfig => ({ name: 'テスト run', datasets: ['d1'], llm: 'live', settings: { llmFastPath: true }, ...over });
 
   beforeEach(() => {
@@ -93,7 +93,7 @@ describe('runEval', () => {
       });
     });
     fs.writeFileSync(path.join(dir, 'manifest.jsonl'), `${manifest.join('\n')}\n`);
-    // u1 だけ、人が確かめた正解がある（別解つき）
+    // Only u1 has a reference checked by a person (with an alternative)
     fs.writeFileSync(
       path.join(root, 'truth.jsonl'),
       `${JSON.stringify({ id: 'u1', audioSha256: hashes.get('u1'), target: '今日は晴れです。', alt: ['きょうは晴れです。'], status: 'ok', prefill: 'longhand', reviewedAt: at(0) })}\n`,
@@ -103,7 +103,7 @@ describe('runEval', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('段階ごとに測り、結果を保存する。2 回目は書き起こしも LLM も呼ばない', async () => {
+  it('measures each stage and saves the results, and calls neither the transcriber nor the LLM the second time', async () => {
     const first = await runEval(config(), live());
     expect(asrCalls).toBe(3);
     expect(llmCalls).toBe(2);
@@ -116,10 +116,10 @@ describe('runEval', () => {
 
     const all = s.groups.all;
     expect(all.n).toBe(3);
-    // 書き起こしの生の出力: u1 は別解と一致、u2 は「えーと」の 3 字、u3 は「三」の 1 字
+    // Raw transcription output: u1 matches the alternative, u2 has the 3 characters of 「えーと」, u3 the 1 character 「三」
     expect(all.stages.asr).toMatchObject({ contentEdits: 4, exact: 1 });
     expect(all.stages.noLlm.contentEdits).toBe(4);
-    // LLM の後: u2 は直り、u3 は「でした」で悪くなる
+    // After the LLM: u2 is fixed, u3 gets worse with 「でした」
     expect(all.stages.final).toMatchObject({ contentEdits: 3, exact: 2 });
     expect(all.llm).toMatchObject({ called: 2, cached: 0, live: 2, fastPath: 1, failed: 0, cacheMiss: 0, overAppTimeout: 1 });
     expect(all.llm.effect).toEqual({ clean: 1, broke: 0, errored: 2, improved: 1, worsened: 1, fixed: 1 });
@@ -127,7 +127,7 @@ describe('runEval', () => {
     expect(all.llm.improvedRate).toBe(0.5);
     expect(all.errors.asr.filler).toEqual({ groups: 1, edits: 3 });
     expect(all.errors.asr.number).toEqual({ groups: 1, edits: 1 });
-    // 開発用（u1、u2）と確認用（30 分あいた u3）
+    // Dev (u1, u2) and holdout (u3, 30 minutes later)
     expect(s.groups.bySplit.dev.n).toBe(2);
     expect(s.groups.bySplit.holdout.n).toBe(1);
     expect(Object.keys(s.groups.byDatasetSplit)).toEqual(['d1/dev', 'd1/holdout']);
@@ -141,10 +141,10 @@ describe('runEval', () => {
     expect(again.summary.groups.all.llm).toMatchObject({ called: 2, cached: 2, live: 0, overAppTimeout: 1 });
   });
 
-  it('結果のファイルは 0600、フォルダは 0700。集計と標準出力には文を出さない', async () => {
+  it('writes result files as 0600 and folders as 0700, and keeps text out of the totals and standard output', async () => {
     const { dir } = await runEval(config(), live());
     expect(path.basename(dir)).toMatch(/^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d--run$/);
-    // 同じ秒に同じ名前で始めても、別のフォルダになる
+    // Runs started with the same name in the same second still get separate folders
     const second = await runEval(config({ llm: 'off' }), env());
     expect(second.dir).not.toBe(dir);
     expect(readJsonl<RowRecord>(path.join(second.dir, 'rows.jsonl')).length).toBe(3);
@@ -173,14 +173,14 @@ describe('runEval', () => {
       expect(index).not.toContain(t);
       expect(lines.join('\n')).not.toContain(t);
     }
-    expect(lines.join('\n')).toContain('正解が仮の発話が 2 件');
+    expect(lines.join('\n')).toContain('2 utterances have a provisional reference');
     const record = JSON.parse(cfg) as {
       truth: { provisional: number; reviewed: number };
       llm: { identity: { model: string } };
       settings: { llmFastPath: boolean; textFix: { latin: boolean; fillers: boolean } };
     };
     expect(record.truth).toMatchObject({ provisional: 2, reviewed: 1 });
-    // 上書きした設定（近道）が記録に残る。ほかはアプリの既定の設定で動く（補正は latin と particles だけ）
+    // The overridden setting (the fast path) is recorded. Everything else runs on the app's defaults (only latin and particles corrections)
     expect(record.settings.llmFastPath).toBe(true);
     expect(record.settings.textFix).toMatchObject({ latin: true, fillers: false, notation: false, particles: true });
     expect(record.llm.identity.model).toBe(DEFAULT_SETTINGS.llm.model);
@@ -192,7 +192,7 @@ describe('runEval', () => {
     ).toEqual(['live', 'off']);
   });
 
-  it('保存済みの結果だけで集計し直せる（LLM の接続を渡さなくても、前の実行の記録からキーを作る）', async () => {
+  it('re-scores from saved results only (builds the key from the record of the previous run, without an LLM connection)', async () => {
     const first = await runEval(config(), live());
     const again = await runEval(config({ llm: 'cache-only', asrCacheOnly: true }), env({ asr: undefined }));
     expect(llmCalls).toBe(2);
@@ -201,16 +201,16 @@ describe('runEval', () => {
     expect(again.summary.groups.all.llm.cacheMiss).toBe(0);
   });
 
-  it('保存済みの結果が無い発話は、LLM なしの文に落として数える', async () => {
+  it('counts utterances with no saved result and falls back to the text without the LLM', async () => {
     await runEval(config({ ids: ['u2'] }), live());
     const r = await runEval(config({ llm: 'cache-only' }), env());
     expect(r.summary.status).toBe('ok');
     expect(r.summary.groups.all.llm).toMatchObject({ called: 2, cached: 1, cacheMiss: 1, failed: 0 });
-    // u3 は LLM なしの文のまま
+    // u3 keeps the text without the LLM
     expect(r.summary.groups.all.stages.final.contentEdits).toBe(1);
   });
 
-  it('LLM なしでも動く。最終の文は LLM なしの文と同じ', async () => {
+  it('works without the LLM, with the final text equal to the text without the LLM', async () => {
     const r = await runEval(config({ llm: 'off' }), env());
     expect(llmCalls).toBe(0);
     expect(r.summary.llm).toMatchObject({ mode: 'off', calls: 0 });
@@ -218,7 +218,7 @@ describe('runEval', () => {
     expect(r.summary.groups.all.llm.called).toBe(0);
   });
 
-  it('呼び出しの上限に達したら、その発話を記録せずに止める', async () => {
+  it('stops without recording the utterance when the call limit is reached', async () => {
     const r = await runEval(config({ maxLlmCalls: 1 }), live());
     expect(llmCalls).toBe(1);
     expect(r.summary.status).toBe('aborted');
@@ -227,7 +227,7 @@ describe('runEval', () => {
     expect(readJsonl<RowRecord>(path.join(r.dir, 'rows.jsonl')).map((x) => x.id)).toEqual(['u1', 'u2']);
   });
 
-  it('設定を上書きしなければ、アプリの既定で動く（近道はオフで、整った発話も LLM に回る）', async () => {
+  it('runs on the defaults of the app without overrides (the fast path is off and well-formed utterances also go to the LLM)', async () => {
     const r = await runEval(config({ settings: undefined }), live());
     expect(llmCalls).toBe(3);
     expect(r.summary.groups.all.llm).toMatchObject({ called: 3, fastPath: 0 });
@@ -235,22 +235,22 @@ describe('runEval', () => {
     expect(record.settings.llmFastPath).toBe(false);
   });
 
-  it('手直しの模擬では、別解に合っている出力は直さない', async () => {
-    // u1 の出力「きょうは晴れです。」は、別解に合っている。正解の文「今日は晴れです。」との違いは表記だけなので、利用者は直さない
+  it('does not edit output that matches an alternative when simulating edits', async () => {
+    // u1's output 「きょうは晴れです。」 matches the alternative. It differs from the reference 「今日は晴れです。」 only in notation, so the user would not fix it
     const r = await runEval(config({ ids: ['u1', 'u2'], learn: { train: '^u1$' } }), live());
     expect(r.summary.status).toBe('ok');
     expect(r.summary.learn).toMatchObject({ train: 1, edited: 0, corrections: 0, kept: 0 });
-    // 学習に使った発話は、測る側に入らない
+    // Utterances used for learning are not measured
     expect(readJsonl<RowRecord>(path.join(r.dir, 'rows.jsonl')).map((x) => x.id)).toEqual(['u2']);
   });
 
-  it('開発用だけ、確認用だけ、件数で絞れる', async () => {
+  it('narrows to dev only, holdout only, or a number of utterances', async () => {
     expect((await runEval(config({ llm: 'off', split: 'holdout' }), env())).summary.groups.all.n).toBe(1);
     expect((await runEval(config({ llm: 'off', split: 'dev' }), env())).summary.groups.all.n).toBe(2);
     expect((await runEval(config({ llm: 'off', limit: 1 }), env())).summary.groups.all.n).toBe(1);
   });
 
-  it('辞書の語の一覧を渡すと、書き起こしのヒントに使い、再現率を数える', async () => {
+  it('uses a dictionary word list as transcription hints and counts recall', async () => {
     const vocab = path.join(root, 'words.txt');
     fs.writeFileSync(vocab, '資料\n会議室\n');
     const hints: string[][] = [];
@@ -261,18 +261,18 @@ describe('runEval', () => {
       },
     };
     const r = await runEval(config({ llm: 'off', vocab }), env({ asr: spy }));
-    // 既定では、ヒントなしとヒントありの 2 回書き起こす（asr.hintMode の selective）
+    // By default it transcribes twice, without and with hints (selective in asr.hintMode)
     expect(hints.length).toBe(6);
     expect(hints.filter((h) => !h.length)).toHaveLength(3);
     expect([...hints[1]].sort()).toEqual(['会議室', '資料']);
     expect(r.summary.groups.all.terms.vocab.asr).toEqual({ hit: 1, total: 1 });
-    // 辞書が変わると、書き起こしの保存済みの結果は使い回さない（ヒントがキーに入っている）
+    // When the dictionary changes, saved transcriptions are not reused (the hints are part of the key)
     const before = asrCalls;
     await runEval(config({ llm: 'off' }), env());
     expect(asrCalls).toBe(before + 3);
   });
 
-  /** 追加のデータセットを作る（行に、台本の種類や、離した後に録った長さを付けられる） */
+  /** Makes another dataset (rows can have a script kind and the length recorded after release) */
   function writeDataset(name: string, rows: { id: string; sec: number; content: string; extra?: Record<string, unknown> }[]): void {
     const dir = path.join(root, 'datasets', name);
     fs.mkdirSync(path.join(dir, 'audio'), { recursive: true });
@@ -295,7 +295,7 @@ describe('runEval', () => {
     fs.writeFileSync(path.join(dir, 'manifest.jsonl'), `${manifest.join('\n')}\n`);
   }
 
-  it('台本の文の種類ごとに集計し、種類ごとの最終の誤り率を 1 行ずつ出す。種類の無いデータセットでは出さない', async () => {
+  it('totals per kind of script sentence and prints one line per kind with the final error rate, but not for datasets without kinds', async () => {
     writeDataset('script', [
       { id: 's1', sec: 1.4, content: '会議は3時からです。', extra: { split: 'A', category: 'number', terms: ['会議'] } },
       { id: 's2', sec: 1.2, content: '資料を送ります。', extra: { split: 'B', category: 'short' } },
@@ -304,7 +304,7 @@ describe('runEval', () => {
     const r = await runEval(config({ llm: 'off', datasets: ['d1', 'script'] }), env());
     const by = r.summary.groups.byCategory!;
     expect(Object.keys(by)).toEqual(['number', 'short']);
-    // 種類の付いた発話だけが入る（d1 の 3 件は入らない）
+    // Only utterances with a kind are included (not the 3 in d1)
     expect(by.number.n).toBe(1);
     expect(by.short.n).toBe(2);
     expect(by.number.stages.noLlm.contentEdits).toBe(1);
@@ -312,10 +312,10 @@ describe('runEval', () => {
     expect(r.summary.groups.bySplit.dev.n).toBe(3);
     const rows = readJsonl<RowRecord>(path.join(r.dir, 'rows.jsonl'));
     expect(rows.map((x) => x.category)).toEqual([undefined, undefined, undefined, 'number', 'short', 'short']);
-    const printed = lines.filter((l) => l.startsWith('[種類'));
+    const printed = lines.filter((l) => l.startsWith('[category'));
     expect(printed.length).toBe(2);
     expect(printed[0]).toContain('number');
-    expect(printed[0]).toContain('1 件');
+    expect(printed[0]).toMatch(/n= +1 /);
     expect(printed[1]).toContain('short');
     expect(printed[1]).toContain('3/15');
     expect(printed.join('\n')).not.toContain('資料');
@@ -323,10 +323,10 @@ describe('runEval', () => {
     lines.length = 0;
     const plain = await runEval(config({ llm: 'off' }), env());
     expect(plain.summary.groups.byCategory).toBeUndefined();
-    expect(lines.some((l) => l.startsWith('[種類'))).toBe(false);
+    expect(lines.some((l) => l.startsWith('[category'))).toBe(false);
   });
 
-  it('末尾の切り落とし（postRoll）は、離した後に録った長さのある行だけを切り落とし、保存済みの書き起こしを分ける', async () => {
+  it('cuts only rows with a length recorded after release for postRoll, and keeps their saved transcriptions apart', async () => {
     writeDataset('tail', [
       { id: 't1', sec: 1.5, content: '資料を送ります。', extra: { postRollMs: 300 } },
       { id: 't2', sec: 1.4, content: '会議は3時からです。' },
@@ -345,7 +345,7 @@ describe('runEval', () => {
     expect(full.summary.asr.truncated).toBeUndefined();
     expect(readJsonl<RowRecord>(path.join(full.dir, 'rows.jsonl')).map((x) => x.asr.truncatedMs)).toEqual([undefined, undefined]);
 
-    // t1 だけ 0.3 秒を切り落として書き起こし直す。t2 は切り落とさないので、保存済みの結果を使う
+    // Only t1 is transcribed again with 0.3 seconds cut. t2 is not cut, so it uses the saved result
     const cut = await runEval(cfg({ truncateTail: 'postRoll' }), env({ asr: spy }));
     expect(seen).toEqual([1.5, 1.4, 1.2]);
     expect(cut.summary.asr).toMatchObject({ cached: 1, transcribed: 1, truncated: 1 });
@@ -354,21 +354,21 @@ describe('runEval', () => {
       ['t1', 300, false, 1.5],
       ['t2', undefined, true, 1.4],
     ]);
-    // 切り落とした音声の書き起こしで採点している（1.2 秒の音声の文になる）
+    // Scored on the transcription of the cut audio (the text for 1.2 seconds of audio)
     expect(rows[0].stages.asr).toBe('えーと資料を送ります');
-    expect(lines.some((l) => l.startsWith('末尾の切り落とし 1 件'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('Tail cut         utterances 1 '))).toBe(true);
 
-    // 同じ指定の 2 回目は、どちらも保存済み
+    // The second run with the same setting uses saved results for both
     const again = await runEval(cfg({ truncateTail: 'postRoll' }), env({ asr: spy }));
     expect(seen.length).toBe(3);
     expect(again.summary.asr).toMatchObject({ cached: 2, transcribed: 0, truncated: 1 });
-    // 切り落とさない実行の結果は、そのまま残っている
+    // The results of the run without a cut are still there
     const back = await runEval(cfg(), env({ asr: spy }));
     expect(seen.length).toBe(3);
     expect(readJsonl<RowRecord>(path.join(back.dir, 'rows.jsonl'))[0].stages.asr).toBe('');
   });
 
-  it('末尾の切り落としを ms で指定すると、どの行も同じ長さだけ切り落とす。長さごとに保存を分ける', async () => {
+  it('cuts the same length from every row when given in ms, and saves each length separately', async () => {
     writeDataset('tail', [
       { id: 't1', sec: 1.5, content: '資料を送ります。', extra: { postRollMs: 300 } },
       { id: 't2', sec: 1.4, content: 'きょうは晴れです。' },
@@ -385,18 +385,18 @@ describe('runEval', () => {
     expect(r.summary.asr.truncated).toBe(2);
     await runEval(config({ llm: 'off', datasets: ['tail'], truncateTail: 300 }), env({ asr: spy }));
     expect(seen).toEqual([1.1, 1, 1.2, 1.1]);
-    // 0 は切り落とさないのと同じ（キーも同じ）
+    // 0 is the same as no cut (and so is the key)
     await runEval(config({ llm: 'off', datasets: ['tail'], truncateTail: 0 }), env({ asr: spy }));
     await runEval(config({ llm: 'off', datasets: ['tail'] }), env({ asr: spy }));
     expect(seen).toEqual([1.1, 1, 1.2, 1.1, 1.5, 1.4]);
-    // 録音より長く切り落とすと、短すぎる録音として書き起こさない
+    // Cutting more than the recording leaves it too short to transcribe
     const none = await runEval(config({ llm: 'off', datasets: ['tail'], truncateTail: 5000 }), env({ asr: spy }));
     expect(seen.length).toBe(6);
     expect(readJsonl<RowRecord>(path.join(none.dir, 'rows.jsonl')).map((x) => x.asr.skipped)).toEqual(['too-short', 'too-short']);
   });
 
-  it('LLM を呼ぶ実行は、接続を渡さなければ始めない', async () => {
-    await expect(runEval(config(), env())).rejects.toThrow(/アプリの中/);
-    await expect(runEval(config({ llm: 'cache-only' }), env())).rejects.toThrow(/接続の記録がありません/);
+  it('does not start a run that calls the LLM without a connection', async () => {
+    await expect(runEval(config(), env())).rejects.toThrow(/inside the development app/);
+    await expect(runEval(config({ llm: 'cache-only' }), env())).rejects.toThrow(/No record of the LLM connection/);
   });
 });

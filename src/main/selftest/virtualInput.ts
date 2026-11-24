@@ -66,7 +66,11 @@ export class VirtualInputHelper extends EventEmitter {
     if (type !== 'paste') return this.real.request<T>(type, payload, timeoutMs);
     if (!this.pinnedBundleId) return Promise.reject(new Error('self-test: paste before the test window was checked'));
     // keyPostedAt is on the helper's clock, which the virtual key times are not. keyPostedAfterMs needs no clock
-    return this.real.request<PasteAckPayload>(type, { ...(payload as object), expectBundleId: this.pinnedBundleId }, timeoutMs).then(({ keyPostedAt: _, ...ack }) => ack as T);
+    return this.real.request<PasteAckPayload>(type, { ...(payload as object), expectBundleId: this.pinnedBundleId }, timeoutMs).then((ack) => {
+      const rest: Partial<PasteAckPayload> = { ...ack };
+      delete rest.keyPostedAt;
+      return rest as T;
+    });
   }
 
   send(type: string, payload: unknown = {}): void {

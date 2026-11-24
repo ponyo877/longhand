@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# longhand-asr-parakeet をリリースビルドして asr/build/ に置く。
-# 署名は asr/build.sh がまとめて行う（ここでは行わない）。
+# Builds longhand-asr-parakeet in release mode and puts it in asr/build/.
+# asr/build.sh does all the signing (not done here).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,8 +8,8 @@ OUT="${HERE}/../build"
 mkdir -p "${OUT}"
 
 cd "${HERE}"
-# --disable-keychain: FluidAudio が参照するバイナリターゲット（traits で外していても取得はされる）の
-# ダウンロード時に、SwiftPM がキーチェーンの認証情報を探して GUI の許可待ちで止まるのを避ける。
+# --disable-keychain: when downloading the binary targets FluidAudio refers to (fetched even when left out by traits),
+# keeps SwiftPM from looking for keychain credentials and stalling on a GUI permission prompt.
 swift build -c release --disable-keychain --product longhand-asr-parakeet
 
 BIN="$(swift build -c release --disable-keychain --show-bin-path)/longhand-asr-parakeet"

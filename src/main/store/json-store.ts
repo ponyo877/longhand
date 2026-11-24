@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * JSON ファイルの読み書き。書き込みは一時ファイルに書いてから rename するので、途中で落ちても壊れない。
- * 書き込みは debounce してまとめる。
+ * Reads and writes a JSON file. Writes go to a temporary file that is then renamed, so a crash midway never corrupts the file.
+ * Writes are debounced and batched.
  */
 export class JsonStore<T> {
   private timer: NodeJS.Timeout | null = null;
@@ -12,7 +12,7 @@ export class JsonStore<T> {
   constructor(
     private readonly file: string,
     private readonly debounceMs = 200,
-    /** readOnly なら読むだけにする。書き込みは捨て、壊れたファイルも退避しない */
+    /** readOnly only reads: writes are dropped, and a corrupt file is not moved aside */
     private readonly opts: { readOnly?: boolean } = {},
   ) {}
 
@@ -21,7 +21,7 @@ export class JsonStore<T> {
       return JSON.parse(fs.readFileSync(this.file, 'utf8'));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT' && !this.opts.readOnly) {
-        // 壊れたファイルは退避して既定値で始める
+        // Move a corrupt file aside and start from the defaults
         try {
           fs.renameSync(this.file, `${this.file}.corrupt-${Date.now()}`);
         } catch {

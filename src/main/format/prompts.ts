@@ -1,7 +1,7 @@
 /**
- * 整形プロンプト。
- * システムプロンプトには、毎回変わらない規則と、変更の少ない辞書とカスタム指示を入れる（プロンプトキャッシュが効く）。
- * 毎回変わる書き起こしと文脈はユーザーメッセージに JSON で入れる。
+ * Formatting prompts.
+ * The system prompt holds the rules, which never change, and the dictionary and custom instructions, which rarely change (so prompt caching works).
+ * The transcript and context, which change every time, go into the user message as JSON.
  */
 import type { NumberStyles } from '../../shared/numberStyle';
 import { numberStylePromptLines } from './numberStyle';
@@ -155,10 +155,10 @@ instruction は音声認識の結果なので、フィラーや認識の誤り�
 出力: {"text": "", "deleted": true, "unclear": false}`;
 
 /**
- * 整形の規則の版。
- * - v1: 従来の規則
- * - v2: 「変えてよいこと」を閉じた一覧にし、聞き違いの訂正に根拠（別候補、辞書、同じ読み）を求める規則。
- *   テキストだけを見て直す LLM は、正しい書き起こしまで書き換えることがあるため。採否は評価で決める
+ * Version of the formatting rules.
+ * - v1: the original rules
+ * - v2: rules that make the allowed changes (「変えてよいこと」) a closed list and require support (alternatives, dictionary, same reading) for fixing mishearings,
+ *   because an LLM that corrects from the text alone sometimes rewrites even a correct transcript. Evaluation decides whether to adopt it
  */
 export type PromptVersion = 'v1' | 'v2';
 
@@ -204,17 +204,17 @@ const V2_EXAMPLES = `
 
 function replaceOnce(text: string, from: string, to: string): string {
   const at = text.indexOf(from);
-  if (at < 0 || text.indexOf(from, at + from.length) >= 0) throw new Error(`整形の規則の差し替えに失敗しました: ${from.slice(0, 20)}`);
+  if (at < 0 || text.indexOf(from, at + from.length) >= 0) throw new Error(`Could not replace part of the formatting rules: ${from.slice(0, 20)}`);
   return text.slice(0, at) + to + text.slice(at + from.length);
 }
 
-/** v2 の規則。v1 の文面のうち、原則、規則 14、出力の前を差し替え、例を足す */
+/** The v2 rules. Replaces the principle, rule 14 and the part before the output section in the v1 text, and adds examples */
 function buildRulesV2(): string {
   let t = DICTATION_RULES;
   t = replaceOnce(t, '- 内容を足さない、要約しない、言い換えない、語順を変えない。', V2_PRINCIPLE);
   const from14 = t.indexOf('14. 音声認識の明らかな誤り');
   const to14 = t.indexOf('15. 辞書（dictionary）の語は');
-  if (from14 < 0 || to14 < from14) throw new Error('整形の規則 14 が見つかりません');
+  if (from14 < 0 || to14 < from14) throw new Error('Rule 14 of the formatting rules was not found');
   t = `${t.slice(0, from14)}${V2_RULE_14}\n${t.slice(to14)}`;
   t = replaceOnce(t, '# 出力', V2_ALLOWED);
   return t + V2_EXAMPLES;
@@ -228,7 +228,7 @@ function dictationRules(version: PromptVersion): string {
   return rulesV2;
 }
 
-/** 置換のきっかけの語句を、プロンプトに載せる形にそろえる（空を除き、重複を除く。順序は保つのでキャッシュが効く） */
+/** Normalizes replacement trigger phrases for the prompt (drops empty ones and duplicates, keeping the order so caching works) */
 export function protectedPhraseList(phrases: readonly string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -241,21 +241,21 @@ export function protectedPhraseList(phrases: readonly string[]): string[] {
   return out;
 }
 
-/** 利用者の手直しから覚えたこと（main/learn が集め、main/store/customizations が渡す）。どれも無ければ、プロンプトは変わらない */
+/** What was learned from the user's corrections (collected by main/learn, passed by main/store/customizations). Without any of it, the prompt is unchanged */
 export interface LearnedHints {
-  /** 辞書の語ごとの、音声認識が聞き違えた形 */
+  /** Forms speech recognition misheard, for each dictionary word */
   misheard?: Readonly<Record<string, readonly string[]>>;
-  /** 整形が書き換えたあと、利用者が元に戻した語句 */
+  /** Phrases the user changed back after the formatter rewrote them */
   kept?: readonly { phrase: string; changedTo: string }[];
-  /** 利用者が、取り違えの組を持っている（past_corrections の説明を入れる） */
+  /** The user has mix-up pairs (adds the explanation of past_corrections) */
   hasCorrections?: boolean;
-  /** 音声認識の結果が食い違った箇所（uncertain）を渡す設定になっている（uncertain の説明を入れる） */
+  /** The setting to pass spots where recognition results disagreed (uncertain) is on (adds the explanation of uncertain) */
   explainUncertain?: boolean;
   /** How the user writes numbers */
   numberStyle?: NumberStyles;
 }
 
-/** プロンプトに載せる語句から、改行と、かぎかっこを取り除く（行と引用の形を崩さないため） */
+/** Removes newlines and corner brackets from phrases put in the prompt (so the line and quotation structure stays intact) */
 const inline = (s: string) => s.replace(/[\r\n「」]+/g, ' ').trim();
 
 function personalSection(vocabulary: string[], customInstructions: string, protectedPhrases: readonly string[], learned: LearnedHints = {}): string {
@@ -314,9 +314,9 @@ function personalSection(vocabulary: string[], customInstructions: string, prote
 }
 
 /**
- * 通常の音声入力のシステムプロンプト。
- * 同じ引数なら同じ文字列を返す（プロンプトキャッシュが効くように、毎回変わる値を入れない）。
- * protectedPhrases は置換のきっかけの語句。LLM に言い換えさせないために渡す。置換そのものは LLM の後に行う。
+ * System prompt for regular dictation.
+ * Returns the same string for the same arguments (nothing that changes every time goes in, so prompt caching works).
+ * protectedPhrases are replacement trigger phrases, passed so the LLM does not reword them. The replacement itself happens after the LLM.
  */
 export function dictationSystemPrompt(vocabulary: string[], customInstructions: string, protectedPhrases: readonly string[] = [], version: PromptVersion = 'v1', learned: LearnedHints = {}): string {
   return dictationRules(version) + personalSection(vocabulary, customInstructions, protectedPhrases, learned);
@@ -334,10 +334,10 @@ export interface PromptContext {
   afterCursor?: string;
 }
 
-/** 通常の音声入力で送るカーソル前後の長さ。つながりの判断には足り、入力トークンを抑えられる（F-22） */
+/** Length of the text before and after the cursor sent with regular dictation. Enough to judge continuity while keeping input tokens down (F-22) */
 export const DICTATION_CONTEXT_CHARS = 300;
 
-/** 生テキストの一部（heard）が辞書の語（word）を指しているかもしれない、という候補（G4-11。main/vocab が作る） */
+/** A candidate where part of the raw text (heard) may refer to a dictionary word (word) (G4-11. Built by main/vocab) */
 export interface DictionaryCandidate {
   heard: string;
   word: string;
@@ -345,7 +345,7 @@ export interface DictionaryCandidate {
 
 export const MAX_DICTIONARY_CANDIDATES = 8;
 
-/** 音声認識が聞き違えたかもしれない箇所（main/asr/hypotheses が作る）。v2 の規則でだけ渡す */
+/** A spot speech recognition may have misheard (built by main/asr/hypotheses). Passed only with the v2 rules */
 export interface UncertainSpan {
   heard: string;
   alternatives: readonly string[];
@@ -353,7 +353,7 @@ export interface UncertainSpan {
 
 export const MAX_UNCERTAIN = 8;
 
-/** 音声認識の取り違えを、利用者が以前に直した組（main/store/customizations が、生テキストに出ているものを選ぶ） */
+/** A recognition mix-up the user fixed before (main/store/customizations picks the ones that appear in the raw text) */
 export interface PastCorrectionHint {
   heard: string;
   corrected: string;
@@ -378,10 +378,10 @@ export function dictationUserMessage(
       .map((c) => ({ heard: c.heard, word: c.word }));
   const cands = pick(candidates);
   if (cands.length) msg.dictionary_candidates = cands;
-  // 用語集の候補（textfix の規則 a）。辞書の候補と同じ所を指すものは、辞書の候補を優先して外す
+  // Glossary candidates (textfix rule a). Ones pointing at the same spot as a dictionary candidate are dropped in favor of the dictionary candidate
   const lex = pick(lexicon.filter((l) => !cands.some((c) => c.heard === l.heard)));
   if (lex.length) msg.lexicon_candidates = lex;
-  // 聞き違いかもしれない箇所。書き起こしの中に実際にある語句だけを渡す
+  // Spots that may be misheard. Only phrases actually in the transcript are passed
   const unc = uncertain
     .filter((u) => u.heard.trim() && rawText.includes(u.heard) && u.alternatives.some((a) => a.trim()))
     .slice(0, MAX_UNCERTAIN)
@@ -393,7 +393,7 @@ export function dictationUserMessage(
     .map((c) => ({ heard: c.heard, corrected: c.corrected }));
   if (past.length) msg.past_corrections = past;
   if (ctx.appName) msg.app = { name: ctx.appName, ...(ctx.host ? { host: ctx.host } : {}), ...(ctx.field ? { field: ctx.field } : {}) };
-  // 文字の途中で切らないよう、コードポイント単位で切る
+  // Cut by code point so no character is split
   if (ctx.beforeCursor) msg.before_cursor = [...ctx.beforeCursor].slice(-DICTATION_CONTEXT_CHARS).join('');
   if (ctx.afterCursor) msg.after_cursor = [...ctx.afterCursor].slice(0, DICTATION_CONTEXT_CHARS).join('');
   return JSON.stringify(msg);

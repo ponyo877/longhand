@@ -1,12 +1,12 @@
 /**
- * 2 つの実行の差を、発話を単位にした対のブートストラップで見積もる。
+ * Estimates the difference between two runs with a paired bootstrap over utterances.
  *
- * 同じ発話を両方の実行で測っているので、発話を重複ありで取り直し、取り直すたびに誤り数の合計の差を出す。
- * 差の分布の両端 2.5% を落とした範囲を 95% 区間とする。区間が 0 をまたがなければ、差は偶然ではないとみてよい。
- * 乱数は種から作るので、同じ入力なら同じ結果になる。
+ * Both runs measure the same utterances, so utterances are resampled with replacement, and each resample gives the difference of the total edit counts.
+ * The range left after dropping 2.5% at each end of the distribution of differences is the 95% interval. If the interval does not cross 0, the difference is not chance.
+ * Random numbers come from a seed, so the same input gives the same result.
  */
 
-/** 1 つの発話の、実行 A と実行 B の誤り数と、正解の文字数 */
+/** Edit counts of runs A and B for one utterance, and the length of the reference in characters */
 export interface PairedItem {
   a: number;
   b: number;
@@ -17,21 +17,21 @@ export interface BootstrapResult {
   n: number;
   editsA: number;
   editsB: number;
-  /** 誤り数の差（B − A）。負なら B のほうが良い */
+  /** Difference in edit counts (B − A). Negative means B is better */
   diff: number;
-  /** 誤り数の差の 95% 区間 */
+  /** 95% interval of the difference in edit counts */
   ci: [number, number];
-  /** 誤り率（合計どうしの割り算）。正解が空なら null */
+  /** Error rate (total divided by total). null if the reference is empty */
   rateA: number | null;
   rateB: number | null;
-  /** 誤り率の差（B − A）とその 95% 区間 */
+  /** Difference in error rate (B − A) and its 95% interval */
   rateDiff: number | null;
   rateCi: [number, number] | null;
-  /** 取り直しのうち、B の誤り数が A より少なかった割合 */
+  /** Share of resamples in which B had fewer edits than A */
   bBetter: number;
 }
 
-/** 種から作る乱数（mulberry32）。0 以上 1 未満 */
+/** Seeded random numbers (mulberry32). At least 0 and below 1 */
 export function seededRandom(seed: number): () => number {
   let s = seed >>> 0;
   return () => {

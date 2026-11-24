@@ -1,12 +1,12 @@
-// src/shared/asr-protocol.ts の stdio JSON Lines プロトコル。
-// stdout はプロトコル専用。ログはすべて stderr に出す。
+// The stdio JSON Lines protocol of src/shared/asr-protocol.ts.
+// stdout is for the protocol only. All logs go to stderr.
 
 import Foundation
 
 let ASR_PROTOCOL_VERSION = 1
 let WORKER_VERSION = "0.1.0"
 
-/// stderr へのログ。stdout には絶対に書かない。
+/// Logs to stderr. Never writes to stdout.
 func log(_ message: String) {
     let line = "[longhand-asr-apple] \(message)\n"
     FileHandle.standardError.write(line.data(using: .utf8)!)
@@ -25,7 +25,7 @@ struct AsrError: Error {
     let message: String
 }
 
-/// stdout への書き込みを 1 か所にまとめる（1 行 1 メッセージ、書くたびに flush）。
+/// Keeps all writes to stdout in one place (one message per line, flushed on every write).
 final class ProtocolWriter: @unchecked Sendable {
     private let lock = NSLock()
     private let out = FileHandle.standardOutput
@@ -50,8 +50,8 @@ final class ProtocolWriter: @unchecked Sendable {
     }
 }
 
-/// stdin を専用スレッドで 1 行ずつ読み、AsyncStream に流す。
-/// readLine() は getline ベースで、数十 MB の base64 行でも速い。EOF でストリームを閉じる。
+/// Reads stdin one line at a time on a dedicated thread and feeds the lines into an AsyncStream.
+/// readLine() is based on getline, so it is fast even for base64 lines of tens of MB. Closes the stream at EOF.
 func stdinLines() -> AsyncStream<String> {
     AsyncStream { continuation in
         let thread = Thread {
@@ -66,7 +66,7 @@ func stdinLines() -> AsyncStream<String> {
     }
 }
 
-// MARK: - payload の取り出し
+// MARK: - Reading the payload
 
 extension Dictionary where Key == String, Value == Any {
     func string(_ key: String) -> String? { self[key] as? String }

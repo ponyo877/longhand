@@ -2,45 +2,45 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, mergeSettings } from './settings';
 
 describe('mergeSettings', () => {
-  it('ダブルタップの旧来の既定値（離してから 350ms）を新しい既定値に移す', () => {
+  it('moves the old double-tap default (350ms from release) to the new default', () => {
     const s = mergeSettings({ doubleTapMs: 350 });
     expect(s.doubleTapMs).toBe(DEFAULT_SETTINGS.doubleTapMs);
     expect(s.doubleTapMeasure).toBe('press');
   });
 
-  it('移した後と、利用者が選んだ値はそのまま', () => {
+  it('keeps values after the move and values the user chose', () => {
     expect(mergeSettings({ doubleTapMs: 350, doubleTapMeasure: 'press' }).doubleTapMs).toBe(350);
     expect(mergeSettings({ doubleTapMs: 500 }).doubleTapMs).toBe(500);
     expect(mergeSettings({}).doubleTapMs).toBe(DEFAULT_SETTINGS.doubleTapMs);
   });
 
-  it('新しい項目を既定値で補う', () => {
+  it('fills new fields with defaults', () => {
     expect(mergeSettings({}).chromiumEnhancedUI).toBe(true);
   });
 
-  it('自動修正（textFix）がなかった頃の設定には、規則ごとの既定値を当て、利用者が変えた値と止めた箇所は残す', () => {
-    // textFix ができる前に保存された設定（defaultsRev も最新）
+  it('applies per-rule defaults to settings from before automatic fixes (textFix), keeping values the user changed and blocked spots', () => {
+    // Settings saved before textFix existed (defaultsRev is already the latest)
     const before = mergeSettings({ defaultsRev: 3, llmFastPath: true, language: 'ja' });
     expect(before.textFix).toEqual({ enabled: true, latin: true, fillers: false, notation: false, particles: true, blocked: [] });
     expect(before.llmFastPath).toBe(true);
-    // 一部だけ保存されていても、残りは既定値で補う
+    // Even if only part is saved, the rest is filled with defaults
     const partial = mergeSettings({ textFix: { latin: false, blocked: ['latin:スラック'] } });
     expect(partial.textFix).toMatchObject({ enabled: true, latin: false, particles: true, blocked: ['latin:スラック'] });
-    // 既定値の配列を、利用者の設定と共有しない
+    // The default array is not shared with the user's settings
     expect(mergeSettings({}).textFix.blocked).not.toBe(DEFAULT_SETTINGS.textFix.blocked);
   });
 
-  it('既定値を変えた項目は、保存済みの設定にも 1 回だけ新しい既定値を当てる', () => {
-    // 古い既定値のまま保存されていた設定
+  it('applies a changed default once to saved settings', () => {
+    // Settings saved with the old defaults
     const old = mergeSettings({ llmFastPath: true, asr: { speculative: true } });
     expect(old.llmFastPath).toBe(false);
     expect(old.asr.speculative).toBe(false);
     expect(old.defaultsRev).toBe(3);
-    // 当てた後に利用者が変えた値は、そのまま残る
+    // Values the user changes afterwards stay as they are
     const changed = mergeSettings({ ...old, llmFastPath: true, asr: { ...old.asr, speculative: true } });
     expect(changed.llmFastPath).toBe(true);
     expect(changed.asr.speculative).toBe(true);
-    // 1 つ前の版で保存された設定には、その後に変えた既定値だけを当てる（近道はオフに戻し、先回りは利用者の値のまま）
+    // Settings saved with the previous version get only the defaults changed after it (the shortcut goes back off, running ahead keeps the user's value)
     const rev2 = mergeSettings({ defaultsRev: 2, llmFastPath: true, asr: { speculative: true } });
     expect(rev2.llmFastPath).toBe(false);
     expect(rev2.asr.speculative).toBe(true);

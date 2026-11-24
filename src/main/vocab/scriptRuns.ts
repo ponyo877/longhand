@@ -1,6 +1,6 @@
 /**
- * 文字の種類（英字、カタカナ、漢字）が続く範囲。
- * 日本語は語の間に空白が無いので、差分の塊を「語らしい範囲」に広げるときに、字の種類の切れ目を語の切れ目の代わりに使う。
+ * Runs of the same script (Latin, katakana, kanji).
+ * Japanese has no spaces between words, so script boundaries stand in for word boundaries when expanding a diff hunk to a word-like range.
  */
 
 export type CharClass = 'latin' | 'katakana' | 'kanji' | 'other';
@@ -14,8 +14,8 @@ export function charClassOf(ch: string | undefined): CharClass {
 }
 
 /**
- * [start, end) を、端の字と同じ種類の字が続く範囲まで広げる。ひらがなや記号（other）の側には広げない。
- * 空の範囲はそのまま返す。
+ * Expands [start, end) over the run of characters of the same script as the edge characters. Never expands into hiragana or symbols (other).
+ * Returns an empty range unchanged.
  */
 export function expandRunRange(text: string, start: number, end: number): [number, number] {
   if (start >= end) return [start, end];

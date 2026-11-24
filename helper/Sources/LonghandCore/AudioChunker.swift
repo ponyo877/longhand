@@ -1,6 +1,6 @@
 import Foundation
 
-// 16kHz モノラル Float32 のサンプルを一定数（既定 1600 = 100ms）ずつのチャンクにまとめる。
+// Groups 16 kHz mono Float32 samples into chunks of a fixed size (1600 = 100 ms by default).
 
 public struct AudioChunker: Sendable {
     public let chunkSize: Int
@@ -14,7 +14,7 @@ public struct AudioChunker: Sendable {
 
     public var pendingCount: Int { buffer.count }
 
-    /// サンプルを追加し、揃ったチャンクを返す
+    /// Appends samples and returns the completed chunks
     public mutating func append(_ samples: [Float]) -> [[Float]] {
         buffer.append(contentsOf: samples)
         var chunks: [[Float]] = []
@@ -25,7 +25,7 @@ public struct AudioChunker: Sendable {
         return chunks
     }
 
-    /// 残りのサンプル（chunkSize 未満）を取り出す。なければ nil
+    /// Takes out the remaining samples (fewer than chunkSize). nil if there are none
     public mutating func flush() -> [Float]? {
         guard !buffer.isEmpty else { return nil }
         defer { buffer.removeAll(keepingCapacity: true) }
@@ -51,7 +51,7 @@ public enum AudioMath {
         return min(1, p)
     }
 
-    /// Float32 リトルエンディアンの base64
+    /// Base64 of little-endian Float32
     public static func base64Float32LE(_ samples: [Float]) -> String {
         var data = Data(capacity: samples.count * 4)
         for s in samples {
@@ -61,7 +61,7 @@ public enum AudioMath {
         return data.base64EncodedString()
     }
 
-    /// base64 を Float32 の配列に戻す（テスト・診断用）
+    /// Turns base64 back into a Float32 array (for tests and diagnostics)
     public static func decodeFloat32LE(_ base64: String) -> [Float]? {
         guard let data = Data(base64Encoded: base64), data.count % 4 == 0 else { return nil }
         var out = [Float](repeating: 0, count: data.count / 4)

@@ -2,25 +2,25 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// 前面アプリの変化を監視して front_app を送る。Electron 製アプリと Chromium 系ブラウザには
-/// AXManualAccessibility = true を設定して、アクセシビリティツリーを作らせる。
-/// Chromium 系ブラウザが AXManualAccessibility に対応しないと答えたときは、代わりに AXEnhancedUserInterface を立てる（CTX-5）。
-/// 起動直後は AX が応答しないことがあるので、成功するかフォーカス中の要素が取れるまで 250ms おきに最大 40 回試す。
-/// AXEnhancedUserInterface はウィンドウ整列ツールの動きを妨げることがあるので、configure の chromiumEnhancedUI で切れる。
+/// Watches for changes of the frontmost app and sends front_app. Sets AXManualAccessibility = true on Electron apps and
+/// Chromium-based browsers so that they build their accessibility tree.
+/// When a Chromium-based browser answers that it does not support AXManualAccessibility, sets AXEnhancedUserInterface instead (CTX-5).
+/// AX may not respond right after launch, so it tries every 250ms, up to 40 times, until it succeeds or the focused element can be read.
+/// AXEnhancedUserInterface can get in the way of window tiling tools, so configure's chromiumEnhancedUI can turn it off.
 @MainActor
 final class AppObserver {
     static let shared = AppObserver()
 
     private var observers: [NSObjectProtocol] = []
     private let axQueue = DispatchQueue(label: "longhand.ax.enabler", qos: .utility)
-    nonisolated(unsafe) private var enabledPids: Set<pid_t> = [] // axQueue だけが触る
+    nonisolated(unsafe) private var enabledPids: Set<pid_t> = [] // Only axQueue touches this
     private var electronCache: [String: Bool] = [:]
 
-    /// configure の chromiumEnhancedUI（既定 true）
+    /// configure's chromiumEnhancedUI (true by default)
     nonisolated static let enhancedUIAllowed = LockedValue(true)
     nonisolated static let enhancedUIRetryMs = 250
     nonisolated static let enhancedUIMaxAttempts = 40
-    /// pid → Chromium 系か Electron か（ContextGatherer がメインスレッドの外から引く）
+    /// pid → whether it is Chromium-based or Electron (ContextGatherer looks it up off the main thread)
     nonisolated private static let chromiumLikeCache = LockedValue<[pid_t: Bool]>([:])
 
     nonisolated static let chromiumBundleIds: Set<String> = [
@@ -45,7 +45,7 @@ final class AppObserver {
             let pid = app.processIdentifier
             MainActor.assumeIsolated { AppObserver.shared.forget(pid) }
         })
-        // 起動時点で動いているアプリにも設定する
+        // Also set it on apps already running at startup
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             prepareAccessibility(app)
         }
@@ -60,7 +60,7 @@ final class AppObserver {
         Output.shared.send("front_app", payload)
     }
 
-    /// Electron なら true を返す
+    /// Returns true for Electron
     @discardableResult
     private func prepareAccessibility(_ app: NSRunningApplication) -> Bool {
         let isElectron = isElectronApp(app)
@@ -77,7 +77,7 @@ final class AppObserver {
                 Log.debug("AXManualAccessibility enabled for \(name)")
             } else {
                 Log.debug("AXManualAccessibility failed for \(name): \(err.rawValue)")
-                // 失敗したアプリ（Chromium の一部の版など）は何度も試さない
+                // Do not keep retrying apps where it failed (some Chromium versions, for example)
                 if err == .attributeUnsupported || err == .actionUnsupported {
                     enabledPids.insert(pid)
                     if isChromium && !isElectron && Self.enhancedUIAllowed.get() {
@@ -89,7 +89,7 @@ final class AppObserver {
         return isElectron
     }
 
-    /// AXEnhancedUserInterface を立てる（axQueue の上で呼ぶ）
+    /// Sets AXEnhancedUserInterface (call on axQueue)
     nonisolated private func enableEnhancedUI(pid: pid_t, name: String, attempt: Int) {
         guard Self.enhancedUIAllowed.get(), NSRunningApplication(processIdentifier: pid) != nil else { return }
         let el = AX.app(pid)
@@ -112,7 +112,7 @@ final class AppObserver {
         Self.chromiumLikeCache.update { $0[pid] = nil }
     }
 
-    /// Chromium 系ブラウザか Electron 製アプリか（どのスレッドからでも呼べる）
+    /// Whether it is a Chromium-based browser or an Electron app (callable from any thread)
     nonisolated static func isChromiumLike(pid: pid_t) -> Bool {
         if let cached = chromiumLikeCache.get()[pid] { return cached }
         guard let app = NSRunningApplication(processIdentifier: pid) else { return false }

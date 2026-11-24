@@ -1,13 +1,15 @@
 /**
- * 別候補の見込みを計算する。聞き直しと別候補（行の asr.uncertain）が、どれだけ役に立ちうるかを見積もる。
+ * Computes the potential of alternatives (an oracle). Estimates how much re-hearing and alternatives (the row's asr.uncertain) could help.
  *
- *   npx tsx scripts/eval-oracle.ts <実行> [<実行> …]
- *     実行は、~/longhand-eval/runs/ の下のフォルダ名か、フォルダのパス。実行の名前だけを渡すと、その名前の最も新しい実行を使う
- *     （聞き直しか別候補を求めた実行を渡す。例: asr-rehear、asr-vocab-rehear）
+ *   npx tsx scripts/eval-oracle.ts <run> [<run> …]
+ *     A run is a folder name under ~/longhand-eval/runs/ or a folder path. Given only a run name, the newest run with that name is used
+ *     (pass a run that asked for re-hearing or alternatives, for example asr-rehear or asr-vocab-rehear)
  *
- * 箇所ごとに、書き起こしの中の語句を候補に置き換えてみて、正解との編集距離（中身）が減る候補だけを採った場合の誤りを出す。
- * 正解を見て選ぶので、実際の整形が届く上限である。比べる相手として、どの箇所でも 1 番目の候補を採った場合も出す。
- * 出力は数だけ（文は出さない）。
+ * For each spot, tries replacing the phrase in the transcript with each candidate and reports the errors when only candidates that
+ * reduce the edit distance (content) to the reference are adopted.
+ * It picks by looking at the reference, so it is the upper bound real formatting can reach. For comparison, it also reports adopting
+ * the first candidate at every spot.
+ * Prints numbers only (no sentences).
  */
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -19,19 +21,19 @@ import type { RowRecord } from '../src/main/eval/score';
 const { positionals } = parseArgs({ allowPositionals: true, options: {} });
 
 function main(): void {
-  if (!positionals.length) throw new Error('使い方: npx tsx scripts/eval-oracle.ts <実行> [<実行> …]');
+  if (!positionals.length) throw new Error('Usage: npx tsx scripts/eval-oracle.ts <run> [<run> …]');
   const runs = path.join(evalRoot(), 'runs');
   for (const spec of positionals) {
     const dir = resolveRunDir(spec, runs);
     const rows = readJsonl<RowRecord>(path.join(dir, 'rows.jsonl'));
-    console.log(`実行: ${path.basename(dir)}（${rows.length} 件）`);
+    console.log(`Run: ${path.basename(dir)} (${rows.length} utterances)`);
     const provisional = rows.filter((r) => r.provisional).length;
-    if (provisional) console.log(`注意: ${provisional} 件は正解が仮です`);
+    if (provisional) console.log(`Note: ${provisional} utterances have a provisional reference`);
     if (!rows.some((r) => r.asr.uncertain?.length)) {
-      console.log('  聞き違いかもしれない箇所のある発話がありません（聞き直しか別候補を求めた実行を渡してください）');
+      console.log('  No utterance has a possibly misheard spot (pass a run that asked for re-hearing or alternatives)');
       continue;
     }
-    for (const l of formatOracle('全体', oracleSummary(rows))) console.log(l);
+    for (const l of formatOracle('All', oracleSummary(rows))) console.log(l);
     const datasets = [...new Set(rows.map((r) => r.dataset))].sort();
     if (datasets.length > 1) for (const d of datasets) for (const l of formatOracle(d, oracleSummary(rows.filter((r) => r.dataset === d)))) console.log(l);
   }

@@ -1,8 +1,8 @@
 // longhand-asr-parakeet
 //
-// src/shared/asr-protocol.ts の stdio JSON Lines プロトコルを話す ASR ワーカー。
-// FluidAudio（Core ML）で Parakeet-TDT 0.6B 日本語版を動かす。
-// stdout はプロトコル専用、ログは stderr に出す。stdin が EOF になったら終了する。
+// ASR worker that speaks the stdio JSON Lines protocol of src/shared/asr-protocol.ts.
+// Runs Parakeet-TDT 0.6B Japanese with FluidAudio (Core ML).
+// stdout is for the protocol only; logs go to stderr. Exits when stdin reaches EOF.
 
 import FluidAudio
 import Foundation
@@ -33,7 +33,7 @@ func sendError(id: String?, code: String, message: String) {
     send(msg)
 }
 
-/// stdin を専用スレッドで 1 行ずつ読み、AsyncStream に流す（base64 の長い行も効率よく読むため）。
+/// Reads stdin one line at a time on a dedicated thread and feeds the lines into an AsyncStream (to read long base64 lines efficiently).
 func stdinLines() -> AsyncStream<String> {
     AsyncStream { continuation in
         let thread = Thread {
@@ -54,7 +54,7 @@ func elapsedMs(since start: DispatchTime) -> Int {
 @main
 struct Main {
     static func main() async {
-        // FluidAudio の info / debug ログ（書き起こし文を含みうる）は出さない
+        // Suppress FluidAudio's info / debug logs (they may contain transcripts)
         setvbuf(stdout, nil, _IOFBF, 1 << 16)
         AppLogger.minimumLevel = .warning
         AppLogger.mirrorsToConsole = true
@@ -132,7 +132,7 @@ struct Main {
             sendError(id: id, code: "bad_request", message: "\(error)")
             return
         }
-        // hints / prompt: このモデルには語彙ヒントの仕組みがないので受け取って無視する
+        // hints / prompt: this model has no mechanism for vocabulary hints, so they are accepted and ignored
         do {
             let out = try await engine.transcribe(samples: samples)
             let ms = elapsedMs(since: start)

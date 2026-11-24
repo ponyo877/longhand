@@ -26,10 +26,10 @@ export class RequestError extends Error {
 }
 
 /**
- * stdin / stdout の JSON Lines で話す子プロセス。ヘルパーと ASR ワーカーで共用する。
- * - start() は ready を受けるまで待つ
- * - request() は同じ id の応答を待つ。{type: "error"} なら RequestError で失敗する
- * - id のないメッセージは 'message' イベントで流す
+ * A child process that talks JSON Lines over stdin / stdout. Shared by the helper and the ASR workers.
+ * - start() waits until it receives ready
+ * - request() waits for the reply with the same id. {type: "error"} fails with a RequestError
+ * - messages without an id are emitted as 'message' events
  */
 export class JsonLinesProcess extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -62,7 +62,7 @@ export class JsonLinesProcess extends EventEmitter {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        reject(new Error(`${this.name} が ${readyTimeoutMs}ms 以内に ready を返しませんでした`));
+        reject(new Error(`${this.name} did not send ready within ${readyTimeoutMs}ms`));
         this.kill();
       }, readyTimeoutMs);
 
@@ -72,7 +72,7 @@ export class JsonLinesProcess extends EventEmitter {
         try {
           msg = JSON.parse(line);
         } catch {
-          this.onStderr(`[stdout 非 JSON] ${line.slice(0, 200)}`);
+          this.onStderr(`[stdout non-JSON] ${line.slice(0, 200)}`);
           return;
         }
         if (msg.type === 'ready' && !settled) {
@@ -97,13 +97,13 @@ export class JsonLinesProcess extends EventEmitter {
         this.child = null;
         for (const [, p] of this.pending) {
           clearTimeout(p.timer);
-          p.reject(new RequestError('exited', `${this.name} が終了しました`));
+          p.reject(new RequestError('exited', `${this.name} exited`));
         }
         this.pending.clear();
         if (!settled) {
           settled = true;
           clearTimeout(timer);
-          reject(new Error(`${this.name} が起動直後に終了しました（code=${code} signal=${signal}）`));
+          reject(new Error(`${this.name} exited right after starting (code=${code} signal=${signal})`));
         }
         this.emit('exit', code, signal);
       });
@@ -132,12 +132,12 @@ export class JsonLinesProcess extends EventEmitter {
   }
 
   request(type: string, payload: unknown = {}, timeoutMs = 5000): Promise<Message> {
-    if (!this.child || this.exited) return Promise.reject(new RequestError('not_running', `${this.name} が動いていません`));
+    if (!this.child || this.exited) return Promise.reject(new RequestError('not_running', `${this.name} is not running`));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new RequestError('timeout', `${this.name} の ${type} が ${timeoutMs}ms 以内に応答しませんでした`));
+        reject(new RequestError('timeout', `${this.name} did not answer ${type} within ${timeoutMs}ms`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.send(type, payload, id);
@@ -152,7 +152,7 @@ export class JsonLinesProcess extends EventEmitter {
       /* ignore */
     }
     const child = this.child;
-    // child.killed は SIGTERM を送った時点で true になるので、終了したかは exitCode と signalCode で見る
+    // child.killed becomes true as soon as SIGTERM is sent, so whether it exited is judged by exitCode and signalCode
     setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }, 1500).unref();

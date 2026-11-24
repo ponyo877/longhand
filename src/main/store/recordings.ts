@@ -5,7 +5,7 @@ import { createLogger } from '../log';
 
 const log = createLogger('recordings');
 
-/** 録音の保存と掃除（REC-6）。既定で 72 時間、合計 300MB まで残し、2 時間ごとに掃除する */
+/** Saves and cleans up recordings (REC-6). By default keeps 72 hours and up to 300 MB in total, cleaning up every 2 hours */
 export class RecordingStore {
   private timer: NodeJS.Timeout | null = null;
 
@@ -69,9 +69,9 @@ export class RecordingStore {
           removed++;
         }
       }
-      if (removed) log.info(`録音を ${removed} 件削除しました`);
+      if (removed) log.info(`deleted ${removed} recordings`);
     } catch (e) {
-      log.warn('録音の掃除に失敗しました', e);
+      log.warn('failed to clean up recordings', e);
     }
   }
 }

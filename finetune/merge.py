@@ -1,9 +1,9 @@
-"""学習した LoRA を、強さを変えて元の重みに足し込む（学習し直さずに、調整の強さを弱めた版を作る）。
+"""Merges a trained LoRA into the base weights at a chosen scale (makes a weaker version of the tuning without retraining).
 
   python finetune/merge.py --run run1 --scale 0.5 --out run1-s050
 
-強さ 1 は train.py が保存した merged と同じ、強さ 0 は元のモデルと同じになる。
-元の重みと微調整した重みのあいだを取ると、元のデータでの動きを保ちやすい（WiSE-FT の考え方）。
+Scale 1 equals the merged model train.py saved; scale 0 equals the base model.
+Interpolating between the base and fine-tuned weights helps keep the behavior on the original data (the idea behind WiSE-FT).
 """
 import argparse
 import json
@@ -15,7 +15,7 @@ import torch
 from common import BASE_MODEL, ROOT
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--run", required=True, help="train.py の --out に渡した名前")
+ap.add_argument("--run", required=True, help="name passed to --out of train.py")
 ap.add_argument("--scale", type=float, required=True)
 ap.add_argument("--out", required=True)
 args = ap.parse_args()
@@ -41,4 +41,4 @@ model.save_pretrained(merged)
 for f in os.listdir(BASE_MODEL):
     if f != "model.safetensors" and os.path.isfile(os.path.join(BASE_MODEL, f)) and not os.path.exists(os.path.join(merged, f)):
         shutil.copy(os.path.join(BASE_MODEL, f), merged)
-print(f"保存: {merged}（LoRA {len(lora)} 個、強さ {args.scale}）")
+print(f"Saved: {merged} ({len(lora)} LoRA matrices, scale {args.scale})")

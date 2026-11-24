@@ -1,0 +1,2 @@
+/* マイクの許可を求めるときに macOS が表示する */
+"NSMicrophoneUsageDescription" = "音声入力のためにマイクを使います。音声は端末の外に送信しません。";

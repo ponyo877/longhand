@@ -28,7 +28,7 @@ interface Call {
   range?: string;
 }
 
-/** 呼び出しごとの振る舞いを並べた偽の fetch */
+/** A fake fetch that follows a list of behaviors, one per call */
 function fakeFetch(plan: ((range: number) => Response)[], calls: Call[]) {
   return async (url: string, init: { headers: Record<string, string>; signal: AbortSignal }) => {
     calls.push({ url, range: init.headers.Range });
@@ -50,7 +50,7 @@ afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 const make = (fetch: ReturnType<typeof fakeFetch>, free = 10 * 1024 ** 3) => new ModelDownloader({ modelsDir: dir, fetch, files: [FILE], freeBytes: () => free, sleep: async () => undefined });
 
 describe('ModelDownloader', () => {
-  it('取得してハッシュを確かめ、置く', async () => {
+  it('downloads, checks the hash and puts the file in place', async () => {
     const calls: Call[] = [];
     const d = make(fakeFetch([ok206(body)], calls));
     expect(d.installed()).toBe(false);
@@ -60,7 +60,7 @@ describe('ModelDownloader', () => {
     expect(d.state).toMatchObject({ state: 'done', installed: true });
   });
 
-  it('途中で切れたら待って再試行し、取得済みの分の続きから取る', async () => {
+  it('waits and retries after a cut-off download, resuming after the part already received', async () => {
     const calls: Call[] = [];
     const states: string[] = [];
     const d = make(fakeFetch([cut(body, 4000), ok206(body)], calls));
@@ -71,14 +71,14 @@ describe('ModelDownloader', () => {
     expect(fs.readFileSync(path.join(dir, FILE.path))).toEqual(body);
   });
 
-  it('サーバーが Range に応じなければ、最初から取り直す', async () => {
+  it('starts over when the server ignores Range', async () => {
     const calls: Call[] = [];
     const d = make(fakeFetch([cut(body, 4000), () => new Response(stream(body), { status: 200 })], calls));
     expect(await d.download('https://h')).toBe(true);
     expect(fs.readFileSync(path.join(dir, FILE.path))).toEqual(body);
   });
 
-  it('ハッシュが合わなければ置かずに再試行し、それでも合わなければ失敗にする', async () => {
+  it('retries without placing the file when the hash does not match, and fails if it still does not match', async () => {
     const bad = Buffer.from(body);
     bad[10] = 0x41;
     const calls: Call[] = [];
@@ -95,7 +95,7 @@ describe('ModelDownloader', () => {
     expect(fs.existsSync(path.join(dir, `${FILE.path}.part`))).toBe(false);
   });
 
-  it('404 は待っても直らないので、すぐ失敗にする', async () => {
+  it('fails at once on 404, which waiting does not fix', async () => {
     const calls: Call[] = [];
     const d = make(fakeFetch([() => new Response('nf', { status: 404 })], calls));
     expect(await d.download('https://h')).toBe(false);
@@ -103,15 +103,15 @@ describe('ModelDownloader', () => {
     expect(d.state.error).toContain('404');
   });
 
-  it('空き容量が足りなければ取得しない', async () => {
+  it('does not download without enough free space', async () => {
     const calls: Call[] = [];
     const d = make(fakeFetch([ok206(body)], calls), 100);
     expect(await d.download('https://h')).toBe(false);
     expect(calls).toHaveLength(0);
-    expect(d.state.error).toContain('空き容量');
+    expect(d.state.error).toContain('Not enough free space');
   });
 
-  it('取り消せる。途中までの分は残し、次は続きから取る', async () => {
+  it('can be canceled, keeping the partial file and resuming from it next time', async () => {
     const calls: Call[] = [];
     let d!: ModelDownloader;
     const slow = (start: number) => {
@@ -139,7 +139,7 @@ describe('ModelDownloader', () => {
     expect(calls[1].range).toBe('bytes=3000-');
   });
 
-  it('アプリに同梱されたモデルがあれば、取得済みとして扱う', () => {
+  it('treats models bundled with the app as installed', () => {
     const bundled = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-bundled-'));
     try {
       fs.mkdirSync(path.join(bundled, 'whisper'));
@@ -152,7 +152,7 @@ describe('ModelDownloader', () => {
     }
   });
 
-  it('別の PC で取得したファイルやフォルダを、ハッシュを確かめて取り込む', async () => {
+  it('imports files and folders downloaded on another computer after checking their hashes', async () => {
     const d = make(fakeFetch([], []));
     const src = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-src-'));
     try {
@@ -163,7 +163,7 @@ describe('ModelDownloader', () => {
       const r2 = await d.importFrom([src]);
       expect(r2.imported).toEqual(['model.bin']);
       expect(d.installed()).toBe(true);
-      // 中身が違えば取り込まない
+      // Different contents are not imported
       fs.writeFileSync(path.join(src, 'model.bin'), 'broken');
       fs.rmSync(path.join(dir, FILE.path));
       const r3 = await d.importFrom([path.join(src, 'model.bin')]);

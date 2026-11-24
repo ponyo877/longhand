@@ -2,18 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { buildAsrPrompt } from './promptBuilder';
 
 describe('buildAsrPrompt', () => {
-  it('list は、語を「、」で並べた 1 文にする', () => {
+  it('makes list one sentence of words separated by 「、」', () => {
     expect(buildAsrPrompt(['GitHub', 'Slack', 'Notion'], { style: 'list', importantLast: false })).toBe('GitHub、Slack、Notion。');
   });
 
-  it('大事な語（先頭の語）を、既定では最後に置く', () => {
+  it('puts important words (the first ones) last by default', () => {
     expect(buildAsrPrompt(['GitHub', 'Slack', 'Notion'], { style: 'list' })).toBe('Notion、Slack、GitHub。');
     const s = buildAsrPrompt(['GitHub', 'Slack', 'Notion', 'Figma'], { style: 'sentence' });
     expect(s.lastIndexOf('GitHub')).toBeGreaterThan(s.indexOf('Figma'));
     expect(s.endsWith('。')).toBe(true);
   });
 
-  it('sentence と spoken は、句読点のある文に語を埋める', () => {
+  it('embeds words in punctuated sentences for sentence and spoken', () => {
     const sentence = buildAsrPrompt(['GitHub', 'Slack', 'Notion', 'Figma', 'Docker'], { style: 'sentence', importantLast: false });
     expect(sentence).toBe('GitHub、Slack、Notionを使っています。Figmaの件は、Dockerで確認しました。');
     const spoken = buildAsrPrompt(['GitHub', 'Slack'], { style: 'spoken', importantLast: false });
@@ -21,16 +21,16 @@ describe('buildAsrPrompt', () => {
     for (const w of ['GitHub', 'Slack', 'Notion', 'Figma', 'Docker']) expect(sentence).toContain(w);
   });
 
-  it('同じ入力からは、同じ文になる', () => {
+  it('gives the same text for the same input', () => {
     const terms = ['Kubernetes', 'Terraform', 'Datadog', 'Sentry', 'Vercel', 'Jira', 'Figma'];
     expect(buildAsrPrompt(terms, { style: 'sentence' })).toBe(buildAsrPrompt(terms, { style: 'sentence' }));
   });
 
-  it('語の数の上限を守り、重複（大文字小文字と全角半角の違い）は 1 つにする', () => {
+  it('respects the word limit and merges duplicates (differing in case or width) into one', () => {
     expect(buildAsrPrompt(['GitHub', 'github', 'ＧｉｔＨｕｂ', 'Slack', 'Notion'], { style: 'list', maxTerms: 2, importantLast: false })).toBe('GitHub、Slack。');
   });
 
-  it('字数の上限を超えるときは、大事でない語や文から落とす', () => {
+  it('drops the least important words or sentences first when over the length limit', () => {
     const terms = Array.from({ length: 30 }, (_, i) => `Term${i}`);
     const list = buildAsrPrompt(terms, { style: 'list', maxChars: 40 });
     expect(Array.from(list).length).toBeLessThanOrEqual(40);
@@ -42,12 +42,12 @@ describe('buildAsrPrompt', () => {
     expect(sentence).not.toContain('Term29');
   });
 
-  it('直前の文脈は最後に置く', () => {
+  it('puts the preceding context last', () => {
     expect(buildAsrPrompt(['GitHub'], { style: 'list', context: '昨日の続きです。' })).toBe('GitHub。昨日の続きです。');
     expect(buildAsrPrompt([], { style: 'sentence', context: '昨日の続きです。' })).toBe('昨日の続きです。');
   });
 
-  it('語も文脈も無ければ空を返す', () => {
+  it('returns empty without words or context', () => {
     expect(buildAsrPrompt([], { style: 'sentence' })).toBe('');
     expect(buildAsrPrompt(['  '], { style: 'list' })).toBe('');
   });

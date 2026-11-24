@@ -1,6 +1,6 @@
 /**
- * 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）。文はすべて作った例文である。
- * 語の切り出しと読みには、本物の単語分割（lindera、IPADIC）を使う。
+ * Learning that adds no words to the dictionary (misheard forms, mix-up pairs, phrases not to rewrite). All sentences are made-up examples.
+ * Word extraction and readings use the real tokenizer (lindera, IPADIC).
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,133 +29,133 @@ const ctx = (over: Partial<Omit<LearnContext, 'inserted'>> = {}): Omit<LearnCont
 });
 const pairs = (list: { from: string; to: string }[]) => list.map((r) => [r.from, r.to]);
 
-describe('extractRewrites（語句の書き換えの取り出し）', () => {
-  it('かなの表記への直しを、語の単位で取り出す', () => {
+describe('extractRewrites (extracting phrase rewrites)', () => {
+  it('extracts fixes to kana spelling as whole words', () => {
     expect(pairs(extractRewrites('何か食べたいものはありますか？', 'なんか食べたいものはありますか？', tokenizer))).toEqual([['何か', 'なんか']]);
   });
 
-  it('両端の同じ語は落とす（複合語の一部だけを直したとき）', () => {
+  it('drops identical words at both ends (when only part of a compound was fixed)', () => {
     expect(pairs(extractRewrites('新しい期間システムに移行します。', '新しい基幹システムに移行します。', tokenizer))).toEqual([['期間', '基幹']]);
   });
 
-  it('残りが 1 字になるときは、同じ語を落とさない', () => {
+  it('keeps identical words when only one character would remain', () => {
     expect(pairs(extractRewrites('ミーティングは3時からです。', 'ミーティングは三時からです。', tokenizer))).toEqual([['3時', '三時']]);
   });
 
-  it('近くの塊は 1 つにまとめるが、句読点はまたがない', () => {
+  it('merges nearby hunks into one, but not across punctuation', () => {
     expect(pairs(extractRewrites('分からないので、後で聞いてみます。', 'わかんないんで、あとで聞いてみます。', tokenizer))).toEqual([
       ['分からないので', 'わかんないんで'],
       ['後で', 'あとで'],
     ]);
   });
 
-  it('文の中での読みを添える', () => {
+  it('attaches the reading in the sentence', () => {
     const [r] = extractRewrites('資料を公正に回します。', '資料を校正に回します。', tokenizer);
     expect([r.fromReading, r.toReading]).toEqual(['コウセイ', 'コウセイ']);
   });
 
-  it('単語分割が無くても、文字の種類で切り出す', () => {
+  it('cuts by script even without a tokenizer', () => {
     expect(pairs(extractRewrites('資料を公正に回します。', '資料を校正に回します。', null))).toEqual([['公正', '校正']]);
   });
 
-  it('句読点だけの直しと、文の書き直しは取り出さない', () => {
+  it('extracts neither punctuation-only fixes nor sentence rewrites', () => {
     expect(extractRewrites('明日行きます。', '明日行きます', tokenizer)).toEqual([]);
     expect(extractRewrites('明日の会議は中止です。', '来週の打ち合わせは、場所を変えて行うことにしました。', tokenizer)).toEqual([]);
   });
 });
 
-describe('closeSound（音が同じか、ごく近いか）', () => {
-  it('同じ読みと、1 音だけの違いは近い', () => {
+describe('closeSound (same or very close sound)', () => {
+  it('treats the same reading and a one-sound difference as close', () => {
     expect(closeSound('コウセイ', 'コウセイ')).toBe(true);
     expect(closeSound('コーティング', 'コーディング')).toBe(true);
     expect(closeSound('ナニカ', 'ナンカ')).toBe(true);
   });
 
-  it('短い語の 1 音の違いと、別の語は近くない', () => {
+  it('treats a one-sound difference in a short word, and different words, as not close', () => {
     expect(closeSound('ハ', 'ガ')).toBe(false);
     expect(closeSound('ダシ', 'タシ')).toBe(false);
     expect(closeSound('アシタ', 'ミョウゴニチ')).toBe(false);
   });
 });
 
-describe('learnFromEdit の振り分け', () => {
-  it('同じ読みの別の語への直しは、取り違えの組として覚える（辞書には入れない）', async () => {
+describe('learnFromEdit sorting', () => {
+  it('learns a fix to another word with the same reading as a mix-up pair (not added to the dictionary)', async () => {
     const r = await learnFromEdit('資料を公正に回します。', '資料を校正に回します。', ctx({ rawText: '資料を公正に回します' }));
     expect(r.words).toEqual([]);
     expect(r.corrections).toEqual([{ heard: '公正', corrected: '校正' }]);
     expect(r.skipped).toBeUndefined();
   });
 
-  it('音声認識の表記を、かなに直したときも覚える', async () => {
+  it('also learns when the recognized spelling is changed to kana', async () => {
     const r = await learnFromEdit('後で確認します。', 'あとで確認します。', ctx({ rawText: '後で確認します' }));
     expect(r.corrections).toEqual([{ heard: '後で', corrected: 'あとで' }]);
     expect(r.kept).toEqual([]);
   });
 
-  it('整形が書き換えた所を、書き起こしのとおりに戻したら、書き換えない語句として覚える', async () => {
+  it('learns a phrase not to rewrite when a formatter rewrite is put back as transcribed', async () => {
     const r = await learnFromEdit('何か食べたいものはありますか？', 'なんか食べたいものはありますか？', ctx({ rawText: 'なんか食べたいものはありますか' }));
     expect(r.kept).toEqual([{ phrase: 'なんか', changedTo: '何か' }]);
     expect(r.corrections).toEqual([]);
   });
 
-  it('書き起こしが分からないとき（rawText なし）は、戻した手直しとは見なさない', async () => {
+  it('does not treat it as undoing a rewrite when the transcript is unknown (no rawText)', async () => {
     const r = await learnFromEdit('何か食べたいものはありますか？', 'なんか食べたいものはありますか？', ctx());
     expect(r.kept).toEqual([]);
     expect(r.corrections).toEqual([{ heard: '何か', corrected: 'なんか' }]);
   });
 
-  it('すでに辞書にある語に直したら、直す前の形を、その語の聞き違えた形として覚える', async () => {
+  it('learns the form before the fix as a misheard form of a word already in the dictionary', async () => {
     const r = await learnFromEdit('クバネテスの設定を見直します。', 'Kubernetesの設定を見直します。', ctx({ vocabulary: ['Kubernetes'], rawText: 'くばねてすの設定を見直します' }));
     expect(r.forms).toEqual([{ word: 'Kubernetes', from: 'クバネテス' }]);
     expect(r.words).toEqual([]);
     expect(r.corrections).toEqual([]);
   });
 
-  it('漢字の語は、読みで音の近さを確かめる', async () => {
+  it('checks how close kanji words sound by their readings', async () => {
     const r = await learnFromEdit('伊賀らしさんに確認します。', '五十嵐さんに確認します。', ctx({ vocabulary: ['五十嵐'] }));
     expect(r.forms).toEqual([{ word: '五十嵐', from: '伊賀らし' }]);
-    // 単語分割が無ければ、読みが分からないので覚えない
+    // Without a tokenizer the reading is unknown, so nothing is learned
     const r2 = await learnFromEdit('伊賀らしさんに確認します。', '五十嵐さんに確認します。', ctx({ vocabulary: ['五十嵐'], tokenizer: null }));
     expect(r2.forms).toEqual([]);
   });
 
-  it('辞書の語を別の語に言い換えただけなら、何も覚えない', async () => {
+  it('learns nothing when a dictionary word was only reworded into another word', async () => {
     const r = await learnFromEdit('Slackで送ります。', 'Teamsで送ります。', ctx({ vocabulary: ['Slack', 'Teams'] }));
     expect([r.words, r.forms, r.corrections, r.kept]).toEqual([[], [], [], []]);
   });
 
-  it('意味を変えた直しと、数の直しは覚えない', async () => {
+  it('learns neither fixes that change the meaning nor fixes to numbers', async () => {
     const a = await learnFromEdit('明日の会議は中止です。', '明後日の会議は中止です。', ctx());
     expect([a.corrections, a.kept]).toEqual([[], []]);
     const b = await learnFromEdit('8日に出発します。', '4日に出発します。', ctx({ rawText: '八日に出発します' }));
     expect([b.corrections, b.kept]).toEqual([[], []]);
   });
 
-  it('単語分割が無ければ、取り違えの組と、書き換えない語句は覚えない（語の途中で切れた組を覚えないため）', async () => {
+  it('learns neither mix-up pairs nor phrases not to rewrite without a tokenizer (to avoid pairs cut mid-word)', async () => {
     const a = await learnFromEdit('何か食べたいものはありますか？', 'なんか食べたいものはありますか？', ctx({ rawText: 'なんか食べたいものはありますか', tokenizer: null }));
     expect([a.corrections, a.kept]).toEqual([[], []]);
     const b = await learnFromEdit('資料を公正に回します。', '資料を校正に回します。', ctx({ tokenizer: null }));
     expect(b.corrections).toEqual([]);
   });
 
-  it('句読点をまたぐ直しは覚えない', async () => {
+  it('learns nothing from fixes that span punctuation', async () => {
     const r = await learnFromEdit('クラスターをterraformで作ります。', 'クラスタを、Terraformで作ります。', ctx());
     expect(r.corrections.every((c) => !/[、。]/.test(c.heard + c.corrected))).toBe(true);
   });
 
-  it('学習しない語への直しは、取り違えの組にもしない', async () => {
+  it('does not make a mix-up pair from a fix to a word not to learn', async () => {
     const r = await learnFromEdit('資料を公正に回します。', '資料を校正に回します。', ctx({ blocked: ['校正'] }));
     expect(r.corrections).toEqual([]);
   });
 
-  it('辞書に入れた語は、取り違えの組に重ねて入れない', async () => {
+  it('does not also add a word added to the dictionary as a mix-up pair', async () => {
     const r = await learnFromEdit('ぐらふぁなを見てください。', 'Grafanaを見てください。', ctx());
     expect(r.words.map((w) => w.word)).toEqual(['Grafana']);
     expect(r.corrections).toEqual([]);
   });
 });
 
-describe('保存先への反映と、整形への受け渡し', () => {
+describe('saving and handing over to formatting', () => {
   let dir: string;
   let store: CustomizationsStore;
   beforeEach(() => {
@@ -167,7 +167,7 @@ describe('保存先への反映と、整形への受け渡し', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('辞書の語の聞き違えた形は、照合の候補と、整形の辞書の行に入る', () => {
+  it('puts misheard forms of dictionary words into match candidates and the formatter dictionary line', () => {
     store.update({ dictionary: ['Kubernetes'] });
     const added = store.addMisheardForms([
       { word: 'kubernetes', from: 'クバネテス' },
@@ -181,24 +181,24 @@ describe('保存先への反映と、整形への受け渡し', () => {
     expect(prep.misheard).toEqual({ Kubernetes: ['クバネテス'] });
   });
 
-  it('学習語にも 2 つ目からの形を足せる。形は 1 語あたりの上限まで', () => {
+  it('adds forms from the second one on to learned words too, up to the per-word limit', () => {
     store.addLearnedWords([{ word: 'Grafana', from: 'ぐらふぁな', learnedAt: 1 }]);
     expect(store.addMisheardForms([{ word: 'Grafana', from: 'ぐらふぁな' }])).toEqual([]);
     for (let i = 0; i < 8; i++) store.addMisheardForms([{ word: 'Grafana', from: `ぐらはな${i}` }]);
     expect(store.get().misheard?.Grafana).toHaveLength(6);
     expect(store.misheardForms('Grafana')[0]).toBe('ぐらはな7');
-    // 整形には、新しい形から 3 つまで渡す
+    // Formatting gets up to 3 forms, newest first
     expect(store.prepareFormatting('x', { useLlm: true }).misheard?.Grafana).toEqual(['ぐらはな7', 'ぐらはな6', 'ぐらはな5']);
   });
 
-  it('語が辞書から消えたら、その語の形も片づける', () => {
+  it("cleans up a word's forms when the word leaves the dictionary", () => {
     store.update({ dictionary: ['Kubernetes'] });
     store.addMisheardForms([{ word: 'Kubernetes', from: 'クバネテス' }]);
     store.update({ dictionary: [] });
     expect(store.get().misheard).toEqual({});
   });
 
-  it('取り違えの組は、生テキストに出ているものだけを整形に渡す。LLM を使わないときは渡さない', () => {
+  it('passes only mix-up pairs that appear in the raw text to formatting, and none without the LLM', () => {
     store.addPastCorrections([
       { heard: '公正', corrected: '校正' },
       { heard: '期間', corrected: '基幹' },
@@ -210,7 +210,7 @@ describe('保存先への反映と、整形への受け渡し', () => {
     expect(store.prepareFormatting('明日行きます', { useLlm: true }).corrections).toEqual([]);
   });
 
-  it('同じ組は回数を増やし、逆向きの組は古いほうを外す', () => {
+  it('increases the count for the same pair and removes the older of two opposite pairs', () => {
     store.addPastCorrections([{ heard: '公正', corrected: '校正' }]);
     const again = store.addPastCorrections([{ heard: '公正', corrected: '校正' }]);
     expect(again[0].count).toBe(2);
@@ -218,7 +218,7 @@ describe('保存先への反映と、整形への受け渡し', () => {
     expect(store.get().pastCorrections?.map((c) => [c.heard, c.corrected, c.count])).toEqual([['校正', '公正', 1]]);
   });
 
-  it('書き換えない語句は、古い順に整形に渡す', () => {
+  it('passes phrases not to rewrite to formatting, oldest first', () => {
     store.addKeptPhrases([{ phrase: 'なんか', changedTo: '何か' }]);
     store.addKeptPhrases([{ phrase: 'いちばん', changedTo: '一番' }]);
     expect(store.prepareFormatting('x', { useLlm: true }).kept).toEqual([
@@ -227,12 +227,12 @@ describe('保存先への反映と、整形への受け渡し', () => {
     ]);
   });
 
-  it('何も覚えていなければ、整形に渡すものは空', () => {
+  it('passes nothing to formatting when nothing was learned', () => {
     const prep = store.prepareFormatting('明日行きます', { useLlm: true });
     expect([prep.misheard, prep.corrections, prep.kept, prep.hasCorrections]).toEqual([{}, [], [], false]);
   });
 
-  it('反映した学習を、まとめて取り消せる', async () => {
+  it('undoes saved learning all at once', async () => {
     store.update({ dictionary: ['Kubernetes'] });
     const applied = applyLearning(store, {
       words: [{ word: 'Grafana', from: 'ぐらふぁな', learnedAt: 1 }],
@@ -250,7 +250,7 @@ describe('保存先への反映と、整形への受け渡し', () => {
     expect(c.keptPhrases).toEqual([]);
   });
 
-  it('回数を増やしただけの組は、取り消しても残す', () => {
+  it('keeps pairs whose count was only increased when undoing', () => {
     store.addPastCorrections([{ heard: '公正', corrected: '校正' }]);
     const applied = applyLearning(store, { words: [], forms: [], corrections: [{ heard: '公正', corrected: '校正' }], kept: [] });
     applied.undo();

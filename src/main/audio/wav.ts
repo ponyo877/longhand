@@ -1,4 +1,4 @@
-/** 16kHz モノラル Float32 を 16bit PCM の WAV にする */
+/** Turns 16 kHz mono Float32 samples into a 16-bit PCM WAV */
 export function encodeWav(samples: Float32Array, sampleRate = 16000): Buffer {
   const dataBytes = samples.length * 2;
   const buf = Buffer.alloc(44 + dataBytes);
@@ -24,7 +24,7 @@ export function encodeWav(samples: Float32Array, sampleRate = 16000): Buffer {
   return buf;
 }
 
-/** 16bit PCM の WAV を Float32 に戻す（テストと再書き起こし用） */
+/** Turns a 16-bit PCM WAV back into Float32 samples (for tests and re-transcription) */
 export function decodeWav(buf: Buffer): { samples: Float32Array; sampleRate: number } {
   let o = 12;
   let sampleRate = 16000;
@@ -43,5 +43,5 @@ export function decodeWav(buf: Buffer): { samples: Float32Array; sampleRate: num
     }
     o += 8 + size + (size % 2);
   }
-  throw new Error('WAV の data チャンクが見つかりません');
+  throw new Error('WAV has no data chunk');
 }

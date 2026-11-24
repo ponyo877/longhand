@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app, clipboard, dialog, ipcMain, Menu, nativeTheme, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron';
 import type { AudioDevice, ConfigurePayload, HelperToMain, PermissionsResultPayload } from '../shared/protocol';
+import { isUiLanguage } from '../shared/i18n/locale';
 import { mergeSettings, type Settings } from '../shared/settings';
 import type { AppSnapshot, AsrTestResult, ConnectionTestResult, Customizations, DeepPartial, EngineStatus, FloaterState, HistoryItem, LonghandApi, PermissionStatus } from '../shared/types';
 import { bindingLabel, extraKeys } from '../shared/keys';
@@ -13,6 +14,7 @@ import { formatText } from './format/Formatter';
 import { HelperClient } from './helper/HelperClient';
 import { createProvider, isLlmConfigured, type LlmProvider } from './llm';
 import { evalRoot } from './eval/files';
+import { currentLocale, setUiLanguage, t } from './i18n';
 import { createLogger, initLogs, redact } from './log';
 import { llmFetch, lockDownRendererNetwork, modelFetch, preconnect } from './net/egress';
 import { paths } from './paths';
@@ -38,52 +40,52 @@ import { VirtualInputHelper } from './selftest/virtualInput';
 declare const UI_VITE_DEV_SERVER_URL: string | undefined;
 
 // ---------------------------------------------------------------------------
-// 起動の前提
+// Startup prerequisites
 // ---------------------------------------------------------------------------
 
 /**
- * 開発用の評価（LONGHAND_EVAL）。評価の設定（JSON のファイルのパスか、JSON そのもの）を渡すと、評価だけを走らせて終了する。
- * 使い方は scripts/eval-run.ts の先頭にある。
+ * Development evaluation (LONGHAND_EVAL). Given an evaluation config (a path to a JSON file, or the JSON itself), runs only the evaluation and quits.
+ * Usage is at the top of scripts/eval-run.ts.
  *
- * 動いている開発版と並べて起動できるように、二重起動の確認より前に、保存先（userData とログ）を評価用のフォルダに移す。
- * 実際の保存先の設定は、評価の中で読み取りだけで開く（接続先とキーを借りるため。書き戻さない）。
+ * So that it can run next to a running development app, the data folders (userData and logs) move to the evaluation folder before
+ * the single-instance check. The settings in the real data folder are opened read-only during the evaluation (to borrow the endpoint and key; never written back).
  */
 const EVAL_SPEC = !app.isPackaged ? process.env.LONGHAND_EVAL : undefined;
-/** 実際の保存先（評価用に移す前の userData） */
+/** The real data folder (userData before it is moved for the evaluation) */
 const REAL_USER_DATA = app.getPath('userData');
 if (EVAL_SPEC) {
   const profile = path.join(evalRoot(), 'app-profile');
   fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
   app.setPath('userData', profile);
   app.setAppLogsPath(path.join(profile, 'logs'));
-  // 評価は画面を出さない。Dock のアイコンも出さない
+  // Evaluations show no windows and no Dock icon
   app.dock?.hide();
 }
 
 /**
- * Development end-to-end self-test (LONGHAND_DEBUG_SELFTEST=e2e, selftest/e2e.ts). It takes the real profile's single-instance lock
- * first, so it never runs next to a running Longhand (two helpers would compete for the keyboard), then moves to a temporary profile
- * so that the user's settings, dictionary and history are not touched. Speech models are read from the real profile.
+ * Development end-to-end self-test (LONGHAND_DEBUG_SELFTEST=e2e, selftest/e2e.ts). It always runs in a temporary profile.
  */
 const SELFTEST_E2E = !app.isPackaged && process.env.LONGHAND_DEBUG_SELFTEST === 'e2e';
-let haveLock = false;
-if (SELFTEST_E2E) {
-  haveLock = app.requestSingleInstanceLock();
-  if (haveLock) {
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-selftest-'));
-    app.setPath('userData', profile);
-    app.setAppLogsPath(path.join(profile, 'logs'));
-  } else {
-    console.error('Longhand is already running. Quit it before running the self-test.');
-  }
-} else {
-  haveLock = app.requestSingleInstanceLock();
+/**
+ * Development: run in a fresh temporary profile (LONGHAND_DEBUG_PROFILE=temp), so that the user's settings, dictionary and history
+ * are neither touched nor shown (for screen captures, for example). The real profile's single-instance lock is taken first, so it
+ * never runs next to a running Longhand (two helpers would compete for the keyboard). Speech models are read from the real profile.
+ */
+const TEMP_PROFILE = !app.isPackaged && (SELFTEST_E2E || process.env.LONGHAND_DEBUG_PROFILE === 'temp');
+const haveLock = app.requestSingleInstanceLock();
+if (haveLock && TEMP_PROFILE) {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), SELFTEST_E2E ? 'longhand-selftest-' : 'longhand-temp-'));
+  app.setPath('userData', profile);
+  app.setAppLogsPath(path.join(profile, 'logs'));
 }
 if (!haveLock) {
-  // 二重起動を防ぐ（CORE-2）
+  // Prevent a second instance (CORE-2)
+  if (TEMP_PROFILE) console.error('Longhand is already running. Quit it before running in a temporary profile.');
   app.quit();
   process.exit(SELFTEST_E2E ? 1 : 0);
 }
+/** Development: show the interface in this language without saving it (LONGHAND_DEBUG_UI_LANGUAGE=en or ja) */
+const DEBUG_UI_LANGUAGE = !app.isPackaged && isUiLanguage(process.env.LONGHAND_DEBUG_UI_LANGUAGE) ? process.env.LONGHAND_DEBUG_UI_LANGUAGE : null;
 
 initLogs(paths.logs);
 const log = createLogger('main');
@@ -99,8 +101,17 @@ if (SELFTEST_E2E) {
     hotkeys: { activate: [], lock: [], cancel: [], paste_last: [] },
   });
 }
+/** The system's preferred languages, most preferred first (macOS: System Settings > General > Language & Region) */
+const systemLanguages = (): string[] => {
+  try {
+    return app.getPreferredSystemLanguages();
+  } catch {
+    return [];
+  }
+};
+setUiLanguage(DEBUG_UI_LANGUAGE ?? settings.get().uiLanguage, systemLanguages());
 /** Speech models. The self-test reads them from the real profile */
-const modelsDir = SELFTEST_E2E ? path.join(REAL_USER_DATA, 'models') : paths.models;
+const modelsDir = TEMP_PROFILE ? path.join(REAL_USER_DATA, 'models') : paths.models;
 const customizations = new CustomizationsStore(paths.file('customizations.json'));
 const recordings = new RecordingStore(paths.recordings, () => ({
   hours: settings.get().recordingRetentionHours,
@@ -121,9 +132,9 @@ const asr = new AsrService(
   () => settings.get().language,
   paths.bundledModels,
 );
-// textfix の単語分割。単語分割を使う規則（つなぎの言葉、表記、助詞）か、手直しからの学習がオンのときだけ、裏で読み込む（メモリが約 200MB 増えるため）
+// textfix's tokenizer. Loaded in the background only when a rule that uses it (fillers, notation, particles) or learning from edits is on (it adds about 200MB of memory)
 const textfix = new TextFixService(() => paths.linderaWasm);
-// 手直しからの学習も、語の切り出しと読みに単語分割を使う
+// Learning from edits also uses the tokenizer to cut out words and get their readings
 const needsTokenizer = (s: Settings) => s.language === 'ja' && ((s.textFix.enabled && (s.textFix.fillers || s.textFix.notation || s.textFix.particles)) || s.learning.enabled);
 const models = new ModelDownloader({ modelsDir, bundledDir: paths.bundledModels, fetch: (url, init) => modelFetch(url, init) });
 const floater = new FloaterWindow();
@@ -157,7 +168,7 @@ function getProvider(): LlmProvider | null {
     cachedProvider = { key, provider };
     return provider;
   } catch (e) {
-    log.warn('LLM のプロバイダを作れませんでした', e);
+    log.warn('Could not create the LLM provider', e);
     return null;
   }
 }
@@ -180,44 +191,45 @@ const SYSTEM_SETTINGS = {
 const DAY_MS = 24 * 3600_000;
 
 type HudRun = { id: string; label: string; run: () => void };
-/** 呼び出し側が渡したボタンの動作（`${通知の id}:${ボタンの id}`） */
+/** Actions of buttons passed by callers (`${notification id}:${button id}`) */
 const hudActions = new Map<string, () => void>();
-/** 通知に決まって付くボタンの動作（N2） */
+/** Actions of the buttons that notifications always carry (N2) */
 const BUILTIN_ACTIONS: Record<string, () => void> = {
   'open-history': () => management.open('history'),
   'open-audio': () => management.open('settings/audio'),
   'open-connection': () => management.open('settings/connection'),
   'open-mic-privacy': () => void shell.openExternal(SYSTEM_SETTINGS.microphone),
   'open-accessibility': () => void shell.openExternal(SYSTEM_SETTINGS.accessibility),
-  'restart-helper': () => void helper.restart().catch((e) => log.error('ヘルパーの再起動に失敗', e)),
+  'restart-helper': () => void helper.restart().catch((e) => log.error('Failed to restart the helper', e)),
 };
-/** 解決するまで出しておく通知（key から表示中の id） */
+/** Notifications shown until resolved (key to the id on screen) */
 const stickyHuds = new Map<string, string>();
-/** この起動で出した通知（起動ごとに 1 回の判定） */
+/** Notifications shown in this launch (for once-per-launch) */
 const shownThisRun = new Set<string>();
-/** 録音中と処理中は保留している通知（学習語など） */
+/** Notifications held back while recording or processing (learned words, for example) */
 let deferredHuds: { key: NotificationKey; vars: Record<string, string>; actions: HudRun[]; at: number }[] = [];
-/** 保留した通知は、これより古くなったら捨てる */
+/** Held-back notifications older than this are dropped */
 const DEFER_MAX_MS = 30_000;
 
-/** 設定から作る差し込み（F4。通知の文言に実際のキーの割り当てを出す） */
+/** Placeholder values built from the settings (F4: notifications show the actual key bindings) */
 function hotkeyVars(): Record<string, string> {
   const h = settings.get().hotkeys;
-  const paste = bindingLabel(h.paste_last[0]);
+  const locale = currentLocale();
+  const paste = bindingLabel(h.paste_last[0], locale);
   return {
-    activate: bindingLabel(h.activate[0]) || 'fn',
-    cancel: bindingLabel(h.cancel[0]) || 'esc',
-    lockExtra: bindingLabel(extraKeys(h.lock[0] ?? [], h.activate[0] ?? [])),
-    paste: paste ? `${paste} で直前の書き起こしを貼り付けられます` : 'フローティングバーを右クリックして「直前の書き起こしを貼り付け」を選んでください',
+    activate: bindingLabel(h.activate[0], locale) || 'fn',
+    cancel: bindingLabel(h.cancel[0], locale) || 'esc',
+    lockExtra: bindingLabel(extraKeys(h.lock[0] ?? [], h.activate[0] ?? []), locale),
+    paste: paste ? t('hud.paste.withKey', { key: paste }) : t('hud.paste.fromMenu'),
   };
 }
 
 function micVars(mic: string): Record<string, string> {
-  const hint = /macbook/i.test(mic) ? 'ノート PC を閉じているときは、外付けのマイクを使ってください' : 'ミュートと入力音量を確認してください';
+  const silence = !mic ? t('hud.silence.unknown') : /macbook/i.test(mic) ? t('hud.silence.laptop', { mic }) : t('hud.silence.mic', { mic });
   return {
-    mic: mic || '新しいマイク',
-    micParen: mic ? `（${mic}）` : '',
-    silenceDetail: `${mic ? `${mic} からの音声` : '録音した音声'}が無音でした。${hint}`,
+    mic: mic || t('hud.mic.fallback'),
+    micParen: mic ? t('hud.mic.paren', { mic }) : '',
+    silenceDetail: silence,
   };
 }
 
@@ -230,7 +242,7 @@ function showHud(key: NotificationKey, vars: Record<string, string> = {}, action
   }
   const s = settings.get();
   const now = Date.now();
-  // 整形の失敗が続くときは、2 回目からは小さく出す（N9）
+  // When formatting keeps failing, show it small from the second time on (N9)
   if (key === 'LlmFailed') {
     const last = s.notifications.LlmFailed?.last ?? 0;
     if (now - last < 10 * 60_000) {
@@ -239,7 +251,7 @@ function showHud(key: NotificationKey, vars: Record<string, string> = {}, action
     }
   }
   if (key === 'HoldLongHint' && !s.hotkeys.lock[0]?.length) return;
-  // 学習した語が複数なら、件数の形にして 1 行に収める（N10）
+  // Several learned words become a count, to fit on one line (N10)
   if (key === 'WordsLearned' && vars.words?.includes('」「')) {
     const words = vars.words.split('」「');
     showHud('WordsLearnedMany', { first: words[0], count: String(words.length) }, actions);
@@ -248,7 +260,7 @@ function showHud(key: NotificationKey, vars: Record<string, string> = {}, action
   if (!shouldShow(key, def, s.notifications[key], now, shownThisRun)) return;
   const msg = buildHud(
     key,
-    // 呼び出し側の空の値（マイク名が分からないときの '' など）は、こちらで分かる値を上書きしない
+    // Empty values from the caller ('' when the microphone name is unknown, for example) do not override values known here
     { ...hotkeyVars(), ...micVars(vars.mic || session.mic || micHealth.lastDevice), ...Object.fromEntries(Object.entries(vars).filter(([, v]) => v !== '')) },
     actions.map((a) => ({ id: a.id, label: a.label })),
   );
@@ -260,7 +272,7 @@ function showHud(key: NotificationKey, vars: Record<string, string> = {}, action
   floater.hud(msg);
 }
 
-/** 解決した通知を消す（権限が戻った、マイクがつながった、など） */
+/** Removes a notification that was resolved (permission restored, microphone connected, and so on) */
 function resolveHud(key: NotificationKey): boolean {
   const id = stickyHuds.get(key);
   if (!id) return false;
@@ -275,7 +287,7 @@ function deferHud(key: NotificationKey, vars: Record<string, string>, actions: H
     deferredHuds.push({ key, vars, actions, at: Date.now() });
     return;
   }
-  // 続けて学習した語は 1 件にまとめる（N10）
+  // Words learned in a row are merged into one notification (N10)
   if (vars.words) prev.vars = { ...prev.vars, words: [prev.vars.words, vars.words].filter(Boolean).join('」「') };
   for (const a of actions) {
     const same = prev.actions.find((x) => x.id === a.id);
@@ -298,13 +310,13 @@ function flushDeferredHuds(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 録音の様子から出す表示（F1 の補助、F5、N6、N7、N12）
+// What is shown based on how recording goes (supporting F1, F5, N6, N7, N12)
 // ---------------------------------------------------------------------------
 
 const micHealth = new MicHealth(paths.file('mic-health.json'));
-/** 録音中のセッションの記録 */
+/** Record of the session being recorded */
 const session = { active: false, startedAt: 0, mic: '', changeShown: false };
-/** 音声認識の準備中に録音しようとしたか（準備ができたら知らせる） */
+/** Whether the user tried to record while speech recognition was preparing (tell them when it is ready) */
 let triedWhilePreparing = false;
 let asrWasReady = false;
 let flashTimer: NodeJS.Timeout | null = null;
@@ -325,7 +337,7 @@ function onFloaterState(patch: Partial<FloaterState>): void {
     if (next.flash) floater.setState({ flash: null });
   }
 
-  // 前回と違うマイクで録り始めたら知らせる（N7）
+  // Tell the user when recording starts with a different microphone than last time (N7)
   if (session.active && patch.micName && patch.micName !== session.mic) {
     session.mic = patch.micName;
     const before = micHealth.lastDevice;
@@ -338,7 +350,7 @@ function onFloaterState(patch: Partial<FloaterState>): void {
 
   if (session.active && recording(prev.phase) && !recording(next.phase)) {
     session.active = false;
-    // 音が小さいマイクを知らせる（N6）。controller からマイク名が届いていなければ、設定から推定する
+    // Report a quiet microphone (N6). If the controller sent no microphone name, guess it from the settings
     session.mic ||= guessMicName();
     const verdict = micHealth.end(session.mic, Date.now() - session.startedAt);
     if (verdict?.quiet) showHud('QuietMicrophone', { mic: session.mic });
@@ -346,7 +358,7 @@ function onFloaterState(patch: Partial<FloaterState>): void {
 
   if (prev.phase !== 'idle' && next.phase === 'idle') {
     flushDeferredHuds();
-    // 貼り付けに成功したら、待機のバーで短く知らせる（F5）
+    // After a successful paste, show it briefly on the idle bar (F5)
     if (prev.phase === 'finalizing' && prev.stage === 'pasting') {
       const last: HistoryItem | undefined = history.list()[0];
       if (last?.paste === 'pasted' && Date.now() - last.timestamp < 10 * 60_000) {
@@ -359,7 +371,7 @@ function onFloaterState(patch: Partial<FloaterState>): void {
   updateTray();
 }
 
-/** 録音に使っているはずのマイクの名前（選んだマイク、なければシステムの既定） */
+/** Name of the microphone that should be recording (the chosen one, or else the system default) */
 function guessMicName(): string {
   const id = settings.get().microphoneId;
   return (id && devices.find((d) => d.id === id)?.name) || devices.find((d) => d.isDefault)?.name || '';
@@ -368,11 +380,11 @@ function guessMicName(): string {
 function onLevel(rms: number): void {
   floater.level(rms);
   if (!session.active) return;
-  // 録音中に音が届かないこと（MicNoSignal）は controller がピークで判定して知らせる
+  // The controller detects no sound while recording (MicNoSignal) from the peak and reports it
   micHealth.push(rms);
 }
 
-/** 音声認識の準備ができたことを知らせる（N12） */
+/** Tells the user that speech recognition is ready (N12) */
 function onAsrStatus(): void {
   if (asr.status !== 'ready' || asrWasReady) return;
   asrWasReady = true;
@@ -385,7 +397,7 @@ function onAsrStatus(): void {
 }
 
 // ---------------------------------------------------------------------------
-// 状態の配信
+// Broadcasting state
 // ---------------------------------------------------------------------------
 
 function engineStatus(): EngineStatus {
@@ -397,7 +409,7 @@ function engineStatus(): EngineStatus {
   };
 }
 
-/** 画面の書き出し（LONGHAND_DEBUG_CAPTURE）で、権限と状態を仮に変えて表示を確かめるためのもの */
+/** For screen capture (LONGHAND_DEBUG_CAPTURE): temporarily changes permissions and state to check how they are shown */
 const debugOverride: { permissions?: Partial<PermissionStatus>; status?: Partial<EngineStatus>; history?: HistoryItem[] } = {};
 
 function snapshot(): AppSnapshot {
@@ -411,6 +423,7 @@ function snapshot(): AppSnapshot {
     permissions: { ...permissions, ...debugOverride.permissions },
     version: app.getVersion(),
     paths: { userData: paths.userData, logs: paths.logs, recordings: paths.recordings, models: paths.models },
+    locale: currentLocale(),
   };
 }
 
@@ -428,19 +441,19 @@ function broadcast(): void {
 }
 
 function statusLine(): string {
-  if (controller?.isRecording) return '● 録音中';
-  if (helper.status !== 'running') return 'ヘルパーを起動しています…';
-  if (asr.status === 'loading' || asr.status === 'starting') return '音声認識を準備しています…';
-  return `${hotkeyVars().activate} を押しながら話してください`;
+  if (controller?.isRecording) return t('tray.status.recording');
+  if (helper.status !== 'running') return t('tray.status.startingHelper');
+  if (asr.status === 'loading' || asr.status === 'starting') return t('tray.status.preparingAsr');
+  return t('tray.status.ready', { activate: hotkeyVars().activate });
 }
 
 function warnings(): TrayWarning[] {
   const w: TrayWarning[] = [];
-  if (helper.status === 'failed') w.push({ label: 'ヘルパーが動いていません', page: 'settings/about' });
-  if (asr.status === 'failed' || asr.status === 'missing') w.push({ label: '音声認識が使えません', page: 'settings/connection' });
-  if (!permissions.accessibility) w.push({ label: 'アクセシビリティの許可が必要です', page: 'settings/about' });
-  if (permissions.microphone === 'denied') w.push({ label: 'マイクの許可が必要です', page: 'settings/about' });
-  if (!getProvider() && !settings.get().skipLlm) w.push({ label: 'LLM が未設定です（整形なし）', page: 'settings/connection' });
+  if (helper.status === 'failed') w.push({ label: t('tray.warning.helper'), page: 'settings/about' });
+  if (asr.status === 'failed' || asr.status === 'missing') w.push({ label: t('tray.warning.asr'), page: 'settings/connection' });
+  if (!permissions.accessibility) w.push({ label: t('tray.warning.accessibility'), page: 'settings/about' });
+  if (permissions.microphone === 'denied') w.push({ label: t('tray.warning.microphone'), page: 'settings/about' });
+  if (!getProvider() && !settings.get().skipLlm) w.push({ label: t('tray.warning.llm'), page: 'settings/connection' });
   return w;
 }
 
@@ -455,7 +468,7 @@ function updateFloaterVisibility(): void {
   if (floater.getState().visible !== visible) floater.setState({ visible });
 }
 
-// スヌーズの期限切れを拾う
+// Pick up expired snoozes
 setInterval(() => {
   const s = settings.get();
   if (s.floaterSnoozeUntil !== null && s.floaterSnoozeUntil !== -1 && s.floaterSnoozeUntil <= Date.now()) {
@@ -464,7 +477,7 @@ setInterval(() => {
 }, 15_000).unref();
 
 // ---------------------------------------------------------------------------
-// ヘルパー
+// Helper
 // ---------------------------------------------------------------------------
 
 function helperConfig(): ConfigurePayload {
@@ -478,7 +491,7 @@ async function refreshPermissions(prompt?: 'accessibility' | 'microphone'): Prom
     const p = await helper.request<PermissionsResultPayload>('permissions', prompt ? { prompt } : {}, prompt === 'microphone' ? 60000 : 3000);
     permissions = { ...p, helperRunning: true };
   } catch {
-    // ヘルパーが動いていなければ、本体から分かる範囲で埋める
+    // If the helper is not running, fill in what the app itself can tell
     permissions = {
       accessibility: systemPreferences.isTrustedAccessibilityClient(false),
       microphone: systemPreferences.getMediaAccessStatus('microphone') as PermissionStatus['microphone'],
@@ -491,34 +504,34 @@ async function refreshPermissions(prompt?: 'accessibility' | 'microphone'): Prom
   return permissions;
 }
 
-/** 起動後に一度でも権限を確かめたか（起動直後の既定値からの変化を「外れた」と誤解しないため） */
+/** Whether permissions have been checked at least once since launch (so that a change from the initial defaults is not mistaken for a revocation) */
 let permissionsKnown = false;
-/** この起動でアクセシビリティが外れたことを知らせたか */
+/** Whether the loss of accessibility permission was reported in this launch */
 let accessibilityLostShown = false;
 
-/** 権限の変化に応じた案内（N13）。許可が外れたら消えない通知を出し、戻ったらヘルパーを設定し直す */
+/** Guidance on permission changes (N13). When a permission is revoked, shows a notification that stays; when it is back, sets up the helper again */
 function onPermissionsChanged(prev: PermissionStatus, next: PermissionStatus): void {
   if (next.microphone === 'granted') resolveHud('MicPermissionDenied');
   if (!permissionsKnown || prev.accessibility === next.accessibility) return;
   if (!next.accessibility) {
-    log.warn('アクセシビリティの許可が外れました');
+    log.warn('Accessibility permission was revoked');
     if (settings.get().onboardingComplete) {
       accessibilityLostShown = true;
       showHud('AccessibilityRevoked');
     }
     return;
   }
-  log.info('アクセシビリティが許可されました');
+  log.info('Accessibility permission was granted');
   resolveHud('AccessibilityRevoked');
   if (accessibilityLostShown) showHud('AccessibilityRestored');
   accessibilityLostShown = false;
-  // 許可がない間に作れなかったキーの監視を作り直す
-  if (helper.status === 'running') void helper.restart().catch((e) => log.error('ヘルパーの再起動に失敗', e));
-  // 初回の案内の途中なら、システム設定から Longhand の画面に戻す（O2）
+  // Recreate the key monitoring that could not be set up without the permission
+  if (helper.status === 'running') void helper.restart().catch((e) => log.error('Failed to restart the helper', e));
+  // During first-run setup, bring the user back from System Settings to Longhand (O2)
   if (!settings.get().onboardingComplete) management.open();
 }
 
-/** アクセシビリティの許可を 2 秒ごとに確かめる。変わったときだけヘルパーにも問い合わせる */
+/** Checks accessibility permission every 2 seconds. Asks the helper too only when it changes */
 function watchAccessibility(): void {
   let trusted = systemPreferences.isTrustedAccessibilityClient(false);
   setInterval(() => {
@@ -533,7 +546,7 @@ async function startHelper(): Promise<void> {
   try {
     await helper.start();
   } catch (e) {
-    log.error('ヘルパーを起動できませんでした', e);
+    log.error('Could not start the helper', e);
     showHud('HelperFailed');
   }
 }
@@ -541,9 +554,9 @@ async function startHelper(): Promise<void> {
 helper.on('ready', async () => {
   try {
     const res = await helper.configure(helperConfig());
-    if (res.errors.length) log.warn('ホットキーの設定の一部を受け付けませんでした', res.errors);
+    if (res.errors.length) log.warn('Some hotkey settings were not accepted', res.errors);
   } catch (e) {
-    log.warn('ヘルパーの設定に失敗しました', e);
+    log.warn('Failed to configure the helper', e);
   }
   await refreshPermissions();
   devices = (await controller?.refreshDevices()) ?? [];
@@ -565,16 +578,16 @@ helper.on('message', (m: HelperToMain) => {
     case 'audio_devices_changed': {
       const before = new Set(devices.map((d) => d.id));
       devices = m.payload.devices;
-      // 「マイクが見つかりません」の表示中につながったら、その通知を置き換える（N7）
+      // If a microphone is connected while "No microphone" is shown, replace that notification (N7)
       const added = devices.filter((d) => !d.isVirtual && !before.has(d.id));
-      if (added.length && resolveHud('NoMicrophone')) showHud('MicrophoneConnected', { name: added.map((d) => d.name).join('、') });
+      if (added.length && resolveHud('NoMicrophone')) showHud('MicrophoneConnected', { name: added.map((d) => d.name).join(t('common.listSeparator')) });
       broadcast();
       break;
     }
     case 'event_tap':
       log.info(`event tap: ${m.payload.status}${m.payload.pid ? ` (pid ${m.payload.pid} ${m.payload.name ?? ''})` : ''}`);
-      if (m.payload.status === 'rival_in_front') showHud('HotkeyRival', { name: m.payload.name ?? '別のアプリ' });
-      if (m.payload.status === 'rival_in_front') log.warn(`別のアプリ（${m.payload.name ?? m.payload.pid}）がキー入力を先に受け取っています。ホットキーが効かないときはそのアプリを終了してください`);
+      if (m.payload.status === 'rival_in_front') showHud('HotkeyRival', { name: m.payload.name ?? t('hud.rival.unknownApp') });
+      if (m.payload.status === 'rival_in_front') log.warn(`Another app (${m.payload.name ?? m.payload.pid}) receives key presses first. If the hotkeys do not work, quit that app`);
       if (m.payload.status === 'failed') void refreshPermissions();
       break;
     case 'log':
@@ -588,10 +601,10 @@ asr.on('status', () => {
 });
 models.on('change', () => broadcast());
 
-// 設定が変わったら、関係する部分に反映する
+// Apply settings changes to the parts they affect
 settings.on('change', (next: Settings, prev: Settings) => {
   if (JSON.stringify(next.hotkeys) !== JSON.stringify(prev.hotkeys) || next.suppressGlobe !== prev.suppressGlobe || next.chromiumEnhancedUI !== prev.chromiumEnhancedUI) {
-    helper.configure(helperConfig()).catch((e) => log.warn('ホットキーの再設定に失敗', e));
+    helper.configure(helperConfig()).catch((e) => log.warn('Failed to reconfigure the hotkeys', e));
   }
   if (next.launchAtLogin !== prev.launchAtLogin) applyLoginItem(next.launchAtLogin);
   const asrChanged =
@@ -602,11 +615,13 @@ settings.on('change', (next: Settings, prev: Settings) => {
     (next.language !== prev.language && (next.language === 'en' || prev.language === 'en'));
   if (asrChanged) void asr.restart();
   if (next.appearance !== prev.appearance) nativeTheme.themeSource = next.appearance;
+  // The tray menu and the windows follow on the broadcast below; the application menu is built once, so build it again
+  if (next.uiLanguage !== prev.uiLanguage && setUiLanguage(DEBUG_UI_LANGUAGE ?? next.uiLanguage, systemLanguages())) setAppMenu();
   if (needsTokenizer(next) && !needsTokenizer(prev)) void textfix.load();
   broadcast();
 });
 customizations.on('change', () => broadcast());
-// 辞書の英字の語の読みの候補を LLM で作る（G4-11）。LLM を使えなければ作らない
+// Generate reading candidates for Latin-script dictionary words with the LLM (G4-11). None when no LLM is available
 customizations.setReadingGenerator((words) => {
   const p = getProvider();
   return p ? generateReadings(words, p) : Promise.resolve(null);
@@ -624,7 +639,7 @@ function handle<A extends unknown[], R>(channel: string, fn: (...args: A) => R |
 async function testLlm(): Promise<ConnectionTestResult> {
   cachedProvider = null;
   const provider = getProvider();
-  if (!provider) return { ok: false, elapsedMs: 0, error: '接続先、モデル名、API キーのいずれかが未設定です' };
+  if (!provider) return { ok: false, elapsedMs: 0, error: t('main.test.llmNotConfigured') };
   const started = Date.now();
   const res = await formatText({
     mode: 'dictation',
@@ -642,8 +657,8 @@ async function testLlm(): Promise<ConnectionTestResult> {
 }
 
 async function testAsr(): Promise<AsrTestResult> {
-  if (!asr.ready) return { ok: false, error: asr.message || '音声認識が準備できていません' };
-  // 直近の録音があればそれで、なければ 1 秒の無音で動作を確かめる
+  if (!asr.ready) return { ok: false, error: asr.message || t('main.test.asrNotReady') };
+  // Test with the latest recording if there is one, otherwise with 1 second of silence
   const last = history.list().find((h) => h.audioFile);
   let samples: Float32Array = new Float32Array(16000);
   if (last?.audioFile) {
@@ -652,7 +667,7 @@ async function testAsr(): Promise<AsrTestResult> {
   }
   try {
     const res = await asr.transcribe(samples, { language: settings.get().language, hints: customizations.asrHints(), timeoutMs: 60000 });
-    return { ok: true, text: res.text || '（無音）', elapsedMs: res.elapsedMs };
+    return { ok: true, text: res.text || t('main.test.silence'), elapsedMs: res.elapsedMs };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
@@ -660,9 +675,9 @@ async function testAsr(): Promise<AsrTestResult> {
 
 const CONNECTION_FIELDS = ['provider', 'baseUrl', 'model', 'headers', 'timeoutMs', 'maxOutputTokens', 'structuredOutput', 'extraBody', 'azure', 'anthropic', 'custom'] as const;
 
-/** マイクのテスト。数秒録音して、音の大きさを返す（録音は保存しない） */
+/** Microphone test. Records for a few seconds and returns the level (the recording is not kept) */
 async function testMicrophone(seconds: number): Promise<{ ok: boolean; peak: number; rms: number; chunks?: number; error?: string }> {
-  if (controller?.isRecording) return { ok: false, peak: 0, rms: 0, error: '録音中は試せません' };
+  if (controller?.isRecording) return { ok: false, peak: 0, rms: 0, error: t('main.test.micWhileRecording') };
   const sessionId = -Date.now();
   let peak = 0;
   let sumSq = 0;
@@ -687,44 +702,44 @@ async function testMicrophone(seconds: number): Promise<{ ok: boolean; peak: num
     return { ok: false, peak, rms: 0, error: (e as Error).message };
   } finally {
     helper.off('message', onMsg);
-    // 開始が遅れて時間切れになっても、後から始まった録音を残さない
+    // Even if the start was late and timed out, do not leave a recording that started afterwards
     if (!stopped) helper.send('audio_stop', { sessionId });
   }
 }
 
-/** 履歴の項目をやり直す（H1）。書き起こし直す場合は録音から、整形だけなら残っている書き起こしから */
+/** Redoes a history item (H1). Transcribing again starts from the recording; formatting only starts from the saved transcript */
 async function redoHistory(id: string, opts: Parameters<LonghandApi['redoHistory']>[1]): Promise<{ ok: boolean; error?: string }> {
   const item = history.get(id);
-  if (!item) return { ok: false, error: '履歴が見つかりません' };
-  if (item.mode === 'edit') return { ok: false, error: '編集の結果はやり直せません' };
+  if (!item) return { ok: false, error: t('main.history.notFound') };
+  if (item.mode === 'edit') return { ok: false, error: t('main.history.editCannotRedo') };
   const cfg = settings.get();
   const language = (opts.language ?? item.language) as Settings['language'];
   let rawText = item.rawText;
   let asrMs = item.timings.asrMs;
   if (opts.kind === 'transcribe') {
-    if (!item.audioFile) return { ok: false, error: '録音が残っていません' };
-    if (!asr.ready) return { ok: false, error: asr.message || '音声認識の準備ができていません' };
+    if (!item.audioFile) return { ok: false, error: t('main.history.noRecording') };
+    if (!asr.ready) return { ok: false, error: asr.message || t('main.history.asrNotReady') };
     const buf = recordings.read(item.audioFile);
-    if (!buf) return { ok: false, error: '録音を読み込めませんでした' };
+    if (!buf) return { ok: false, error: t('main.history.readFailed') };
     const { samples } = decodeWav(buf);
     const started = Date.now();
     try {
       const build = (hints: string[]) => ({ language, hints, timeoutMs: 15000 + Math.ceil(samples.length / 16000 / 60) * 4000 });
       const hints = customizations.asrHints();
-      // 語彙ヒントの使い方は、音声入力のときと同じにする（asr/selectiveHints.ts）
+      // Use vocabulary hints the same way as in dictation (asr/selectiveHints.ts)
       const res =
         cfg.asr.hintMode === 'selective' && hints.length ? await transcribeSelective((opts) => asr.transcribe(samples, opts), build(hints), build([])) : await asr.transcribe(samples, build(hints));
       rawText = res.text.trim();
     } catch (e) {
-      return { ok: false, error: `書き起こしに失敗しました: ${(e as Error).message}` };
+      return { ok: false, error: t('main.history.transcribeFailed', { error: (e as Error).message }) };
     }
     asrMs = Date.now() - started;
     if (!rawText) {
-      history.update(id, { rawText: '', text: '', language, llmError: '音声を聞き取れませんでした' });
-      return { ok: false, error: '音声を聞き取れませんでした' };
+      history.update(id, { rawText: '', text: '', language, llmError: t('main.history.noSpeech') });
+      return { ok: false, error: t('main.history.noSpeech') };
     }
   }
-  if (!rawText.trim()) return { ok: false, error: '書き起こしがありません。先に書き起こし直してください' };
+  if (!rawText.trim()) return { ok: false, error: t('main.history.noTranscript') };
   const provider = cfg.skipLlm ? null : getProvider();
   const fmt = await formatText({
     mode: 'dictation',
@@ -748,17 +763,17 @@ async function redoHistory(id: string, opts: Parameters<LonghandApi['redoHistory
   return { ok: true };
 }
 
-/** 履歴の文を手で直す（G4-08）。直した語は、貼り付け後の手直しと同じ規則（候補の数の上限、LLM の判定）で辞書に学習する */
+/** Edits the text of a history item by hand (G4-08). Corrected words are learned into the dictionary with the same rules as edits after pasting (candidate limit, LLM check) */
 async function editHistory(id: string, text: string): ReturnType<LonghandApi['editHistory']> {
   const item = history.get(id);
-  if (!item) return { ok: false, error: '履歴が見つかりません' };
+  if (!item) return { ok: false, error: t('main.history.notFound') };
   const edited = text.trim();
-  if (!edited) return { ok: false, error: '空にはできません。消すときは「削除」を使ってください' };
+  if (!edited) return { ok: false, error: t('main.history.empty') };
   const original = item.text || item.rawText;
   if (edited === original.trim()) return { ok: true, learned: [] };
   history.update(id, { text: edited });
   const cfg = settings.get();
-  // 編集モードの結果は LLM が書いた文なので、聞き間違いの学習には使わない
+  // Results of edit mode were written by the LLM, so they are not used to learn mishearings
   if (!cfg.learning.enabled || item.mode === 'edit' || !original.trim()) return { ok: true, learned: [] };
   try {
     const r = await learnFromEdit(original, edited, {
@@ -766,14 +781,14 @@ async function editHistory(id: string, text: string): ReturnType<LonghandApi['ed
       blocked: customizations.get().blockedLearnedWords,
       provider: cfg.skipLlm ? null : getProvider(),
       timeoutMs: cfg.llm.timeoutMs,
-      // 整形の前の書き起こし。整形した文を直したときだけ、整形の書き換えを戻した手直しを見分ける
+      // The transcript before formatting. Only when formatted text was edited, it tells apart edits that undo the formatting's rewrites
       rawText: item.formatted ? item.rawText : undefined,
       tokenizer: textfix.get(),
     });
     const applied = applyLearning(customizations, r);
     log.info(
-      `履歴の手直しから学習しました（語 ${applied.words.length}、聞き違えた形 ${applied.forms.length}、取り違えの組 ${applied.corrections.length}、` +
-        `書き換えない語句 ${applied.kept.length}、number styles ${applied.numbers.length}）${r.skipped ? `（${r.skipped}）` : ''}`,
+      `Learned from a history edit (words ${applied.words.length}, misheard forms ${applied.forms.length}, swapped pairs ${applied.corrections.length}, ` +
+        `kept phrases ${applied.kept.length}, number styles ${applied.numbers.length})${r.skipped ? ` (${r.skipped})` : ''}`,
     );
     return {
       ok: true,
@@ -782,7 +797,7 @@ async function editHistory(id: string, text: string): ReturnType<LonghandApi['ed
       tooMany: r.skipped === 'too_many',
     };
   } catch (e) {
-    log.warn('履歴の手直しからの学習に失敗しました', e);
+    log.warn('Failed to learn from a history edit', e);
     return { ok: true, learned: [] };
   }
 }
@@ -849,7 +864,7 @@ function registerIpc(): void {
   handle('cancelModelDownload', () => models.cancel());
   handle('importModel', async () => {
     const res = await dialog.showOpenDialog({
-      title: 'モデルのファイルかフォルダを選ぶ',
+      title: t('main.dialog.importModel'),
       properties: ['openFile', 'openDirectory', 'multiSelections'],
     });
     if (res.canceled || !res.filePaths.length) return { ok: false, imported: [], rejected: [] };
@@ -863,7 +878,7 @@ function registerIpc(): void {
     const llm = settings.get().llm;
     const out: Record<string, unknown> = {};
     for (const k of CONNECTION_FIELDS) out[k] = llm[k];
-    // 認証情報らしいヘッダは書き出さない（ファイルは人に渡す前提なので、API キーと同じ扱いにする）
+    // Do not export headers that look like credentials (the file is meant to be shared, so they are treated like the API key)
     const secretHeader = (name: string) =>
       /authorization|api[-_]?key|token|secret|password|cookie/i.test(name) || (llm.provider === 'custom-http' && name.toLowerCase() === llm.custom.authHeader.toLowerCase());
     const removed = Object.keys(llm.headers).filter(secretHeader);
@@ -927,76 +942,76 @@ function registerIpc(): void {
   });
 }
 
-/** フローティングバーの右クリックメニュー（UI-5） */
+/** Right-click menu of the floating bar (UI-5) */
 function showFloaterMenu(): void {
   const s = settings.get();
   const recording = !!controller?.isRecording;
   Menu.buildFromTemplate([
-    { label: recording ? '確定して貼り付け' : '録音を開始（ハンズフリー）', click: () => controller?.uiAction(recording ? 'finish' : 'start') },
-    { label: '直前の書き起こしを貼り付け', click: () => void controller?.pasteLast() },
+    { label: recording ? t('main.floaterMenu.finishAndPaste') : t('main.floaterMenu.startHandsFree'), click: () => controller?.uiAction(recording ? 'finish' : 'start') },
+    { label: t('tray.menu.pasteLast'), click: () => void controller?.pasteLast() },
     { type: 'separator' },
     {
-      label: 'マイク',
+      label: t('tray.menu.microphone'),
       submenu: [
-        { label: 'システムの既定', type: 'radio', checked: !s.microphoneId, click: () => settings.update({ microphoneId: null }) },
+        { label: t('tray.menu.systemDefault'), type: 'radio', checked: !s.microphoneId, click: () => settings.update({ microphoneId: null }) },
         ...devices.filter((d) => !d.isVirtual).map((d) => ({ label: d.name, type: 'radio' as const, checked: s.microphoneId === d.id, click: () => settings.update({ microphoneId: d.id }) })),
       ],
     },
     {
-      label: '言語',
+      label: t('tray.menu.language'),
       submenu: (['ja', 'en', 'auto'] as const).map((l) => ({
-        label: { ja: '日本語', en: 'English', auto: '自動判定' }[l],
+        label: t(`tray.language.${l}`),
         type: 'radio' as const,
         checked: s.language === l,
         click: () => settings.update({ language: l }),
       })),
     },
     { type: 'separator' },
-    { label: '履歴を開く…', click: () => management.open('history') },
-    { label: '設定…', click: () => management.open('settings') },
+    { label: t('tray.menu.openHistory'), click: () => management.open('history') },
+    { label: t('tray.menu.settings'), click: () => management.open('settings') },
     { type: 'separator' },
     {
-      label: 'フローティングバーを隠す',
+      label: t('main.floaterMenu.hide'),
       submenu: [
         ...[1, 15, 60].map((min) => ({
-          label: min < 60 ? `${min} 分間` : '1 時間',
+          label: min < 60 ? t('main.floaterMenu.minutes', { minutes: min }) : t('main.floaterMenu.hour'),
           click: () => settings.update({ floaterSnoozeUntil: Date.now() + min * 60_000 }),
         })),
-        { label: '戻すまで', click: () => settings.update({ floaterSnoozeUntil: -1 }) },
+        { label: t('main.floaterMenu.untilShown'), click: () => settings.update({ floaterSnoozeUntil: -1 }) },
       ],
     },
   ]).popup();
 }
 
 // ---------------------------------------------------------------------------
-// 起動と終了
+// Startup and shutdown
 // ---------------------------------------------------------------------------
 
 function setAppMenu(): void {
-  // メニューバーは出ないが、編集のショートカット（⌘C / ⌘V / ⌘A など）と ⌘Q / ⌘W のために定義する
+  // No menu bar is shown, but the menu is defined for the editing shortcuts (⌘C / ⌘V / ⌘A and so on) and ⌘Q / ⌘W
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       {
         label: 'Longhand',
         submenu: [
-          { label: '設定…', accelerator: 'Command+,', click: () => management.open('settings') },
+          { label: t('tray.menu.settings'), accelerator: 'Command+,', click: () => management.open('settings') },
           { type: 'separator' },
-          { label: 'ウィンドウを閉じる', accelerator: 'Command+Q', click: () => quitOrHide() },
+          { label: t('main.appMenu.closeWindow'), accelerator: 'Command+Q', click: () => quitOrHide() },
         ],
       },
       { role: 'editMenu' },
-      { label: 'ウィンドウ', submenu: [{ role: 'close' }, { role: 'minimize' }, { role: 'reload', visible: !app.isPackaged }, { role: 'toggleDevTools', visible: !app.isPackaged }] },
+      { label: t('main.appMenu.window'), submenu: [{ role: 'close' }, { role: 'minimize' }, { role: 'reload', visible: !app.isPackaged }, { role: 'toggleDevTools', visible: !app.isPackaged }] },
     ]),
   );
 }
 
-/** ⌘Q は UI だけを閉じて常駐を続ける（CORE-5）。完全な終了はトレイから */
+/** ⌘Q closes only the UI and keeps running in the background (CORE-5). Quitting completely is done from the tray */
 function quitOrHide(): void {
   if (settings.get().quitOnlyFromTray) management.close();
   else quitCompletely();
 }
 
-/** 完全に終了する。後始末は before-quit で行う */
+/** Runs the end-to-end self-test and returns its exit code */
 async function runSelfTestE2E(input: VirtualInputHelper): Promise<number> {
   const say = (line: string) => {
     log.info(`selftest-e2e: ${line}`);
@@ -1020,6 +1035,7 @@ async function runSelfTestE2E(input: VirtualInputHelper): Promise<number> {
   });
 }
 
+/** Quits completely. Cleanup happens in before-quit */
 function quitCompletely(): void {
   if (quitting) return;
   app.quit();
@@ -1027,18 +1043,18 @@ function quitCompletely(): void {
 
 app.on('second-instance', () => management.open());
 app.on('window-all-closed', () => {
-  // 常駐アプリなので、ウィンドウを閉じても終了しない
+  // A background app: closing the windows does not quit
 });
-// ここに来るのは、完全な終了の要求だけである。⌘Q はメニューの項目（quitOrHide）が先に受けるので、ここには来ない。
-// 来るのは、トレイの「終了」、ターミナルからの信号（SIGTERM、SIGINT、SIGHUP）、ログアウトやシステムの終了、
-// アクティビティモニタの「終了」である。ここで終了を取り消すと、ログアウトやシステムの終了まで止めてしまう。
+// Only requests to quit completely arrive here. ⌘Q is taken first by the menu item (quitOrHide), so it never arrives here.
+// What arrives is "Quit" in the tray, signals from the terminal (SIGTERM, SIGINT, SIGHUP), logging out or shutting down,
+// and "Quit" in Activity Monitor. Cancelling the quit here would also block logging out and shutting down.
 //
-// 信号は、Electron が自分で受けて app.quit() と同じ処理に回す。process.on('SIGTERM') は効かない
-// （main のスクリプトを読んだ後に、Electron が信号の受け口を自分のものに付け替えるため）。
+// Electron receives the signals itself and routes them to the same path as app.quit(). process.on('SIGTERM') has no effect
+// (Electron replaces the signal handlers with its own after loading the main script).
 app.on('before-quit', () => {
   if (quitting) return;
   quitting = true;
-  log.info('終了します');
+  log.info('Quitting');
   models.cancel();
   controller?.dispose();
   helper.stop();
@@ -1048,9 +1064,9 @@ app.on('before-quit', () => {
   history.flush();
   recordings.stop();
   micHealth.flush();
-  // 後始末（ウィンドウ、ヘルパー、ASR ワーカー）が終わらなくても、必ず終了する
+  // Always quit, even if the cleanup (windows, helper, ASR workers) does not finish
   setTimeout(() => {
-    log.warn('終了の処理が 3 秒で終わらなかったので、強制的に終了します');
+    log.warn('Quitting did not finish within 3 seconds, so forcing the exit');
     app.exit(selfTestExitCode ?? 0);
   }, 3000).unref();
 });
@@ -1065,15 +1081,16 @@ app.on('will-quit', (e) => {
 
 app.whenReady().then(async () => {
   app.dock?.hide();
+  setUiLanguage(DEBUG_UI_LANGUAGE ?? settings.get().uiLanguage, systemLanguages());
   if (EVAL_SPEC) {
-    // 評価だけを走らせて終了する。ヘルパー、トレイ、フローティングバー、通常の ASR は起動しない
-    // （2 つ目のヘルパーが動くと、キー入力の取り合いが起きる）
+    // Run only the evaluation and quit. The helper, tray, floating bar and regular ASR are not started
+    // (a second helper would compete for key input)
     let code = 1;
     try {
       const { runEvalInApp } = await import('./evalInApp');
       code = await runEvalInApp(EVAL_SPEC, REAL_USER_DATA);
     } catch (e) {
-      console.error(`評価に失敗しました: ${redact((e as Error).message)}`);
+      console.error(`Evaluation failed: ${redact((e as Error).message)}`);
     }
     app.exit(code);
     return;
@@ -1083,7 +1100,7 @@ app.whenReady().then(async () => {
   setAppMenu();
   registerIpc();
 
-  // 設定ファイルの古い形式を補正しておく
+  // Fix up old formats in the settings file
   settings.update(mergeSettings(settings.get()) as DeepPartial<Settings>);
   applyLoginItem(settings.get().launchAtLogin);
 
@@ -1122,7 +1139,7 @@ app.whenReady().then(async () => {
       else if (mode === 'snooze-forever') settings.update({ floaterSnoozeUntil: -1 });
       else settings.update({ floaterSnoozeUntil: Date.now() + mode.snoozeMinutes * 60_000 });
     },
-    restartHelper: () => void helper.restart().catch((e) => log.error('ヘルパーの再起動に失敗', e)),
+    restartHelper: () => void helper.restart().catch((e) => log.error('Failed to restart the helper', e)),
     restartAsr: () => void asr.restart(),
     quit: () => quitCompletely(),
   });
@@ -1132,7 +1149,7 @@ app.whenReady().then(async () => {
   await startHelper();
   void asr.start();
   watchAccessibility();
-  // 起動の直後は避けて、少し後に読み込む（辞書の展開で約 120ms メインスレッドが止まる）
+  // Load a little later rather than right at startup (unpacking the dictionary blocks the main thread for about 120ms)
   if (needsTokenizer(settings.get())) setTimeout(() => void textfix.load(), 3000);
 
   if (SELFTEST_E2E && virtualInput) {
@@ -1142,16 +1159,16 @@ app.whenReady().then(async () => {
       quitCompletely();
     });
   } else if (process.env.LONGHAND_DEBUG_SELFTEST === 'mouse-hold' && !app.isPackaged) {
-    // 開発用。通知を出して消すあいだ、実際のポインタでの当たり判定を外の道具で確かめる
+    // Development: while a notification is shown and dismissed, an external tool checks hit testing with the real pointer
     void runMouseHoldSelfTest(floater, (line) => log.info(`selftest: ${line}`)).then(() => quitCompletely());
   } else if (process.env.LONGHAND_DEBUG_SELFTEST === 'mouse' && !app.isPackaged) {
-    // 開発用の自己診断。フローティングバーが、マウスの操作を受け取る状態のまま戻らなくならないかを確かめて終了する
+    // Development self-test: checks that the floating bar never gets stuck taking mouse events, then quits
     void runMouseRoutingSelfTest(floater).then((line) => {
       log.info(`selftest: ${line}`);
       quitCompletely();
     });
   } else if (process.env.LONGHAND_DEBUG_SELFTEST && !app.isPackaged) {
-    // 開発用の自己診断。ヘルパーとの録音のやり取り、ASR、単語分割の状態をログに書いて終了する
+    // Development self-test: logs the state of recording through the helper, ASR and the tokenizer, then quits
     const tokenizerLoad = textfix.load();
     setTimeout(async () => {
       const mic = await testMicrophone(1);
@@ -1174,7 +1191,7 @@ app.whenReady().then(async () => {
       hotkeyVars,
     });
   } else if (!settings.get().onboardingComplete) management.open('onboarding');
-  log.info(`起動しました（version=${app.getVersion()}）`);
+  log.info(`Started (version=${app.getVersion()})`);
 });
 
 process.on('uncaughtException', (e) => log.error('uncaughtException', e));

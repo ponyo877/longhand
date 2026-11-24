@@ -1,8 +1,8 @@
 /**
- * 発話ごとの採点と、その集計。
+ * Scoring per utterance, and its totals.
  *
- * 段階ごと（書き起こしの生の出力、読みの照合の後、LLM なしの最終、LLM ありの最終）に、正解との違いを数える。
- * 集計は数だけでできていて、文は含まない（summary.json と標準出力に出してよい）。
+ * For each stage (raw transcription output, after reading match, final without the LLM, final with the LLM), counts the differences from the reference.
+ * The totals are numbers only and contain no text (they may go to summary.json and standard output).
  */
 import type { Uncertain } from '../asr/hypotheses';
 import type { GuardSummary } from '../format/Formatter';
@@ -32,10 +32,10 @@ import type { StageTexts } from './pipeline';
 export type StageName = keyof StageTexts;
 export const STAGES: readonly StageName[] = ['asr', 'match', 'noLlm', 'final'];
 export const STAGE_LABELS: Record<StageName, string> = {
-  asr: '書き起こしの生の出力',
-  match: '読みの照合の後',
-  noLlm: 'LLM なしの最終',
-  final: 'LLM ありの最終',
+  asr: 'raw transcription',
+  match: 'after reading match',
+  noLlm: 'final without LLM',
+  final: 'final with LLM',
 };
 
 export type LlmMode = 'off' | 'live' | 'cache-only';
@@ -46,35 +46,35 @@ interface Hit {
 }
 
 export interface StageScore {
-  /** 中身の誤り（NFKC、小文字、句読点と空白を除く） */
+  /** Content errors (NFKC, lowercase, without punctuation and whitespace) */
   content: Cer;
-  /** 句読点込みの誤り（空白だけ除く） */
+  /** Errors including punctuation (only whitespace removed) */
   full: Cer;
-  /** 正解か別解と完全に一致 */
+  /** Exactly matches the reference or an alternative */
   exact: boolean;
   errors: ErrorBreakdown;
-  /** 正解に出る英字の語のうち、出力に出た数 */
+  /** How many Latin words in the reference appear in the output */
   latin: Hit;
 }
 
-/** 発話ごとの記録（rows.jsonl の 1 行）。文を含むので、評価のフォルダの外には出さない */
+/** Record per utterance (one line of rows.jsonl). It contains text, so it never leaves the evaluation folder */
 export interface RowRecord {
   id: string;
   dataset: string;
   split: Split;
   chunk: number;
   durationSec: number;
-  /** 正解が仮か */
+  /** Whether the reference is provisional */
   provisional: boolean;
   tags: string[];
-  /** 台本の文の種類（lexicon、number など）。無いデータセットでは付かない */
+  /** Kind of script sentence (lexicon, number, ...). Absent for datasets without it */
   category?: string;
   target: string;
   spoken: string;
   alt: string[];
   stages: StageTexts;
   scores: Record<StageName, StageScore>;
-  /** 書き起こしの生の出力を、話したままの文と比べたもの */
+  /** The raw transcription output compared with the sentence as spoken */
   asrVsSpoken: { content: Cer; full: Cer; exact: boolean };
   asr: {
     cached: boolean;
@@ -84,38 +84,38 @@ export interface RowRecord {
     hintsUsed?: number;
     hintsGiven?: number;
     minConfidence: number | null;
-    /** 聞き違いかもしれない箇所と別候補（聞き直しか別候補を求めた実行だけ） */
+    /** Spots that may be misheard and their alternative candidates (only for runs that asked for rehearing or alternatives) */
     uncertain?: Uncertain[];
-    /** 書き起こす前に、音声の末尾から切り落とした長さ（ms）。切り落とさなければ付かない */
+    /** Length cut from the end of the audio before transcribing (ms). Absent when nothing was cut */
     truncatedMs?: number;
   };
   llm: {
     mode: LlmMode;
-    /** LLM に頼んだ（保存済みの結果を使った場合を含む） */
+    /** The LLM was asked (including when a saved result was used) */
     called: boolean;
     cached: boolean;
-    /** 近道に入り、LLM を通さなかった */
+    /** Took the fast path and skipped the LLM */
     fastPath: boolean;
     formatted: boolean;
-    /** 失敗の種類（本文は残さない） */
+    /** Kind of failure (the text itself is not kept) */
     errorKind?: string;
-    /** LLM の応答にかかった時間 */
+    /** Time the LLM took to respond */
     ms: number;
     tries: number;
-    /** アプリの時間切れ（既定 8 秒）を超えた。アプリなら LLM なしの文が入っていた */
+    /** Exceeded the app's timeout (8 seconds by default). In the app, the text without the LLM would have been used */
     overAppTimeout: boolean;
     lowConfidence: boolean;
-    /** LLM の出力の検査の結果（設定の formatGuard が off でないとき） */
+    /** Result of checking the LLM's output (when formatGuard in the settings is not off) */
     guard?: GuardSummary;
-    /** 検査の前の LLM の出力（検査が何かを見つけたときだけ） */
+    /** The LLM's output before the check (only when the check found something) */
     llmText?: string;
   };
   match: { replaced: number; candidates: number };
   textfix: { edits: number; byRule: Record<string, number>; candidates: number };
   terms: {
-    /** 辞書の語（--vocab） */
+    /** Dictionary words (--vocab) */
     vocab: { asr: Hit; final: Hit; insertedAsr: number; insertedFinal: number; missedFinal: string[]; insertedFinalTerms: string[] };
-    /** その発話に付いた用語（台本の読み上げ） */
+    /** Terms attached to the utterance (script readings) */
     row: { asr: Hit; final: Hit; missedFinal: string[] };
   };
   style: { final: StyleViolations; target: StyleViolations; toneShift: number };
@@ -134,7 +134,7 @@ export function scoreStage(text: string, refs: readonly string[], tokenizer: Tok
   };
 }
 
-/** 発話の正解と段階ごとの文から、採点の部分を作る */
+/** Builds the scoring part from an utterance's reference and the text of each stage */
 export function scoreUtterance(u: Utterance, stages: StageTexts, vocabTerms: string[], tokenizer: Tokenizer | null): Pick<RowRecord, 'scores' | 'asrVsSpoken' | 'terms' | 'style'> {
   const refs = [u.target, ...u.alt];
   const scores = Object.fromEntries(STAGES.map((s) => [s, scoreStage(stages[s], refs, tokenizer)])) as Record<StageName, StageScore>;
@@ -167,13 +167,13 @@ export function scoreUtterance(u: Utterance, stages: StageTexts, vocabTerms: str
 }
 
 // ---------------------------------------------------------------------------
-// 集計
+// Totals
 // ---------------------------------------------------------------------------
 
 export interface StageSummary {
   contentEdits: number;
   contentLen: number;
-  /** 中身の誤り率（合計どうしの割り算）。正解が空なら null */
+  /** Content error rate (total divided by total). null if the reference is empty */
   contentCer: number | null;
   fullEdits: number;
   fullLen: number;
@@ -184,32 +184,32 @@ export interface StageSummary {
 
 export interface GroupSummary {
   n: number;
-  /** 正解が仮の発話と、人が確かめた発話 */
+  /** Utterances with a provisional reference, and utterances checked by a person */
   provisional: number;
   reviewed: number;
   durationSec: number;
   stages: Record<StageName, StageSummary>;
   asrVsSpoken: StageSummary;
   llm: {
-    /** LLM に頼んだ発話（保存済みの結果を使った分を含む） */
+    /** Utterances the LLM was asked about (including those that used saved results) */
     called: number;
     cached: number;
     live: number;
-    /** 近道に入り、LLM を通さなかった発話 */
+    /** Utterances that took the fast path and skipped the LLM */
     fastPath: number;
-    /** LLM の失敗で、LLM なしの文に落ちた発話 */
+    /** Utterances that fell back to the text without the LLM because the LLM failed */
     failed: number;
-    /** 保存済みの結果が無かった発話（保存済みの結果だけを使う実行） */
+    /** Utterances with no saved result (in runs that use only saved results) */
     cacheMiss: number;
     overAppTimeout: number;
     lowConfidence: number;
-    /** 整形の前（LLM なしの最終）と後（LLM ありの最終）の比較。全部の発話 */
+    /** Comparison before formatting (final without the LLM) and after (final with the LLM). All utterances */
     effect: LlmEffect;
-    /** そのうち、LLM に頼んだ発話だけ */
+    /** Of those, only the utterances the LLM was asked about */
     effectCalled: LlmEffect;
-    /** 整形の前に正しかった発話のうち、壊した割合 */
+    /** Share broken among the utterances that were correct before formatting */
     brokeRate: number | null;
-    /** 整形の前に誤りがあった発話のうち、良くした割合 */
+    /** Share improved among the utterances that had errors before formatting */
     improvedRate: number | null;
   };
   match: { utterances: number; replaced: number; candidates: number };
@@ -294,9 +294,9 @@ export interface Groups {
   all: GroupSummary;
   byDataset: Record<string, GroupSummary>;
   bySplit: Record<string, GroupSummary>;
-  /** 「データセット/dev」のような名前 */
+  /** Names such as "<dataset>/dev" */
   byDatasetSplit: Record<string, GroupSummary>;
-  /** 台本の文の種類ごと。種類の付いた発話があるときだけ（種類の無い発話は入らない） */
+  /** Per kind of script sentence. Only when some utterances have a kind (utterances without one are left out) */
   byCategory?: Record<string, GroupSummary>;
 }
 
@@ -317,36 +317,39 @@ export function summarize(rows: readonly RowRecord[]): Groups {
 }
 
 // ---------------------------------------------------------------------------
-// 表示（数だけ）
+// Display (numbers only)
 // ---------------------------------------------------------------------------
 
-const rateText = (h: Hit) => `${h.hit}/${h.total}${h.total ? `（${((h.hit / h.total) * 100).toFixed(1)}%）` : ''}`;
+const rateText = (h: Hit) => `${h.hit}/${h.total}${h.total ? ` (${((h.hit / h.total) * 100).toFixed(1)}%)` : ''}`;
 
-/** 全角の字を 2 桁として、表示の幅をそろえる */
+/** Aligns display width, counting a full-width character as two columns */
 function padDisplay(label: string, width: number): string {
   const w = Array.from(label).reduce((n, c) => n + (c.charCodeAt(0) > 0xff ? 2 : 1), 0);
   return label + ' '.repeat(Math.max(0, width - w));
 }
 
 function stageLine(label: string, s: StageSummary, n: number): string {
-  return `  ${padDisplay(label, 22)} 中身 ${pct(s.contentEdits, s.contentLen).padStart(6)}（${s.contentEdits}/${s.contentLen}） 句読点込み ${pct(s.fullEdits, s.fullLen).padStart(6)} 完全一致 ${s.exact}/${n}`;
+  return (
+    `  ${padDisplay(label, 22)} content ${pct(s.contentEdits, s.contentLen).padStart(6)} (${s.contentEdits}/${s.contentLen}) ` +
+    `with punctuation ${pct(s.fullEdits, s.fullLen).padStart(6)} exact ${s.exact}/${n}`
+  );
 }
 
-/** まとまりごとの段階の表（1 つのまとまりにつき数行） */
+/** Table of stages per group (a few lines per group) */
 export function formatGroup(name: string, g: GroupSummary, llmMode: LlmMode): string[] {
-  const out = [`[${name}] ${g.n} 件（正解が仮 ${g.provisional} 件、確認済み ${g.reviewed} 件、${g.durationSec} 秒）`];
+  const out = [`[${name}] n=${g.n} (provisional reference ${g.provisional}, reviewed ${g.reviewed}, ${g.durationSec} s)`];
   for (const s of STAGES) {
     if (s === 'final' && llmMode === 'off') continue;
     out.push(stageLine(STAGE_LABELS[s], g.stages[s], g.n));
   }
-  out.push(stageLine('生の出力と話したまま', g.asrVsSpoken, g.n));
+  out.push(stageLine('raw vs as spoken', g.asrVsSpoken, g.n));
   return out;
 }
 
-/** 台本の文の種類の並び（台本の定義の順）。ここに無い種類は、名前の順で後ろに並べる */
+/** Order of the kinds of script sentence (the order in the script's definition). Kinds not listed here go after, sorted by name */
 const CATEGORY_ORDER = ['lexicon', 'unlisted', 'number', 'homophone', 'particle', 'short', 'long', 'mixed'];
 
-/** 文の種類ごとに、最終の誤り率を 1 行ずつ（LLM なしの実行では、LLM なしの最終） */
+/** One line per kind of sentence with the final error rate (for runs without the LLM, the final without the LLM) */
 export function formatCategories(byCategory: Record<string, GroupSummary>, llmMode: LlmMode): string[] {
   const last: StageName = llmMode === 'off' ? 'noLlm' : 'final';
   const rank = (k: string) => (CATEGORY_ORDER.includes(k) ? CATEGORY_ORDER.indexOf(k) : CATEGORY_ORDER.length);
@@ -357,45 +360,44 @@ export function formatCategories(byCategory: Record<string, GroupSummary>, llmMo
       const s = g.stages[last];
       const a = g.stages.asr;
       return (
-        `[種類 ${padDisplay(k, 9)}] ${String(g.n).padStart(3)} 件  最終 中身 ${pct(s.contentEdits, s.contentLen).padStart(6)}（${s.contentEdits}/${s.contentLen}） ` +
-        `句読点込み ${pct(s.fullEdits, s.fullLen).padStart(6)} 完全一致 ${s.exact}/${g.n}  生の出力 中身 ${pct(a.contentEdits, a.contentLen).padStart(6)}`
+        `[category ${padDisplay(k, 9)}] n=${String(g.n).padStart(3)}  final content ${pct(s.contentEdits, s.contentLen).padStart(6)} (${s.contentEdits}/${s.contentLen}) ` +
+        `with punctuation ${pct(s.fullEdits, s.fullLen).padStart(6)} exact ${s.exact}/${g.n}  raw content ${pct(a.contentEdits, a.contentLen).padStart(6)}`
       );
     });
 }
 
-/** 全体の詳しい表示 */
+/** Detailed display of the whole */
 export function formatDetail(g: GroupSummary, llmMode: LlmMode, vocabWords: number): string[] {
   const out: string[] = [];
   const l = g.llm;
   if (llmMode !== 'off') {
-    out.push(
-      `LLM            頼んだ ${l.called} 件（保存済み ${l.cached}、今回呼んだ ${l.live}）、近道 ${l.fastPath} 件、失敗 ${l.failed} 件` + (l.cacheMiss ? `、保存済みの結果なし ${l.cacheMiss} 件` : ''),
-    );
-    out.push(`               アプリの時間切れを超えた ${l.overAppTimeout} 件、確信度の低い字がある ${l.lowConfidence} 件`);
+    out.push(`LLM              asked ${l.called} (cached ${l.cached}, called now ${l.live}), fast path ${l.fastPath}, failed ${l.failed}` + (l.cacheMiss ? `, no saved result ${l.cacheMiss}` : ''));
+    out.push(`                 over the app's timeout ${l.overAppTimeout}, with low-confidence characters ${l.lowConfidence}`);
     const e = l.effect;
-    out.push(`整形が壊した    整形の前に正しかった ${e.clean} 件のうち ${e.broke} 件${e.clean ? `（${((e.broke / e.clean) * 100).toFixed(1)}%）` : ''}`);
+    out.push(`Broken by LLM    ${e.broke} of ${e.clean} correct before formatting${e.clean ? ` (${((e.broke / e.clean) * 100).toFixed(1)}%)` : ''}`);
     out.push(
-      `整形が良くした  整形の前に誤りのあった ${e.errored} 件のうち ${e.improved} 件${e.errored ? `（${((e.improved / e.errored) * 100).toFixed(1)}%）` : ''}、誤りがなくなった ${e.fixed} 件、悪くした ${e.worsened} 件`,
+      `Improved by LLM  ${e.improved} of ${e.errored} with errors before formatting${e.errored ? ` (${((e.improved / e.errored) * 100).toFixed(1)}%)` : ''}` +
+        `, errors removed ${e.fixed}, worsened ${e.worsened}`,
     );
   }
-  out.push(`読みの照合      見つかった発話 ${g.match.utterances} 件（置き換え ${g.match.replaced} か所、LLM への候補 ${g.match.candidates} 件）`);
+  out.push(`Reading match    utterances ${g.match.utterances} (replaced ${g.match.replaced} spots, candidates for the LLM ${g.match.candidates})`);
   const rules = Object.entries(g.textfix.byRule)
     .map(([k, n]) => `${k} ${n}`)
-    .join('、');
-  out.push(`語ごとの補正    ${g.textfix.edits} か所（${g.textfix.utterances} 件の発話）${rules ? `: ${rules}` : ''}`);
+    .join(', ');
+  out.push(`Word fixes       edits ${g.textfix.edits} (utterances ${g.textfix.utterances})${rules ? `: ${rules}` : ''}`);
   const last: StageName = llmMode === 'off' ? 'noLlm' : 'final';
-  out.push(`英字の語        生の出力 ${rateText(g.terms.latin.asr)} / LLM なし ${rateText(g.terms.latin.noLlm)}${llmMode === 'off' ? '' : ` / LLM あり ${rateText(g.terms.latin.final)}`}`);
+  out.push(`Latin words      raw ${rateText(g.terms.latin.asr)} / without LLM ${rateText(g.terms.latin.noLlm)}${llmMode === 'off' ? '' : ` / with LLM ${rateText(g.terms.latin.final)}`}`);
   if (vocabWords) {
-    out.push(`辞書の語の再現  生の出力 ${rateText(g.terms.vocab.asr)} / 最終 ${rateText(g.terms.vocab.final)}（辞書 ${vocabWords} 語）`);
-    out.push(`辞書の語の誤挿入 生の出力 ${g.terms.vocab.insertedAsr} / 最終 ${g.terms.vocab.insertedFinal}`);
+    out.push(`Dictionary recall raw ${rateText(g.terms.vocab.asr)} / final ${rateText(g.terms.vocab.final)} (dictionary of ${vocabWords} words)`);
+    out.push(`Dictionary false insertions raw ${g.terms.vocab.insertedAsr} / final ${g.terms.vocab.insertedFinal}`);
   }
-  if (g.terms.row.asr.total) out.push(`発話の用語の再現 生の出力 ${rateText(g.terms.row.asr)} / 最終 ${rateText(g.terms.row.final)}`);
-  out.push(`文体の違反      出力 ${formatViolations(g.style.final)} / 正解 ${formatViolations(g.style.target)}、口調の硬化 ${g.style.toneShift}`);
+  if (g.terms.row.asr.total) out.push(`Utterance term recall raw ${rateText(g.terms.row.asr)} / final ${rateText(g.terms.row.final)}`);
+  out.push(`Style violations output ${formatViolations(g.style.final)} / reference ${formatViolations(g.style.target)}, more formal tone ${g.style.toneShift}`);
   const kinds = (b: ErrorBreakdown) =>
     ERROR_KINDS.filter((k) => b[k].edits)
-      .map((k) => `${ERROR_KIND_LABELS[k]} ${b[k].edits}（${b[k].groups} か所）`)
-      .join('、') || 'なし';
-  out.push(`誤りの種類（生の出力） ${kinds(g.errors.asr)}`);
-  out.push(`誤りの種類（${llmMode === 'off' ? 'LLM なしの最終' : 'LLM ありの最終'}） ${kinds(g.errors[last])}`);
+      .map((k) => `${ERROR_KIND_LABELS[k]} ${b[k].edits} (${b[k].groups} spots)`)
+      .join(', ') || 'none';
+  out.push(`Error types (raw output) ${kinds(g.errors.asr)}`);
+  out.push(`Error types (${llmMode === 'off' ? 'final without LLM' : 'final with LLM'}) ${kinds(g.errors[last])}`);
   return out;
 }

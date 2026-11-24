@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# LonghandHelper をビルドして helper/build/LonghandHelper.app を作り、署名する。
+# Builds LonghandHelper, assembles helper/build/LonghandHelper.app and signs it.
 #
-#   ./build.sh                 リリースビルド + .app 組み立て + 署名
-#   LONGHAND_SIGN_IDENTITY=<SHA-1>  署名に使う証明書を指定する（"-" で ad-hoc）
+#   ./build.sh                 release build + .app assembly + signing
+#   LONGHAND_SIGN_IDENTITY=<SHA-1>  certificate to sign with ("-" for ad-hoc)
 #
-# 署名は「Apple Development」証明書を SHA-1 で選んで行う（見つからなければ ad-hoc）。
-# 同じ証明書で署名し続ければ、アクセシビリティやマイクの許可がビルドをまたいで残る。
+# Signs with an "Apple Development" certificate picked by SHA-1 (ad-hoc if none is found).
+# As long as every build is signed with the same certificate, the Accessibility and microphone permissions survive rebuilds.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,11 +25,16 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/LonghandHelper" "$APP/Contents/MacOS/LonghandHelper"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUMBER/" Resources/Info.plist > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
+# Localized usage descriptions (the permission prompts follow the macOS language)
+for lproj in Resources/*.lproj; do
+  mkdir -p "$APP/Contents/Resources/$(basename "$lproj")"
+  cp "$lproj"/InfoPlist.strings "$APP/Contents/Resources/$(basename "$lproj")/"
+done
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 IDENTITY="${LONGHAND_SIGN_IDENTITY:-}"
 if [[ -z "$IDENTITY" ]]; then
-  # "Apple Development: ..." の SHA-1 を取る（複数あれば最初のもの）
+  # Take the SHA-1 of "Apple Development: ..." (the first one if there are several)
   IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $2; exit}')"
 fi
 if [[ -z "$IDENTITY" ]]; then

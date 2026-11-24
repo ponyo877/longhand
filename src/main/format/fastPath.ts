@@ -1,25 +1,25 @@
 /**
- * LLM を飛ばす近道（N6）。
- * 音声認識の結果がすでに整っている短い発話は、LLM を呼んでも結果が変わらないことが多い。
- * そうした発話だけを決定的な規則で見分け、正規化（N1）した生テキストをそのまま結果にする。
+ * Fast path that skips the LLM (N6).
+ * For short utterances whose recognition result is already clean, calling the LLM often changes nothing.
+ * Only such utterances are picked out by deterministic rules, and the normalized (N1) raw text becomes the result as is.
  *
- * 規則は安全側に倒してある。少しでも LLM の手が要りそうなら LLM に回す。
- * 判定は正規化の後の文字列に対して行う。
+ * The rules lean to the safe side. If the LLM might be needed at all, the utterance goes to the LLM.
+ * The checks run on the text after normalization.
  */
 import { replacementTriggerKey } from './postprocess';
 
 export interface FastPathContext {
   mode: 'dictation' | 'edit';
-  /** 設定の言語（ja / en / auto） */
+  /** Language setting (ja / en / auto) */
   language: string;
   customInstructions: string;
-  /** 置換のきっかけの語句 */
+  /** Replacement trigger phrases */
   protectedPhrases?: readonly string[];
-  /** 辞書の語（英字の語の表記が辞書と同じかを見る） */
+  /** Dictionary words (to check whether Latin words are spelled as in the dictionary) */
   vocabulary?: readonly string[];
-  /** 辞書の語の候補（G4-11）。候補があれば LLM に判断させる */
+  /** Dictionary word candidates (G4-11). If there are any, the LLM decides */
   dictionaryCandidates?: readonly unknown[];
-  /** 音声認識の確信度の低い字がある（textfix の確信度）。聞き違いがありそうなので LLM に判断させる */
+  /** Some characters have low recognition confidence (textfix confidence). A mishearing is likely, so the LLM decides */
   lowConfidence?: boolean;
   beforeCursor?: string;
   afterCursor?: string;
@@ -27,28 +27,28 @@ export interface FastPathContext {
 
 export const FAST_PATH_MAX_CHARS = 60;
 
-/** 言いよどみの音。文中も含めて探す */
+/** Hesitation sounds. Searched for anywhere in the text */
 export const FILLER_IN_TEXT = /(えー|えっと|ええと|えと[、。]|あのー|あの[、。]|あのね|うーん|うーむ|まあ|なんか|そのー|その[、。]|あー|んー|\bum+\b|\buh+\b|\bhmm+\b)/i;
-/** 言い直しの印 */
+/** Signs of self-repair */
 export const SELF_REPAIR = /(いや|じゃなくて|じゃなく|ではなくて|ではなく|じゃない[、。]|間違え|まちがえ|訂正|言い直|いいなお|やっぱ|違う[、。]|ちがう)/;
-/** 記号や書式の読み上げ */
+/** Spoken symbols and formatting */
 const SPOKEN_FORMAT = /(改行|段落|箇条書き|かっこ|カッコ|括弧|まる|マル|てん|テン|句点|読点|びっくり|はてな|コロン|スラッシュ|ハイフン|ドット)/;
-/** 3 字以上のカタカナの連続（製品名や辞書の語がカタカナで出ている可能性がある） */
+/** A run of 3 or more katakana (a product name or dictionary word may have come out in katakana) */
 const KATAKANA_RUN = /[ァ-ヺー]{3,}/;
-/** 漢数字。算用数字に直す必要があるかもしれない */
+/** Kanji numerals. They may need to become Arabic numerals */
 const KANJI_DIGITS = /[〇一二三四五六七八九十百千万億](?=[時分秒日月年回個件人円%％つ])/;
-/** 文の終わり方。言い切り（。？）か、言いさし（けど、が、ので、んで） */
+/** Sentence endings. A complete ending (。？) or a trailing-off ending (けど, が, ので, んで) */
 const GOOD_END = /(。|？|けど|けれど|けれども|が|ので|んで)$/;
-/** 言いさしなのに「。」が付いている（規則 9 に反する） */
+/** A trailing-off ending followed by 「。」 (breaks rule 9) */
 const TRAILING_CONJ_WITH_PERIOD = /(けど|けれど|けれども|ので|んで|が)。$/;
-/** 尋ねる文なのに「。」で終わっている、または独り言なのに「？」で終わっている（規則 6 の判断が要る） */
+/** A question ending in 「。」, or a musing ending in 「？」 (needs the judgment of rule 6) */
 const QUESTION_MISMATCH = /(か。|っけ。|(かな|かね|だろう|でしょう|よね|かも)？)$/;
-/** 文の途中に差し込む位置か（直前が文の終わりでも改行でもない） */
+/** Whether the insertion point is mid-sentence (the text before it ends neither a sentence nor a line) */
 const SENTENCE_BOUNDARY_BEFORE = /(^|[。？！.!?\n])\s*$/;
 
 /**
- * LLM に回す理由を返す。null なら LLM は要らない（近道に入れてよい）。
- * eval で理由ごとの件数を数えるために、理由を文字列で返す。
+ * Returns the reason to send the text to the LLM. null means the LLM is not needed (the fast path may be taken).
+ * Returns the reason as a string so that eval can count cases per reason.
  */
 export function llmReason(text: string, ctx: FastPathContext): string | null {
   if (ctx.mode !== 'dictation') return 'mode';
@@ -83,7 +83,7 @@ export function llmReason(text: string, ctx: FastPathContext): string | null {
   return null;
 }
 
-/** LLM が要るか。false なら、正規化した生テキストをそのまま結果にしてよい */
+/** Whether the LLM is needed. If false, the normalized raw text may be the result as is */
 export function needsLlm(text: string, ctx: FastPathContext): boolean {
   return llmReason(text, ctx) !== null;
 }

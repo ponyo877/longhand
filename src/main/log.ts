@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * ローカルのログ（OPS-3）。~/Library/Logs/Longhand/ に main.log と helper.log を書き、5MB で 3 世代までローテーションする。
- * API キーと書き起こしの本文はログに出さない。呼び出し側で本文を渡さないことに加え、
- * キーらしい文字列はここでも伏せる。
+ * Local logs (OPS-3). Writes main.log and helper.log to ~/Library/Logs/Longhand/, rotating at 5MB and keeping 3 generations.
+ * API keys and transcript text never go into the logs. Callers do not pass the text, and on top of that,
+ * strings that look like keys are masked here too.
  */
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
@@ -24,7 +24,7 @@ class LogFile {
       this.stream!.write(line);
       this.size += Buffer.byteLength(line);
     } catch {
-      // ログの失敗で本体を止めない
+      // A logging failure must not stop the app
     }
   }
 

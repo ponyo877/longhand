@@ -1,16 +1,16 @@
 #!/usr/bin/env node
-// LonghandHelper の動作確認用ハーネス（Node 24、依存なし）。
+// Harness for trying out LonghandHelper by hand (Node 24, no dependencies).
 //
-//   node helper/tools/harness.mjs                 対話モード（コマンドか JSON を 1 行ずつ打つ）
-//   node helper/tools/harness.mjs ping ctx "rec 2" 引数のコマンドを順に実行して終了する
+//   node helper/tools/harness.mjs                 interactive mode (type a command or JSON one line at a time)
+//   node helper/tools/harness.mjs ping ctx "rec 2" run the commands given as arguments in order, then exit
 //
-// オプション:
-//   --bin <path>   ヘルパーの実行ファイル（既定: helper/build/LonghandHelper.app/Contents/MacOS/LonghandHelper）
-//   --debug        LONGHAND_HELPER_DEBUG=1 で起動する（キー入力を stderr に出す）
-//   --chunks       audio_chunk を 1 件ずつ表示する（既定は 10 件ごと）
-//   --quiet        ヘルパーの stderr を表示しない
+// Options:
+//   --bin <path>   the helper executable (default: helper/build/LonghandHelper.app/Contents/MacOS/LonghandHelper)
+//   --debug        launch with LONGHAND_HELPER_DEBUG=1 (key input goes to stderr)
+//   --chunks       show every audio_chunk (default: every 10th)
+//   --quiet        do not show the helper's stderr
 //
-// コマンド:
+// Commands:
 //   ping | conf [globe] | state <inactive|active|locked|finalizing> | perm [accessibility|microphone]
 //   devices | ctx [nofield] | paste <text> | pastew <watchMs> <text> | rec <sec> [deviceId]
 //   record on|off | sleep <ms> | raw <json> | {json...} | quit
@@ -55,7 +55,7 @@ const exitPromise = new Promise((resolve) => {
   });
 });
 
-// --- 受信 -----------------------------------------------------------------
+// --- Receiving ------------------------------------------------------------
 const waiters = [];
 let nextId = 1;
 const chunkStats = new Map(); // sessionId -> {count, samples, rmsSum, peak, firstAt}
@@ -111,7 +111,7 @@ createInterface({ input: child.stderr }).on('line', (line) => {
   if (!opts.quiet) console.log(color(90, `${ts()} ! ${line}`));
 });
 
-// --- 送信 -----------------------------------------------------------------
+// --- Sending --------------------------------------------------------------
 function send(type, payload = {}, id) {
   const msg = { type, payload };
   if (id !== undefined) msg.id = id;
@@ -240,7 +240,7 @@ async function run(line) {
   }
 }
 
-// --- 実行 -----------------------------------------------------------------
+// --- Running --------------------------------------------------------------
 await waitFor((m) => m.type === 'ready', 10000, 'ready').catch((e) => {
   console.error(e.message);
   child.kill();

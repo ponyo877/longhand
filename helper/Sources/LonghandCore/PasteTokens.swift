@@ -1,15 +1,15 @@
-// paste.text のインラインコマンド記法の解析。
+// Parses the inline command syntax in paste.text.
 //
 //   <|BACKSPACE|>   Backspace
-//   <|WAIT_n|>      n ミリ秒待つ（1..5000）
+//   <|WAIT_n|>      wait n milliseconds (1..5000)
 //   <|ENTER|>       Return
 //   <|TAB|>         Tab
-// 拡張（protocol.ts にはまだないが、先に実装しておく）:
+// Extensions (not in protocol.ts yet, implemented ahead of time):
 //   <|ENTER_CMD|> <|ENTER_CTRL|> <|ENTER_SHIFT|> <|CMD_SHIFT_D|>
-// 知らないトークンや範囲外の WAIT は、そのまま文字列として貼り付ける。
+// Unknown tokens and out-of-range WAITs are pasted as plain text.
 
 public struct KeyPress: Equatable, Sendable {
-    /// KeyTable のキー名（"Backspace"、"Enter"、"Tab"、"KeyD" など）
+    /// A KeyTable key name ("Backspace", "Enter", "Tab", "KeyD" and so on)
     public let key: String
     public let modifiers: Set<ModifierKind>
 
@@ -54,7 +54,7 @@ public enum PasteTokenParser {
                 segments.append(seg)
                 rest = afterOpen[close.upperBound...]
             } else {
-                // 知らないトークン。"<|" だけを文字列として進め、残りを改めて調べる（"<|<|ENTER|>" に対応するため）
+                // Unknown token. Advance past "<|" only, as text, and scan the rest again (to handle "<|<|ENTER|>")
                 text += "<|"
                 rest = afterOpen
             }

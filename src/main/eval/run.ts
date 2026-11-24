@@ -1,12 +1,12 @@
 /**
- * 評価の実行の本体。データセットの発話を、アプリと同じ手順（pipeline.ts）で通し、段階ごとに正解と比べる。
+ * Runs an evaluation. Passes each utterance of the datasets through the same steps as the app (pipeline.ts) and compares each stage with the reference.
  *
- * electron は読み込まない。tsx（scripts/eval-run.ts）からも、開発版のアプリの中（LONGHAND_EVAL）からも呼べる。
- * LLM を実際に呼べるのはアプリの中だけ（保存済みの接続設定とキーを使うため）。tsx からは、LLM なしか、保存済みの結果だけで動かす。
+ * Does not load electron. Can be called from tsx (scripts/eval-run.ts) and from inside the development app (LONGHAND_EVAL).
+ * The LLM can be called for real only inside the app (it uses the saved connection settings and key). From tsx, it runs without the LLM or with saved results only.
  *
- * 結果: <root>/runs/<日時>-<名前>/{config.json, rows.jsonl, summary.json} と <root>/runs/index.jsonl
- * - rows.jsonl は発話ごとの文を含む（個人の書き起こし）。summary.json と標準出力は数だけ
- * - API キー、ヘッダ、接続先は、どのファイルにも書かない
+ * Results: <root>/runs/<date and time>-<name>/{config.json, rows.jsonl, summary.json} and <root>/runs/index.jsonl
+ * - rows.jsonl contains the text of each utterance (personal transcripts). summary.json and standard output hold numbers only
+ * - API keys, headers and endpoints are never written to any file
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,94 +31,95 @@ import { postAsrStages, transcribeLikeApp, type AsrOutcome, type Transcriber } f
 import { bestCer, normContent } from './metrics';
 import { formatCategories, formatDetail, formatGroup, scoreUtterance, summarize, type Groups, type LlmMode, type RowRecord } from './score';
 
-/** 辞書の語の得点に使う、最近の書き起こしの件数（アプリの RECENT_FOR_VOCAB と同じ） */
+/** Number of recent transcripts used to score dictionary words (same as the app's RECENT_FOR_VOCAB) */
 const RECENT_FOR_VOCAB = 100;
-/** 評価での LLM の時間切れ。アプリの時間切れ（既定 8 秒）を超えた件数は別に数える */
+/** LLM timeout in evaluation. Utterances over the app's timeout (8 seconds by default) are counted separately */
 const EVAL_LLM_TIMEOUT_MS = 60_000;
 export const DEFAULT_MAX_LLM_CALLS = 150;
 
-/** 手直しから覚えることの種類（語、聞き違えた形、取り違えの組、書き換えない語句） */
+/** Kinds of things learned from edits (words, misheard forms, correction pairs, phrases not to rewrite) */
 export type LearnKind = 'words' | 'forms' | 'corrections' | 'kept' | 'numbers';
 const LEARN_KINDS: readonly LearnKind[] = ['words', 'forms', 'corrections', 'kept', 'numbers'];
 
 export interface EvalConfig {
-  /** 実行の名前（結果のフォルダ名に入る） */
+  /** Name of the run (part of the result folder name) */
   name: string;
-  /** 測るデータセットの名前（<root>/datasets/<名前>） */
+  /** Names of the datasets to measure (<root>/datasets/<name>) */
   datasets: string[];
-  /** アプリの既定（DEFAULT_SETTINGS）への上書き */
+  /** Overrides on the app's defaults (DEFAULT_SETTINGS) */
   settings?: DeepPartial<Settings>;
-  /** 辞書の語の一覧のファイル（1 行 1 語）。無ければ辞書なし */
+  /** File listing dictionary words (one word per line). No dictionary if absent */
   vocab?: string | null;
-  /** 読みのファイル（1 行に「語<TAB>読み,読み」）。利用者が確かめた読みとして扱う */
+  /** Readings file (one "word<TAB>reading,reading" per line). Treated as readings the user confirmed */
   readings?: string | null;
-  /** off: LLM なし。live: LLM を呼ぶ（アプリの中だけ）。cache-only: 保存済みの結果だけを使う */
+  /** off: no LLM. live: calls the LLM (only inside the app). cache-only: uses saved results only */
   llm: LlmMode;
-  /** 1 回の実行で LLM を呼んでよい回数（既定 150） */
+  /** How many times one run may call the LLM (150 by default) */
   maxLlmCalls?: number;
-  /** 評価での LLM の時間切れ（既定 60 秒） */
+  /** LLM timeout in evaluation (60 seconds by default) */
   llmTimeoutMs?: number;
-  /** 試行番号。同じ入力でも LLM を呼び直したいときに変える */
+  /** Attempt number. Change it to call the LLM again for the same input */
   attempt?: number;
-  /** 発話を絞る */
+  /** Narrows the utterances */
   split?: Split | 'all';
   ids?: string[];
   limit?: number;
-  /** 辞書の語の得点に使う「最近の書き起こし」。previous は同じデータセットの前の発話の正解、none は無し（既定は previous） */
+  /** "Recent transcripts" used to score dictionary words. previous is the references of earlier utterances in the same dataset, none is nothing (previous by default) */
   recent?: 'previous' | 'none';
   /**
-   * 整形のモデルと設定の差し替え（モデルの比較用）。接続先とキーは、アプリに保存済みのものをそのまま使う。
-   * 差し替えた内容は、保存済みの LLM の結果のキーに入るので、モデルごとに別の結果として保存される
+   * Replaces the formatting model and its settings (for comparing models). The endpoint and key saved in the app are used as they are.
+   * The replacement goes into the key of saved LLM results, so each model's results are saved separately
    */
   llmOverride?: { model?: string; anthropic?: { effort?: string; thinking?: string } };
   /**
-   * 画面の文から拾った語を、その発話のヒントに足す実験（アプリの asr.screenTerms の代わり）。
-   * 評価のデータには入力先の画面の文が無いので、同じ塊（3 分以内に続く発話）の、直前の発話の正解の文を「画面に出ている文」とみなす。
-   * チャットやターミナルでは、直前に入力した文が画面に残っているためである。数は、何件前までを見るか（0 か未指定なら足さない）。
-   * 正解の文を使うので、実際より良い側に出る（上限の目安）
+   * Experiment that adds words picked from the screen text to the utterance's hints (in place of the app's asr.screenTerms).
+   * The evaluation data has no screen text of the target field, so the reference text of the previous utterance in the same chunk
+   * (utterances within 3 minutes of each other) is taken as "the text on screen".
+   * In chats and terminals, the text typed just before stays on screen. The number is how many earlier utterances to look at (0 or unset adds nothing).
+   * It uses reference text, so it comes out better than reality (a rough upper bound)
    */
   screenTermsFromPrevious?: number;
   /**
-   * 手直しからの学習の効果を測る実験。train（発話の id の正規表現）に当たる発話を、測る対象から外して先に流し、
-   * その出力を正解の文に直した、という手直しを模して学習させる（アプリと同じ learnFromEdit を通す）。
-   * 残りの発話は、学習した内容を持った状態で測る。kinds で、覚える種類を絞れる（既定はすべて）
+   * Experiment that measures the effect of learning from edits. Utterances matching train (a regular expression for utterance ids) are taken out of the measured set and run first,
+   * and learning is simulated as if the user had edited their output into the reference text (through the same learnFromEdit as the app).
+   * The remaining utterances are measured with what was learned. kinds narrows what is learned (all by default)
    */
   learn?: { train: string; kinds?: LearnKind[] };
-  /** 音声認識を動かさず、保存済みの結果だけを使う */
+  /** Uses saved results only, without running speech recognition */
   asrCacheOnly?: boolean;
-  /** 丸ごと書き起こすときに渡す prompt（実験用。アプリは渡さない） */
+  /** Prompt passed when transcribing the whole recording (experimental; the app does not pass one) */
   asrPrompt?: string;
   /**
-   * 書き起こす前に、音声の末尾を切り落とす（実験用）。同じ録音で「キーを離した後の録音あり」と「なし」を比べるためのもの。
-   * 'postRoll' は、行の postRollMs（離した後に録った長さ）の分だけ切り落とす。無い行はそのまま。数値は、どの行もその長さ（ms）だけ切り落とす
+   * Cuts the end of the audio before transcribing (experimental). For comparing the same recording "with" and "without" the audio recorded after the key was released.
+   * 'postRoll' cuts each row's postRollMs (the length recorded after release). Rows without it stay as they are. A number cuts that length (ms) from every row
    */
   truncateTail?: 'postRoll' | number;
 }
 
-/** LLM の接続（アプリの中で、保存済みの設定とキーから作る） */
+/** LLM connection (built inside the app from the saved settings and key) */
 export interface LlmConnection {
-  /** 実際の LLM。保存済みの結果だけを使うなら null */
+  /** The real LLM. null when only saved results are used */
   provider: LlmProvider | null;
   identity: LlmIdentity;
-  /** 設定の出力の上限と、アプリの時間切れ */
+  /** The output limit from the settings, and the app's timeout */
   maxOutputTokens: number;
   appTimeoutMs: number;
-  /** 通信の入口（fetch）で呼び出しを数えているなら、その数え役。渡さなければ CachingProvider が数える */
+  /** The counter, if calls are counted at the network entry point (fetch). If not given, CachingProvider counts them */
   budget?: CallBudget;
 }
 
 export interface EvalEnv {
-  /** 評価のデータの置き場所（~/longhand-eval） */
+  /** Where the evaluation data lives (~/longhand-eval) */
   root: string;
-  /** リポジトリ（ワーカー、単語分割の WASM、コードのハッシュ） */
+  /** The repository (workers, the tokenizer's WASM, code hashes) */
   repoRoot: string;
-  /** 音声認識のモデルのフォルダ */
+  /** Folder of speech recognition models */
   modelsDir: string;
   bundledModelsDir?: string;
   llm?: LlmConnection;
-  /** 書き起こしの差し替え（テスト用）。渡さなければ、ASR ワーカーを起動する */
+  /** Replacement transcriber (for tests). If not given, the ASR worker is started */
   asr?: Transcriber;
-  /** 動かしている場所（記録用） */
+  /** Where this runs (for the record) */
   host: string;
   print?: (line: string) => void;
 }
@@ -129,18 +130,18 @@ export interface EvalSummary {
   startedAt: string;
   finishedAt: string;
   status: 'ok' | 'aborted';
-  /** 途中で止めた理由（種類だけ） */
+  /** Why it stopped early (kind only) */
   aborted?: string;
-  /** 正解が仮の発話を含むか。含むなら、数値は仮の基準値として読む */
+  /** Whether it includes utterances with a provisional reference. If so, read the numbers as a provisional baseline */
   provisional: boolean;
   truth: { provisional: number; reviewed: number };
   llm: {
     mode: LlmMode;
     kind?: string;
     model?: string;
-    /** LLM を実際に呼んだ回数（やり直しを含む） */
+    /** How many times the LLM was actually called (including retries) */
     calls: number;
-    /** 送った HTTP リクエストの数（通信の入口で数えたときだけ） */
+    /** Number of HTTP requests sent (only when counted at the network entry point) */
     httpRequests?: number;
     maxCalls: number;
     cacheHits: number;
@@ -150,9 +151,9 @@ export interface EvalSummary {
     timeoutMs: number;
     appTimeoutMs: number;
   };
-  /** truncated は、末尾を切り落とした発話の数（切り落としを指定した実行だけ） */
+  /** truncated is the number of utterances whose end was cut (only for runs that asked for a cut) */
   asr: { cached: number; transcribed: number; skippedOtherRate: number; truncated?: number };
-  /** 手直しからの学習の実験をしたときの、学習に使った発話の数と、覚えた数 */
+  /** For the learning-from-edits experiment: utterances used for learning, and how many things were learned */
   learn?: { train: number; edited: number; words: number; forms: number; corrections: number; kept: number; numbers?: number };
   groups: Groups;
 }
@@ -199,9 +200,9 @@ function readReadings(file: string): Record<string, string[]> {
   return out;
 }
 
-/** 設定に上書きを重ね、評価に関わる項目だけを記録用に取り出す */
+/** Applies the overrides to the settings, and picks out only the items that matter to evaluation for the record */
 function effectiveSettings(config: EvalConfig, conn: LlmConnection | undefined): { settings: Settings; appTimeoutMs: number } {
-  // mergeSettings は通さない。保存済みの古い設定とみなされて、既定値を変えた項目（近道など）が既定に戻されるため
+  // Does not go through mergeSettings: it would treat these as old saved settings and reset items whose defaults changed (the fast path, for example)
   const merged = deepMerge(DEFAULT_SETTINGS, config.settings);
   const override = config.settings?.llm ?? {};
   const appTimeoutMs = override.timeoutMs ?? conn?.appTimeoutMs ?? DEFAULT_SETTINGS.llm.timeoutMs;
@@ -210,7 +211,7 @@ function effectiveSettings(config: EvalConfig, conn: LlmConnection | undefined):
     llm: {
       ...merged.llm,
       maxOutputTokens: override.maxOutputTokens ?? conn?.maxOutputTokens ?? merged.llm.maxOutputTokens,
-      // 評価では待ち時間の制限がないので、時間切れを長くする。アプリの時間切れを超えた件数は別に数える
+      // Evaluation has no limit on waiting, so the timeout is longer. Utterances over the app's timeout are counted separately
       timeoutMs: config.llmTimeoutMs ?? EVAL_LLM_TIMEOUT_MS,
     },
   };
@@ -224,20 +225,20 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   const cacheDir = ensurePrivateDir(path.join(root, 'cache'));
   const runsDir = ensurePrivateDir(path.join(root, 'runs'));
   const safeName = (config.name || 'run').replace(/[^A-Za-z0-9._-]+/g, '-');
-  // 同じ秒に同じ名前で始めた実行と、フォルダが重ならないようにする
+  // Keeps the folder apart from a run started with the same name in the same second
   let runName = `${localStamp(started)}-${safeName}`;
   for (let k = 2; fs.existsSync(path.join(runsDir, runName)); k++) runName = `${localStamp(started)}-${safeName}-${k}`;
   const dir = ensurePrivateDir(path.join(runsDir, runName));
 
-  // --- LLM の接続
+  // --- LLM connection
   const connFile = path.join(cacheDir, 'llm', 'identity.json');
   let conn = env.llm;
   if (config.llm === 'live' && !conn?.provider) {
-    throw new Error('LLM を呼ぶ実行は、開発版のアプリの中（LONGHAND_EVAL）でだけ動かせます。tsx からは --llm off か --llm cache-only を使ってください');
+    throw new Error('Runs that call the LLM only work inside the development app (LONGHAND_EVAL). From tsx, use --llm off or --llm cache-only');
   }
   if (config.llm === 'cache-only' && !conn) {
-    // アプリの中で最後に測ったときの接続の記録（モデルなど。秘密は含まない）から、保存済みの結果のキーを作る
-    if (!fs.existsSync(connFile)) throw new Error(`LLM の接続の記録がありません（${connFile}）。先にアプリの中で 1 回測ってください`);
+    // Builds the key of saved results from the record of the connection the last time it was measured in the app (model and so on; no secrets)
+    if (!fs.existsSync(connFile)) throw new Error(`No record of the LLM connection (${connFile}). Measure once inside the app first`);
     const saved = JSON.parse(fs.readFileSync(connFile, 'utf8')) as SavedConnection;
     conn = { provider: null, identity: saved.identity, maxOutputTokens: saved.maxOutputTokens, appTimeoutMs: saved.appTimeoutMs };
   }
@@ -260,7 +261,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     writePrivate(connFile, JSON.stringify(saved, null, 2));
   }
 
-  // --- データ
+  // --- Data
   const truthFile = path.join(root, 'truth.jsonl');
   const truth = loadTruth(truthFile);
   const datasetCounts: Record<string, DatasetCounts> = {};
@@ -277,7 +278,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     utterances = utterances.filter((u) => ids.has(u.id));
   }
   if (config.limit) utterances = utterances.slice(0, config.limit);
-  // 手直しからの学習の実験。train に当たる発話は、測る対象から外して、学習に使う
+  // Learning-from-edits experiment. Utterances matching train are taken out of the measured set and used for learning
   let trainUtterances: Utterance[] = [];
   if (config.learn) {
     const re = new RegExp(config.learn.train);
@@ -285,16 +286,16 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     utterances = utterances.filter((u) => !re.test(u.id));
   }
 
-  // --- 辞書（アプリと同じ保存先のクラスを、実行のフォルダに置いたファイルで動かす）
+  // --- Dictionary (the same store class as the app, on a file in the run's folder)
   const vocabTerms = config.vocab ? readWordList(config.vocab) : [];
   const store = new CustomizationsStore(path.join(dir, 'customizations.json'));
   if (vocabTerms.length) {
     store.update({ dictionary: vocabTerms, readings: config.readings ? readReadings(config.readings) : {} });
     if (caching) {
-      // アプリは、読みのない英字の語の読みを LLM で作っておく。評価でも同じように作る（保存済みの結果を使い回す）
+      // The app generates readings for Latin words without one with the LLM. Evaluation does the same (reusing saved results)
       store.setReadingGenerator((w) => generateReadings(w, caching, settings.llm.timeoutMs));
       while ((await store.generateReadingsNow()) > 0) {
-        /* 50 語ずつ作る */
+        /* generates 50 words at a time */
       }
       store.setReadingGenerator(null);
       caching.takeLast();
@@ -302,7 +303,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   }
   const withReading = store.matchEntries().filter((e) => e.readings.length).length;
 
-  // --- 音声認識（保存済みの結果が無い発話が出たときにだけ起動する）
+  // --- Speech recognition (started only when an utterance has no saved result)
   const language = settings.language;
   const model = resolveModel(settings.asr, env.modelsDir, env.bundledModelsDir);
   const workerPath = settings.asr.workerPath || path.join(env.repoRoot, 'asr', 'build', `longhand-asr-${settings.asr.engine}`);
@@ -316,7 +317,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   const asrCache = new JsonCache<AsrOutcome>(ensurePrivateDir(path.join(cacheDir, 'asr')));
   let asr: AsrService | null = null;
   const getAsr = async (): Promise<Transcriber> => {
-    if (config.asrCacheOnly) throw new Error('書き起こしの保存済みの結果が無い発話があります（保存済みの結果だけを使う指定）');
+    if (config.asrCacheOnly) throw new Error('Some utterances have no saved transcription (only saved results were requested)');
     if (env.asr) return env.asr;
     if (asr) return asr;
     const svc = new AsrService(
@@ -327,8 +328,8 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
       env.bundledModelsDir,
     );
     await svc.start();
-    if (svc.status !== 'ready') throw new Error(`ASR を起動できませんでした（${svc.status}）: ${svc.message}`);
-    // ウォームアップの完了を待つ
+    if (svc.status !== 'ready') throw new Error(`Could not start the ASR (${svc.status}): ${svc.message}`);
+    // Waits for the warm-up to finish
     await svc.transcribe(new Float32Array(16000), { language, hints: [], timeoutMs: 60000 });
     asr = svc;
     return svc;
@@ -336,10 +337,10 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
 
   const tokenizer = await loadTokenizer(env.repoRoot);
 
-  // --- 実行の記録（コミットが無いので、コードの中身のハッシュとビルドの大きさを残す）
+  // --- Record of the run (there are no commits, so it keeps hashes of the code's contents and the build sizes)
   const src = (d: string) => path.join(env.repoRoot, 'src', 'main', d);
   const provisionalCount = utterances.filter((u) => u.provisional).length;
-  // 書き起こしの要求に付ける任意の指定（プロンプトの様式、聞き直し、別候補）。既定のままなら、保存済みの書き起こしのキーを変えない
+  // Optional settings added to transcription requests (prompt style, rehearing, alternatives). Left at their defaults, they do not change the key of saved transcriptions
   const asrExtras = {
     promptStyle: settings.asr.promptStyle,
     promptTerms: settings.asr.promptTerms,
@@ -348,14 +349,14 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   };
   const asrExtrasDefault = asrExtras.promptStyle === 'legacy' && !asrExtras.rehear.noHints && !asrExtras.rehear.temperatures.length && !asrExtras.alternativesTopK;
   const asrExtrasKey = asrExtrasDefault ? undefined : asrExtras;
-  // ヒントの使い方。ヒントが無い発話は 1 回だけ書き起こすので、結果は変わらない（保存済みの書き起こしのキーも変えない）
+  // How hints are used. Utterances without hints are transcribed once, so the result does not change (nor does the key of saved transcriptions)
   const hintMode = settings.asr.hintMode ?? 'always';
   const configRecord = {
     run: runName,
     name: config.name,
     startedAt: started.toISOString(),
     host: env.host,
-    // 設定の上書きに接続の項目（接続先、ヘッダなど）が混ざっていても、記録には残さない。評価が見るのは時間切れと出力の上限だけ
+    // Even if the settings override mixes in connection items (endpoint, headers, ...), they are not recorded. Evaluation only looks at the timeout and the output limit
     config: {
       ...config,
       vocab: config.vocab ?? null,
@@ -395,15 +396,17 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   writePrivate(path.join(dir, 'config.json'), JSON.stringify(configRecord, null, 2));
 
   print(
-    `評価 ${runName}: ${utterances.length} 件（${config.datasets.join('、')}）、LLM ${config.llm}${useLlm && conn ? `（${conn.identity.kind} ${conn.identity.model}、上限 ${maxCalls} 回）` : ''}、辞書 ${vocabTerms.length} 語`,
+    `Eval ${runName}: ${utterances.length} utterances (${config.datasets.join(', ')}), ` +
+      `LLM ${config.llm}${useLlm && conn ? ` (${conn.identity.kind} ${conn.identity.model}, limit ${maxCalls} calls)` : ''}, dictionary ${vocabTerms.length} words`,
   );
-  if (provisionalCount) print(`注意: 正解が仮の発話が ${provisionalCount} 件あります（人が確かめていない。比較対象のアプリの出力を正解とみなした値）`);
-  if (!tokenizer) print('注意: 単語分割を読み込めませんでした（助詞の補正と、読みによる誤りの分類が動きません）');
+  if (provisionalCount)
+    print(`Note: ${provisionalCount} ${provisionalCount === 1 ? 'utterance has' : 'utterances have'} a provisional reference (not checked by a person; the compared app's output is the reference)`);
+  if (!tokenizer) print('Note: could not load the tokenizer (particle correction and the reading-based error classification will not work)');
 
-  /** 1 件の発話を、書き起こしから整形まで通す。16 kHz でない音声は飛ばす（null） */
+  /** Passes one utterance from transcription through formatting. Skips audio that is not 16 kHz (null) */
   const processUtterance = async (u: Utterance) => {
-    // 最近の書き起こし（アプリでは履歴の新しい順）。同じデータセットの、この発話より前の発話の正解を使う。
-    // 時刻の無い発話（公開データ）には、前の発話というものが無いので渡さない
+    // Recent transcripts (newest first in the app's history). Uses the references of earlier utterances in the same dataset.
+    // Utterances without a time (public data) have no earlier utterances, so nothing is passed
     const earlier = (byDataset.get(u.dataset) ?? []).filter((x) => x.timestamp < u.timestamp || (x.timestamp === u.timestamp && x.id < u.id));
     const recent: RecentText[] =
       config.recent === 'none' || !u.timestamp
@@ -414,7 +417,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
             .map((x) => ({ text: x.target, timestamp: x.timestamp }));
     const now = u.timestamp || undefined;
     const dictHints = store.asrHints({ context: {}, recent, now });
-    // 画面の語の代わり: 同じ塊の、直前の発話の正解の文から、名前らしい英字の語を拾う
+    // In place of screen words: picks name-like Latin words from the reference text of the previous utterance in the same chunk
     const screenN = config.screenTermsFromPrevious ?? 0;
     const screenTerms =
       screenN > 0
@@ -429,7 +432,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     const seenHints = new Set(dictHints.map((h) => h.toLowerCase()));
     const hints = [...dictHints, ...screenTerms.filter((t) => !seenHints.has(t.toLowerCase()))];
 
-    // 末尾の切り落とし（実験用）。切り落とさない発話では、保存済みの書き起こしのキーを変えない
+    // Tail cut (experimental). Utterances that are not cut keep the key of saved transcriptions
     const cutMs = Math.max(0, config.truncateTail === 'postRoll' ? (u.postRollMs ?? 0) : (config.truncateTail ?? 0));
     const key = asrCacheKey({
       audioSha256: u.audioSha256,
@@ -438,7 +441,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
       hints,
       prompt: config.asrPrompt,
       extras: asrExtrasKey,
-      // selective-2: 取り込まなかった食い違いを、別の仮説として返すようになった後の結果
+      // selective-2: results after disagreements that were not taken in started coming back as another hypothesis
       hintMode: hintMode === 'selective' && hints.length ? 'selective-2' : undefined,
       truncateTailMs: cutMs || undefined,
       incremental: settings.asr.incremental,
@@ -486,7 +489,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     return { outcome, asrCached, cutMs, out, info };
   };
 
-  // --- 発話ごと
+  // --- Per utterance
   const rowsFile = path.join(dir, 'rows.jsonl');
   const rows: RowRecord[] = [];
   const asrCount: EvalSummary['asr'] = { cached: 0, transcribed: 0, skippedOtherRate: 0, truncated: config.truncateTail === undefined ? undefined : 0 };
@@ -494,8 +497,8 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
   let learnSummary: EvalSummary['learn'];
   try {
     if (trainUtterances.length) {
-      // 学習の前の状態で流した出力を、正解の文に直した、という手直しを模す。
-      // 先に全部を流しておく（学習の前の出力なので、基準の実行で保存済みの LLM の結果をそのまま使える）
+      // Simulates edits that turned the output from before learning into the reference text.
+      // Runs all of them first (it is output from before learning, so saved LLM results from the baseline run can be reused)
       const kinds = new Set(config.learn?.kinds ?? LEARN_KINDS);
       const outputs: { u: Utterance; raw: string; final: string }[] = [];
       for (const u of trainUtterances) {
@@ -504,13 +507,13 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
         if (done) outputs.push({ u, raw: done.outcome.text, final: done.out.stages.final });
       }
       const counts = { train: outputs.length, edited: 0, words: 0, forms: 0, corrections: 0, kept: 0, numbers: 0 };
-      // 学習した時刻は、手直しの順に 1 秒ずつ進める。実際の時刻を使うと、同じ時刻に学習した語の並びが実行のたびに変わり、
-      // 音声認識のヒントの順と、結果がゆらぐ
+      // Learning time advances one second per edit, in edit order. With the real time, the order of words learned at the same time changes from run to run,
+      // and the order of the speech recognition hints, and the results, waver
       let learnClock = started.getTime();
       for (const o of outputs) {
         if (caching?.fatal) break;
-        // 直す先は、出力に最も近い正解の文にする（採点と同じ選び方）。別解は、表記だけが違う書き方で、どちらで書いても誤りではない。
-        // 正解の文そのものに直すことにすると、利用者が直さないはずの表記の違い（「後で」と「あとで」）まで学習してしまう
+        // The edit target is the reference text closest to the output (chosen the same way as scoring). Alternatives differ only in notation, and either way of writing is correct.
+        // Editing into the reference text itself would also learn notation differences the user would not fix (「後で」 and 「あとで」)
         const refs = [o.u.target, ...o.u.alt];
         const edited = refs[bestCer(o.final, refs, normContent).ref] ?? o.u.target;
         if (!o.final.trim() || refs.includes(o.final)) continue;
@@ -545,12 +548,12 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
       }
       learnSummary = counts;
       print(
-        `学習: ${counts.train} 件のうち、出力が正解と違った ${counts.edited} 件を手直しとして学習（語 ${counts.words}、聞き違えた形 ${counts.forms}、` +
-          `取り違えの組 ${counts.corrections}、書き換えない語句 ${counts.kept}、number styles ${counts.numbers}）`,
+        `Learning: of ${counts.train} utterances, learned from the ${counts.edited} whose output differed from the reference, as edits (words ${counts.words}, misheard forms ${counts.forms}, ` +
+          `correction pairs ${counts.corrections}, kept phrases ${counts.kept}, number styles ${counts.numbers})`,
       );
       if (caching?.fatal) {
         aborted = caching.fatal.kind;
-        print(`中止: ${redact(caching.fatal.message)}`);
+        print(`Aborted: ${redact(caching.fatal.message)}`);
       }
     }
     for (const [i, u] of utterances.entries()) {
@@ -559,9 +562,9 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
       if (!done) continue;
       const { outcome, asrCached, cutMs, out, info } = done;
       if (caching?.fatal) {
-        // 認証や設定の誤り、呼び出しの上限。この発話は記録せずに止める
+        // Authentication or settings error, or the call limit. Stops without recording this utterance
         aborted = caching.fatal.kind;
-        print(`中止: ${redact(caching.fatal.message)}`);
+        print(`Aborted: ${redact(caching.fatal.message)}`);
         break;
       }
       const fmt = out.llm?.fmt;
@@ -605,7 +608,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
           overAppTimeout: !!info && !info.errorKind && info.elapsedMs > appTimeoutMs,
           lowConfidence: out.noLlm?.lowConfidence ?? false,
           guard: fmt?.guard,
-          // 検査の前の LLM の出力。検査が出力を変えたか、記録だけの検査で問題を見つけたときに、当たり外れを調べるために残す
+          // The LLM's output before the check. Kept to see whether the check was right, when it changed the output or a log-only check found a problem
           llmText: fmt?.guard && (fmt.guard.action !== 'none' || fmt.guard.violations.length || fmt.guard.counts.unsupported) ? fmt.llmText : undefined,
         },
         match: { replaced: out.noLlm?.prep?.replaced ?? 0, candidates: out.llm?.prep?.candidates.length ?? 0 },
@@ -616,16 +619,17 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
       const llmNote = !useLlm
         ? ''
         : row.llm.fastPath
-          ? ' 近道'
+          ? ' fast path'
           : row.llm.called
             ? row.llm.errorKind
-              ? ` LLM 失敗（${row.llm.errorKind}）`
+              ? ` LLM failed (${row.llm.errorKind})`
               : row.llm.cached
-                ? ' LLM 保存済み'
+                ? ' LLM cached'
                 : ` LLM ${row.llm.ms}ms`
             : '';
       print(
-        `[${String(i + 1).padStart(3)}/${utterances.length}] ${u.dataset} ${u.split.padEnd(7)} ${u.durationSec.toFixed(1).padStart(5)}s ASR ${asrCached ? '保存済み' : `${outcome.computeMs}ms`}${llmNote}`,
+        `[${String(i + 1).padStart(3)}/${utterances.length}] ${u.dataset} ${u.split.padEnd(7)} ${u.durationSec.toFixed(1).padStart(5)}s ` +
+          `ASR ${asrCached ? 'cached' : `${outcome.computeMs}ms`}${llmNote}`,
       );
     }
   } finally {
@@ -633,7 +637,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     store.flush();
   }
 
-  // --- 集計
+  // --- Totals
   const finished = new Date();
   const summary: EvalSummary = {
     run: runName,
@@ -686,23 +690,23 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
     })}\n`,
   );
 
-  // --- 表示（数だけ）
+  // --- Display (numbers only)
   print('');
-  print(`=== 集計${summary.provisional ? '（仮の基準値。正解が仮の発話を含む）' : ''}${aborted ? `（途中で止めた: ${aborted}）` : ''} ===`);
-  for (const l of formatGroup('全体', all, config.llm)) print(l);
+  print(`=== Summary${summary.provisional ? ' (provisional baseline; includes utterances with a provisional reference)' : ''}${aborted ? ` (stopped early: ${aborted})` : ''} ===`);
+  for (const l of formatGroup('All', all, config.llm)) print(l);
   for (const [name, g] of Object.entries(summary.groups.byDataset)) for (const l of formatGroup(name, g, config.llm)) print(l);
-  for (const [name, g] of Object.entries(summary.groups.bySplit)) for (const l of formatGroup(name === 'dev' ? '開発用' : '確認用', g, config.llm)) print(l);
+  for (const [name, g] of Object.entries(summary.groups.bySplit)) for (const l of formatGroup(name === 'dev' ? 'Dev set' : 'Holdout set', g, config.llm)) print(l);
   if (summary.groups.byCategory) for (const l of formatCategories(summary.groups.byCategory, config.llm)) print(l);
   print('');
   for (const l of formatDetail(all, config.llm, vocabTerms.length)) print(l);
   if (caching) {
-    const http = summary.llm.httpRequests !== undefined ? `、HTTP リクエスト ${summary.llm.httpRequests} 回` : '';
-    print(`LLM の呼び出し  ${summary.llm.calls} 回${http}（上限 ${maxCalls} 回）、保存済みを使った ${summary.llm.cacheHits} 回、新しく保存 ${summary.llm.stored} 回`);
+    const http = summary.llm.httpRequests !== undefined ? `, HTTP requests ${summary.llm.httpRequests}` : '';
+    print(`LLM calls        ${summary.llm.calls}${http} (limit ${maxCalls}), from saved results ${summary.llm.cacheHits}, newly saved ${summary.llm.stored}`);
   }
-  print(`音声認識        保存済み ${asrCount.cached} 件、今回書き起こした ${asrCount.transcribed} 件${asrCount.skippedOtherRate ? `、16 kHz 以外で飛ばした ${asrCount.skippedOtherRate} 件` : ''}`);
+  print(`Speech recognition saved ${asrCount.cached}, transcribed now ${asrCount.transcribed}${asrCount.skippedOtherRate ? `, skipped (not 16 kHz) ${asrCount.skippedOtherRate}` : ''}`);
   if (asrCount.truncated !== undefined) {
-    print(`末尾の切り落とし ${asrCount.truncated} 件（${config.truncateTail === 'postRoll' ? '行ごとの、離した後に録った長さ' : `${config.truncateTail} ms`}）`);
+    print(`Tail cut         utterances ${asrCount.truncated} (${config.truncateTail === 'postRoll' ? 'per-row length recorded after release' : `${config.truncateTail} ms`})`);
   }
-  print(`結果: ${dir}`);
+  print(`Results: ${dir}`);
   return { dir, summary };
 }

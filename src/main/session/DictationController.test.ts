@@ -1,6 +1,6 @@
 /**
- * DictationController の結合テスト。ヘルパー、ASR、LLM、保存先を偽物にして、
- * ホットキーと音声のイベントを流し込み、貼り付けと履歴までを確かめる。
+ * Integration tests for DictationController. With fake helper, ASR, LLM and stores,
+ * they feed in hotkey and audio events and check everything through to the paste and the history.
  */
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -53,7 +53,7 @@ class FakeHelper extends EventEmitter {
     this.started.push(sessionId);
     return { sessionId, deviceId: 'mic', deviceName: 'Mic', transport: 'builtin' };
   }
-  /** 録音の停止の返事を遅らせるときに差し替える */
+  /** Replaced to delay the reply to stopping the recording */
   stopGate: Promise<void> = Promise.resolve();
   async stopAudio(sessionId: number) {
     await this.stopGate;
@@ -74,9 +74,9 @@ class FakeHelper extends EventEmitter {
   }
 }
 
-/** 話の間での先回りの書き起こしは既定でオフなので、そのテストでは明示的に有効にする */
+/** Speculative transcription during pauses is off by default, so its tests turn it on explicitly */
 const SPECULATIVE: Partial<Settings> = { asr: { ...DEFAULT_SETTINGS.asr, speculative: true, tailMs: 0 } };
-/** キーを離した後も録音を続ける設定 */
+/** Settings that keep recording after the key is released */
 const TAIL: Partial<Settings> = { asr: { ...DEFAULT_SETTINGS.asr, tailMs: 120 } };
 
 function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (req: LlmRequest) => Promise<string> | string; tokenizer?: Tokenizer } = {}) {
@@ -107,7 +107,7 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
       learned.push(...w);
       return w;
     }),
-    // 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）。渡された分をそのまま覚えたことにする
+    // Learning that adds no dictionary word (misheard forms, correction pairs, kept phrases). Treats everything passed in as remembered
     addMisheardForms: vi.fn((f: { word: string; from: string }[]) => {
       remembered.forms.push(...f);
       return f;
@@ -132,6 +132,7 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
   };
   const history: HistoryItem[] = [];
   const huds: string[] = [];
+  const hudVars: { key: string; vars?: Record<string, string> }[] = [];
   const floaters: Partial<FloaterState>[] = [];
   const sounds: string[] = [];
   const llmCalls: LlmRequest[] = [];
@@ -158,7 +159,10 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
     ui: {
       floater: (st: Partial<FloaterState>) => floaters.push(st),
       level: () => undefined,
-      hud: (k: string) => huds.push(k),
+      hud: (k: string, vars?: Record<string, string>) => {
+        huds.push(k);
+        hudVars.push({ key: k, vars });
+      },
       sound: (n: string) => sounds.push(n),
       preconnect: () => undefined,
     },
@@ -166,10 +170,10 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
     tokenizer: () => opts.tokenizer ?? null,
   } as unknown as ControllerDeps;
   const controller = new DictationController(deps);
-  return { controller, helper, asr, history, huds, llmCalls, learned, remembered, settings, floaters, sounds, customizations };
+  return { controller, helper, asr, history, huds, hudVars, llmCalls, learned, remembered, settings, floaters, sounds, customizations };
 }
 
-/** 非同期の処理が進むまで待つ */
+/** Waits until async work has progressed */
 async function until(cond: () => boolean, ms = 3000): Promise<void> {
   const end = Date.now() + ms;
   while (!cond()) {
@@ -183,7 +187,7 @@ const formatted = (text: string) => JSON.stringify({ text });
 describe('DictationController', () => {
   beforeEach(() => vi.useRealTimers());
 
-  it('押しっぱなしで話すと、書き起こして整形した文を貼り付け、履歴に残す', async () => {
+  it('transcribes push-to-talk speech, pastes the formatted text and saves it to the history', async () => {
     const t = setup({ llm: () => formatted('今日は晴れです。') });
     t.helper.hotkey('activate', 'down', 0);
     expect(t.helper.started).toEqual([1]);
@@ -193,39 +197,39 @@ describe('DictationController', () => {
     expect(t.helper.pastes).toHaveLength(1);
     expect(t.helper.pastes[0].text).toBe('今日は晴れです。');
     expect(t.history[0]).toMatchObject({ rawText: 'えーと今日は晴れです', text: '今日は晴れです。', paste: 'pasted', formatted: true });
-    // 整形には書き起こしと入力先のアプリ名が渡る
+    // Formatting gets the transcript and the target app's name
     expect(t.llmCalls[0].user).toContain('えーと今日は晴れです');
     expect(t.llmCalls[0].user).toContain('TextEdit');
   });
 
-  it('離した後の録音を続ける設定では、離してからも届いた音声を書き起こしに含め、続けた時間を履歴に残す', async () => {
+  it('includes audio that arrives after release when recording continues after release, and saves how long it continued', async () => {
     const t = setup({ settings: TAIL, llm: () => formatted('今日は晴れです。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
     await new Promise((r) => setTimeout(r, 10));
     t.helper.hotkey('activate', 'up', 2000);
-    // 離した直後は、まだ録音を止めていない（文末の音を待っている）
+    // Right after release, recording has not stopped yet (it waits for the end of the sentence)
     await new Promise((r) => setTimeout(r, 40));
     expect(t.asr.transcribe).not.toHaveBeenCalled();
-    t.helper.audio(1, speech(0.1)); // 離した後に届いた音声
+    t.helper.audio(1, speech(0.1)); // audio that arrived after release
     await until(() => t.history.length === 1);
     const samples = t.asr.transcribe.mock.calls[0][0];
     expect(samples.length).toBe(SR * 2.1);
     expect(t.history[0].timings.postRollMs).toBe(120);
   });
 
-  it('離した後の録音を続ける設定でも、1 秒以上黙ってから離したら続けない', async () => {
+  it('does not continue recording after release when the user was silent for at least 1 second before releasing', async () => {
     const t = setup({ settings: TAIL, llm: () => formatted('今日は晴れです。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
-    t.helper.audio(1, new Float32Array(SR * 1.2)); // 1.2 秒の無音
+    t.helper.audio(1, new Float32Array(SR * 1.2)); // 1.2 seconds of silence
     await new Promise((r) => setTimeout(r, 10));
     t.helper.hotkey('activate', 'up', 3200);
     await until(() => t.history.length === 1);
     expect(t.history[0].timings.postRollMs).toBeUndefined();
   });
 
-  it('画面の文から拾った語を、設定がオンのときだけ音声認識のヒントに足し、録音を残す設定なら履歴にも残す', async () => {
+  it('adds words picked from the screen text to the speech recognition hints only when the setting is on, and saves them to the history when recordings are kept', async () => {
     const withContext = (t: ReturnType<typeof setup>) => {
       t.helper.context = {
         ...t.helper.context,
@@ -251,14 +255,14 @@ describe('DictationController', () => {
     on.helper.audio(1, speech(2));
     on.helper.hotkey('activate', 'up', 2000);
     await until(() => on.history.length === 1);
-    // 名前らしい語だけを拾う（小文字だけのコマンドは拾わない）
-    // 既定では、ヒントなしとヒントありの 2 回書き起こす。ヒントありのほうに、画面の語が入る
+    // Only name-like words are picked (lowercase-only commands are not)
+    // By default it transcribes twice, without and with hints. The screen words are in the run with hints
     const hinted = on.asr.transcribe.mock.calls.map((c) => c[1].hints).find((h) => h.length) ?? [];
     expect([...hinted].sort()).toEqual(['Grafana', 'Sentry']);
     expect([...(on.history[0].contextTerms ?? [])].sort()).toEqual(['Grafana', 'Sentry']);
   });
 
-  it('辞書に語があるときは、ヒントなしとヒントありの 2 回書き起こし、ヒントが効いた所だけを取り込む', async () => {
+  it('transcribes twice, without and with hints, when the dictionary has words, and takes only the spots where the hints helped', async () => {
     const t = setup({ llm: (req) => formatted(JSON.parse(req.user).raw_text) });
     t.customizations.get().dictionary.push('Docker');
     t.asr.transcribe.mockImplementation(async (_samples: Float32Array, o: TranscribeOptions) => ({
@@ -270,11 +274,11 @@ describe('DictationController', () => {
     t.helper.hotkey('activate', 'up', 2000);
     await until(() => t.history.length === 1);
     expect(t.asr.transcribe.mock.calls.map((c) => c[1].hints)).toEqual([[], ['Docker']]);
-    // 辞書の語は取り込み、ヒントに引っ張られた所（見積もり → 三森）は取り込まない
+    // Takes the dictionary word, but not the spot the hints pulled off course (見積もり → 三森)
     expect(t.history[0].rawText).toBe('見積もりの件、Dockerで確認します。');
   });
 
-  it('ヒントの使い方を always にすると、ヒントありで 1 回だけ書き起こす', async () => {
+  it('transcribes once with hints when the hint mode is always', async () => {
     const t = setup({
       settings: { asr: { ...DEFAULT_SETTINGS.asr, tailMs: 0, hintMode: 'always' } },
       llm: (req) => formatted(JSON.parse(req.user).raw_text),
@@ -287,19 +291,19 @@ describe('DictationController', () => {
     expect(t.asr.transcribe.mock.calls.map((c) => c[1].hints)).toEqual([['Docker']]);
   });
 
-  it('話し終えてから離したら、録音の停止の返事を待たずに進む', async () => {
+  it('goes on without waiting for the stop reply when released after speech has ended', async () => {
     const t = setup({ llm: () => formatted('今日は晴れです。') });
-    t.helper.stopGate = new Promise(() => undefined); // 返事が来ない
+    t.helper.stopGate = new Promise(() => undefined); // the reply never comes
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
-    t.helper.audio(1, new Float32Array(SR * 0.4)); // 0.4 秒の無音
+    t.helper.audio(1, new Float32Array(SR * 0.4)); // 0.4 seconds of silence
     await new Promise((r) => setTimeout(r, 10));
     t.helper.hotkey('activate', 'up', 2400);
     await until(() => t.history.length === 1);
     expect(t.helper.pastes).toHaveLength(1);
   });
 
-  it('話している途中で離したら、離した瞬間までの音声が届くのを待つ', async () => {
+  it('waits for the audio up to the release when released mid-speech', async () => {
     const t = setup({ llm: () => formatted('今日は晴れです。') });
     let release!: () => void;
     t.helper.stopGate = new Promise<void>((r) => (release = r));
@@ -313,7 +317,7 @@ describe('DictationController', () => {
     await until(() => t.history.length === 1);
   });
 
-  it('LLM が失敗したら、書き起こしをそのまま貼り付けて知らせる', async () => {
+  it('pastes the transcript as is and notifies when the LLM fails', async () => {
     const t = setup({
       llm: () => {
         throw new Error('boom');
@@ -328,7 +332,18 @@ describe('DictationController', () => {
     expect(t.huds).toContain('LlmFailed');
   });
 
-  it('esc で取り消すと、書き起こしも貼り付けもしない', async () => {
+  it('explains a failed paste in words instead of the helper code', async () => {
+    const t = setup();
+    t.helper.pasteAck = { success: false, failureReason: 'app_changed' };
+    t.helper.hotkey('activate', 'down', 0);
+    t.helper.audio(1, speech(2));
+    t.helper.hotkey('activate', 'up', 2000);
+    await until(() => t.history.length === 1);
+    expect(t.history[0].paste).toBe('failed');
+    expect(t.hudVars.find((h) => h.key === 'PasteFailed')?.vars).toEqual({ reason: 'The app in front changed before the text was pasted' });
+  });
+
+  it('neither transcribes nor pastes after a cancel with esc', async () => {
     const t = setup({ llm: () => formatted('x') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(1));
@@ -340,7 +355,7 @@ describe('DictationController', () => {
     expect(t.helper.sent.some((m) => m.type === 'audio_stop')).toBe(true);
   });
 
-  it('前の結果の整形中に同じアプリで次の録音を始めたら、前の結果を先に貼り、次の結果をその後に貼る', async () => {
+  it('pastes the previous result first and the next one after it when a new recording in the same app starts while the previous one is formatting', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const t = setup({
@@ -354,13 +369,13 @@ describe('DictationController', () => {
     t.helper.audio(1, speech(2));
     t.helper.hotkey('activate', 'up', 2000);
     await until(() => t.llmCalls.length === 1);
-    // 1 つ目の整形を待っている間に 2 つ目を話し終える
+    // The second recording finishes while the first is waiting for formatting
     t.helper.hotkey('activate', 'down', 3000);
     t.helper.audio(2, speech(2));
     t.helper.hotkey('activate', 'up', 5000);
     await until(() => t.llmCalls.length === 2);
     await new Promise((r) => setTimeout(r, 30));
-    // 2 つ目は整形が終わっても、1 つ目の貼り付けを待つ
+    // The second waits for the first paste even after its formatting is done
     expect(t.helper.pastes).toHaveLength(0);
     release();
     await until(() => t.history.length === 2);
@@ -370,7 +385,7 @@ describe('DictationController', () => {
     expect(t.history[1].timings.pasteWaitMs).toBeGreaterThan(0);
   });
 
-  it('次の録音が別のアプリ向けなら、前の結果は貼らずに履歴へ残す', async () => {
+  it('keeps the previous result in the history without pasting when the next recording targets another app', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const t = setup({
@@ -396,12 +411,12 @@ describe('DictationController', () => {
     expect(t.huds).toContain('StaleResult');
   });
 
-  it('話の間で先に書き起こし、離すまで話さなければその結果を使う', async () => {
+  it('transcribes ahead during a pause and uses that result when nothing more is said before release', async () => {
     const t = setup({ settings: SPECULATIVE, llm: () => formatted('今日は晴れです。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
     t.helper.audio(1, new Float32Array(SR * 0.6));
-    // 0.3 秒の間で投機が始まっている
+    // Speculation has started at the 0.3-second pause
     expect(t.asr.transcribe).toHaveBeenCalledTimes(1);
     expect(t.asr.transcribe.mock.calls[0][0].length).toBe(Math.round(SR * 2.3));
     t.helper.hotkey('activate', 'up', 2600);
@@ -412,9 +427,9 @@ describe('DictationController', () => {
     expect(t.history[0].timings.asrDoneMs).toBeTypeOf('number');
   });
 
-  it('ヘルパーが報告した ⌘V の時刻を、離してからの経過に直して履歴に残す', async () => {
+  it('saves the ⌘V time reported by the helper as time since release', async () => {
     const t = setup({ llm: () => formatted('今日は晴れです。') });
-    // hotkey の t と同じ時計で、離してから 150ms 後に ⌘V を送ったことにする
+    // Pretend ⌘V was sent 150 ms after release, on the same clock as the hotkey's t
     t.helper.pasteAck = { success: true, landed: 'confirmed', keyPostedAt: 2000 + 150, keyPostedAfterMs: 3, preReadMs: 2 };
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
@@ -426,7 +441,7 @@ describe('DictationController', () => {
     expect(tm.ackMs).toBeTypeOf('number');
   });
 
-  it('先に書き起こした後に話したら、その結果は捨てて全体を書き起こし直す', async () => {
+  it('discards the speculative result and transcribes everything again when the user speaks after it', async () => {
     const t = setup({ settings: SPECULATIVE, llm: () => formatted('続けて話した。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
@@ -434,7 +449,7 @@ describe('DictationController', () => {
     expect(t.asr.transcribe).toHaveBeenCalledTimes(1);
     const specSignal = t.asr.transcribe.mock.calls[0][1].signal!;
     t.helper.audio(1, speech(1));
-    // 後から話したので投機は取り消される
+    // The user spoke afterwards, so the speculation is canceled
     expect(specSignal.aborted).toBe(true);
     t.helper.hotkey('activate', 'up', 3400);
     await until(() => t.history.length === 1);
@@ -443,7 +458,7 @@ describe('DictationController', () => {
     expect(t.history[0].timings.speculative).toBe('miss');
   });
 
-  it('ASR が処理中なら投機しない', async () => {
+  it('does not speculate while ASR is busy', async () => {
     const t = setup({ llm: () => formatted('x') });
     t.asr.idle = false;
     t.helper.hotkey('activate', 'down', 0);
@@ -455,7 +470,7 @@ describe('DictationController', () => {
     expect(t.history[0].timings.speculative).toBeUndefined();
   });
 
-  it('確定中に esc を押すと、書き起こし中の ASR も取り消す', async () => {
+  it('also cancels ASR in progress when esc is pressed while finalizing', async () => {
     const t = setup({ llm: () => formatted('x') });
     t.asr.transcribe.mockImplementation((_s: Float32Array, o: TranscribeOptions) => new Promise((_res, rej) => o.signal?.addEventListener('abort', () => rej(new AsrCancelledError()))));
     t.asr.idle = false;
@@ -471,7 +486,7 @@ describe('DictationController', () => {
     expect(t.huds).not.toContain('AsrFailed');
   });
 
-  it('2 秒を超える録音を esc で取り消したら、書き起こさずに音声を履歴に残す', async () => {
+  it('keeps the audio in the history without transcribing when a recording longer than 2 seconds is canceled with esc', async () => {
     const t = setup({ settings: { saveRecordings: true }, llm: () => formatted('x') });
     t.asr.idle = false;
     t.helper.hotkey('activate', 'down', 0);
@@ -485,7 +500,7 @@ describe('DictationController', () => {
     expect(t.huds).toContain('Cancelled');
   });
 
-  it('エラーで録音を閉じたとき（利用者の取り消しでないとき）は、取り消しの通知を出さない', async () => {
+  it('shows no cancel notification when an error closes the recording (not a cancel by the user)', async () => {
     const t = setup({ settings: { saveRecordings: true } });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(3));
@@ -495,7 +510,7 @@ describe('DictationController', () => {
     expect(t.huds).not.toContain('Cancelled');
   });
 
-  it('録音中に音声が途絶えたら（engine_failed）、それまでの分を書き起こす', async () => {
+  it('transcribes what was recorded when audio stops during recording (engine_failed)', async () => {
     const t = setup({ llm: () => formatted('ここまで。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
@@ -504,7 +519,7 @@ describe('DictationController', () => {
     expect(t.history[0].text).toBe('ここまで。');
   });
 
-  it('最初の音声が届いたら micReady を立てて開始音を鳴らし、2.5 秒音が届かなければ知らせて録音を続ける', async () => {
+  it('sets micReady and plays the start sound on the first audio, and notifies but keeps recording when no sound arrives for 2.5 seconds', async () => {
     const t = setup({ settings: { playSounds: true }, llm: () => formatted('x') });
     t.helper.hotkey('activate', 'down', 0);
     expect(t.sounds).toEqual([]);
@@ -518,7 +533,7 @@ describe('DictationController', () => {
     expect(t.controller.isRecording).toBe(true);
   });
 
-  it('音声が届かなくても、開始音は 600ms で鳴らす', async () => {
+  it('plays the start sound after 600 ms even if no audio arrives', async () => {
     const t = setup({ settings: { playSounds: true }, llm: () => formatted('x') });
     t.helper.hotkey('activate', 'down', 0);
     await new Promise((r) => setTimeout(r, 700));
@@ -527,7 +542,7 @@ describe('DictationController', () => {
     expect(t.sounds).toEqual(['start']);
   });
 
-  it('確定するときに ASR が準備中なら、準備ができるまで待って書き起こす', async () => {
+  it('waits for ASR to be ready and then transcribes when it is still getting ready at finalization', async () => {
     const t = setup({ llm: () => formatted('待った。') });
     t.asr.ready = false;
     t.asr.waitReady.mockImplementation(async () => {
@@ -543,11 +558,11 @@ describe('DictationController', () => {
     expect(t.huds).not.toContain('AsrNotReady');
   });
 
-  it('マイクが切り替わっただけ（fatal: false）なら、録音を続ける', async () => {
+  it('keeps recording when the microphone only switched (fatal: false)', async () => {
     const t = setup({ llm: () => formatted('続き。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(1.5));
-    t.helper.emitMsg({ type: 'audio_error', payload: { sessionId: 1, code: 'device_lost', message: '内蔵マイクに切り替えました', fatal: false } });
+    t.helper.emitMsg({ type: 'audio_error', payload: { sessionId: 1, code: 'device_lost', message: 'switched to the built-in microphone', fatal: false } });
     t.helper.audio(1, speech(1));
     expect(t.huds).toContain('MicrophoneSwitched');
     expect(t.asr.transcribe).not.toHaveBeenCalled();
@@ -556,7 +571,7 @@ describe('DictationController', () => {
     expect(t.history[0].durationSec).toBeCloseTo(2.5, 1);
   });
 
-  it('録音中にヘルパーが落ちたら、それまでの分を書き起こす', async () => {
+  it('transcribes what was recorded when the helper crashes while recording', async () => {
     const t = setup({ llm: () => formatted('ここまで。') });
     t.helper.hotkey('activate', 'down', 0);
     t.helper.audio(1, speech(2));
@@ -564,12 +579,12 @@ describe('DictationController', () => {
     await until(() => t.history.length === 1);
     expect(t.huds).toContain('HelperCrashed');
     expect(t.history[0].text).toBe('ここまで。');
-    // 次の fn で新しい録音を始められる
+    // The next fn press can start a new recording
     t.helper.hotkey('activate', 'down', 5000);
     expect(t.helper.started).toEqual([1, 2]);
   });
 
-  it('文字を選択して話すと編集モードになり、選択範囲を書き換える', async () => {
+  it('enters edit mode when speaking with text selected, and rewrites the selection', async () => {
     const t = setup({ llm: () => JSON.stringify({ text: 'ご確認をお願いいたします。', deleted: false, unclear: false }) });
     t.helper.context = { ...t.helper.context, field: { ...t.helper.context.field!, selectedText: '確認して' } } as ContextPayload;
     t.asr.transcribe.mockResolvedValue({ text: 'もっと丁寧に', elapsedMs: 1 });
@@ -580,17 +595,17 @@ describe('DictationController', () => {
     await until(() => t.history.length === 1);
     expect(t.history[0].mode).toBe('edit');
     expect(t.helper.pastes[0]).toMatchObject({ text: 'ご確認をお願いいたします。', expectSelectedText: '確認して' });
-    // 辞書の照合は書き取りのときだけ
+    // Dictionary matching happens only when dictating
     expect(t.customizations.prepareFormatting).not.toHaveBeenCalled();
   });
 
-  it('編集の指示が分からなかったら、書き換えずに履歴に残す（N5）', async () => {
+  it('keeps an unclear edit instruction in the history without rewriting (N5)', async () => {
     const t = setup({ llm: () => JSON.stringify({ text: '', deleted: false, unclear: true }) });
     t.helper.context = { ...t.helper.context, field: { ...t.helper.context.field!, selectedText: 'こんにちは 世界\n' } } as ContextPayload;
     t.asr.transcribe.mockResolvedValue({ text: 'あのー', elapsedMs: 1 });
     t.helper.hotkey('activate', 'down', 0);
     await new Promise((r) => setTimeout(r, 10));
-    // 選択の文字数は空白を除いて数える
+    // The selection length is counted without whitespace
     expect(t.floaters.filter((f) => f.selectionChars !== undefined).at(-1)?.selectionChars).toBe(7);
     t.helper.audio(1, speech(2));
     t.helper.hotkey('activate', 'up', 2000);
@@ -601,7 +616,7 @@ describe('DictationController', () => {
     expect(t.history[0].selectedText).toBeUndefined();
   });
 
-  it('語彙ヒントと辞書の照合に、入力先の文脈と最近の書き起こしを渡し、照合の結果を整形に使う', async () => {
+  it('passes the input target context and recent transcripts to vocabulary hints and dictionary matching, and uses the match results in formatting', async () => {
     const t = setup({ llm: () => formatted('Kubernetes を使います。') });
     t.helper.context = {
       ...t.helper.context,
@@ -624,13 +639,13 @@ describe('DictationController', () => {
     expect(hintArg.context).toMatchObject({ bundleId: 'com.apple.TextEdit', windowTitle: 'メモ', beforeCursor: '前の文', afterCursor: '後の文' });
     expect(Array.isArray(hintArg.recent)).toBe(true);
     expect(t.customizations.prepareFormatting).toHaveBeenCalledWith('くばねてすを使います', expect.objectContaining({ useLlm: true }));
-    // 照合の候補は整形の LLM に渡り、履歴の rawText は書き起こしのまま
+    // Match candidates go to the formatting LLM, and rawText in the history stays the transcript
     expect(t.llmCalls[0].user).toContain('くばねてす');
     expect(t.llmCalls[0].system).toContain('Kubernetes');
     expect(t.history[0].rawText).toBe('くばねてすを使います');
   });
 
-  it('パスワード欄では、入力欄の文字を語彙ヒントの文脈に入れない', async () => {
+  it('leaves input field text out of the vocabulary hint context in password fields', async () => {
     const t = setup({ llm: () => formatted('x') });
     t.helper.context = { ...t.helper.context, field: { ...t.helper.context.field!, isSecure: true, beforeCursor: '秘密' } } as ContextPayload;
     t.helper.hotkey('activate', 'down', 0);
@@ -642,7 +657,7 @@ describe('DictationController', () => {
     expect(hintArg.context.beforeCursor).toBeUndefined();
   });
 
-  it('LLM なしでは、照合で置き換えた文を貼り、履歴の rawText は置き換える前のまま残す', async () => {
+  it('pastes the text replaced by matching without the LLM, and keeps rawText in the history as before the replacement', async () => {
     const t = setup();
     t.customizations.prepareFormatting.mockImplementation((raw: string) => ({ text: raw.replace('くばねてす', 'Kubernetes'), vocabulary: [], candidates: [], replaced: 1 }));
     t.asr.transcribe.mockResolvedValue({ text: 'くばねてすを使います', elapsedMs: 1 });
@@ -655,9 +670,9 @@ describe('DictationController', () => {
     expect(t.history[0].rawText).toBe('くばねてすを使います');
   });
 
-  it('自動修正（textfix）は、LLM なしでは直した文を貼って履歴に残し、LLM には直す前の文と候補を渡す', async () => {
+  it('pastes and records the textfix result without the LLM, and passes the original text and candidates to the LLM', async () => {
     const TEXTFIX: Partial<Settings> = { textFix: { ...DEFAULT_SETTINGS.textFix, latin: true } };
-    // LLM なし: 直した文を貼り、履歴に直した箇所を残す。rawText は書き起こしのまま
+    // Without the LLM: paste the fixed text and record the fixes in the history. rawText stays the transcript
     const a = setup({ settings: TEXTFIX, asrText: 'スラックで送ります' });
     a.helper.hotkey('activate', 'down', 0);
     a.helper.audio(1, speech(2));
@@ -667,7 +682,7 @@ describe('DictationController', () => {
     expect(a.history[0].autoFixes).toEqual([{ rule: 'latin', before: 'スラック', after: 'Slack' }]);
     expect(a.history[0].rawText).toBe('スラックで送ります');
 
-    // LLM あり: LLM には直す前の文と候補を渡し、LLM の結果を使ったときは履歴に直した箇所を残さない
+    // With the LLM: pass the original text and candidates to the LLM, and record no fixes in the history when the LLM result is used
     const b = setup({ settings: { ...TEXTFIX, llmFastPath: false }, asrText: 'スラックで送ります', llm: () => formatted('Slackで送ります。') });
     b.helper.hotkey('activate', 'down', 0);
     b.helper.audio(1, speech(2));
@@ -678,7 +693,7 @@ describe('DictationController', () => {
     expect(user.lexicon_candidates).toEqual([{ heard: 'スラック', word: 'Slack' }]);
     expect(b.history[0].autoFixes).toBeUndefined();
 
-    // 止めた箇所（今後は直さない）と、規則がすべてオフのときは直さない
+    // No fixes at blocked spots (never fix again), or when all rules are off
     const c = setup({ settings: { textFix: { ...TEXTFIX.textFix!, blocked: ['latin:スラック'] } }, asrText: 'スラックで送ります' });
     c.helper.hotkey('activate', 'down', 0);
     c.helper.audio(1, speech(2));
@@ -688,7 +703,7 @@ describe('DictationController', () => {
     expect(c.history[0].autoFixes).toBeUndefined();
   });
 
-  it('書き起こしの確信度の低い字がある発話は、近道に入れずに LLM に回す', async () => {
+  it('sends an utterance with low-confidence characters to the LLM instead of the fast path', async () => {
     const text = '明日の会議は午後からです。';
     const tokens = (p: number): [string, number][] => [
       ['明日の会議は', 0.99],
@@ -713,7 +728,7 @@ describe('DictationController', () => {
     expect(shaky.llmCalls).toHaveLength(1);
     expect(shaky.history[0].fastPath).toBeUndefined();
 
-    // 0.3 以上 0.5 未満の字は誤りの手がかりにならないので、近道のままにする（LOW_CONFIDENCE）
+    // Characters from 0.3 up to 0.5 are no sign of an error, so the fast path stays (LOW_CONFIDENCE)
     const unsure = setup({ settings: { llmFastPath: true }, asrText: text, llm: () => formatted(text) });
     unsure.asr.transcribe.mockResolvedValue({ text, elapsedMs: 1, tokens: tokens(0.4) } as never);
     unsure.helper.hotkey('activate', 'down', 0);
@@ -724,7 +739,7 @@ describe('DictationController', () => {
     expect(unsure.history[0].fastPath).toBe(true);
   });
 
-  it('ターミナルでは貼り付けの着地確認をしない（PST-3）', async () => {
+  it('skips the paste landing check in a terminal (PST-3)', async () => {
     const t = setup({ llm: () => formatted('ls -la') });
     t.helper.context = { ...t.helper.context, app: { name: 'Terminal', bundleId: 'com.apple.Terminal', pid: 2 } } as ContextPayload;
     t.helper.hotkey('activate', 'down', 0);
@@ -734,7 +749,7 @@ describe('DictationController', () => {
     expect(t.helper.pastes[0].verifyLanding).toBe(false);
   });
 
-  it('マイクの名前が分かったらフローティングバーに送り、ロックせずに 40 秒押し続けたらロックを案内する', async () => {
+  it('sends the microphone name to the floating bar once known, and shows the lock hint after holding for 40 seconds without locking', async () => {
     const t = setup();
     t.helper.hotkey('activate', 'down', 0);
     await new Promise((r) => setTimeout(r, 10));
@@ -747,7 +762,7 @@ describe('DictationController', () => {
     expect(t.huds.filter((h) => h === 'HoldLongHint')).toHaveLength(1);
   });
 
-  it('貼り付けた直後の手直しから語を学習し、通知する', async () => {
+  it('learns a word from a correction right after pasting, and notifies', async () => {
     const t = setup({
       asrText: 'くばねてすを更新しました',
       llm: (req) => (req.user.includes('pairs') ? JSON.stringify({ words: [{ word: 'Kubernetes', add: true }] }) : formatted('くばねてすを更新しました。')),
@@ -768,8 +783,8 @@ describe('DictationController', () => {
     expect(t.huds).toContain('WordsLearned');
   });
 
-  it('整形の書き換えを元に戻した手直しは、書き換えない語句として覚え、通知する', async () => {
-    // 語の単位に切り出すために、本物の単語分割を使う
+  it('remembers a correction that undoes a formatting change as a phrase to keep, and notifies', async () => {
+    // Use the real tokenizer to cut out whole words
     const tokenizer = await createLinderaTokenizer(fs.readFileSync(path.join(process.cwd(), 'node_modules/lindera-wasm-ipadic-web/lindera_wasm_bg.wasm')));
     const t = setup({ asrText: 'なんか食べたいものはありますか', llm: () => formatted('何か食べたいものはありますか？'), tokenizer });
     t.helper.hotkey('activate', 'down', 0);
@@ -806,7 +821,7 @@ describe('DictationController', () => {
     expect(t.huds).toContain('NumberStyleLearned');
   });
 
-  it('パスワード欄では、手直しの監視を頼まない', async () => {
+  it('does not ask to watch for corrections in password fields', async () => {
     const t = setup({ llm: () => formatted('ひみつ') });
     t.helper.context = { ...t.helper.context, field: { ...t.helper.context.field!, isSecure: true } } as ContextPayload;
     t.helper.hotkey('activate', 'down', 0);

@@ -3,17 +3,17 @@ import ApplicationServices
 import Foundation
 import LonghandCore
 
-/// AXUIElement を Sendable として持ち回るための箱（AX の呼び出しはスレッドをまたいでも安全）
+/// A box for passing an AXUIElement around as Sendable (AX calls are safe across threads)
 struct AXRef: @unchecked Sendable {
     let element: AXUIElement
 }
 
-/// Accessibility API の小道具。どの呼び出しもメッセージングのタイムアウトで上限を切る（既定 0.25 秒）
+/// Accessibility API helpers. Every call is capped by the messaging timeout (0.25 seconds by default)
 enum AX {
     static let defaultTimeout: Float = 0.25
 
     static func configureGlobalTimeout() {
-        // システム全体の要素に設定すると、全要素の既定値になる
+        // Setting it on the system-wide element makes it the default for every element
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), defaultTimeout)
     }
 
@@ -31,7 +31,7 @@ enum AX {
         return el
     }
 
-    // MARK: - 属性の読み書き
+    // MARK: - Reading and writing attributes
 
     static func copy(_ el: AXUIElement, _ attr: String) -> (AXError, CFTypeRef?) {
         var value: CFTypeRef?
@@ -91,7 +91,7 @@ enum AX {
         AXUIElementSetAttributeValue(el, attr as CFString, value)
     }
 
-    /// 複数の属性をまとめて読む（往復を 1 回にする）
+    /// Reads several attributes at once (in one round trip)
     static func multiple(_ el: AXUIElement, _ attrs: [String]) -> [String: CFTypeRef] {
         var values: CFArray?
         let err = AXUIElementCopyMultipleAttributeValues(el, attrs as CFArray, [], &values)
@@ -99,7 +99,7 @@ enum AX {
         var out: [String: CFTypeRef] = [:]
         for (i, a) in attrs.enumerated() {
             let v = arr[i]
-            // 取れなかった属性は AXValue（kAXValueAXErrorType）で返ってくる
+            // Attributes that could not be read come back as an AXValue (kAXValueAXErrorType)
             if CFGetTypeID(v) == AXValueGetTypeID(), AXValueGetType(v as! AXValue) == .axError { continue }
             out[a] = v
         }
@@ -123,9 +123,9 @@ enum AX {
         return AXUIElementGetPid(el, &pid) == .success ? pid : nil
     }
 
-    // MARK: - フォーカス
+    // MARK: - Focus
 
-    /// フォーカス中のアプリ（AX 優先、なければ NSWorkspace の最前面）
+    /// The focused app (AX first, otherwise NSWorkspace's frontmost app)
     static func focusedAppPid() -> pid_t? {
         let sys = AXUIElementCreateSystemWide()
         if let app = element(sys, kAXFocusedApplicationAttribute), let pid = pid(of: app) {
@@ -137,16 +137,16 @@ enum AX {
     static func focusedElement(appPid: pid_t) -> AXUIElement? {
         let app = app(appPid)
         if let el = element(app, kAXFocusedUIElementAttribute) { return el }
-        // アプリ要素から取れないときはシステム全体から
+        // Fall back to the system-wide element when the app element does not have it
         return element(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute)
     }
 }
 
-/// 入力欄の状態（着地確認と監視に使う）
+/// State of an input field (used for landing checks and watching)
 struct FieldState: Equatable {
     var length: Int?
     var selection: CFRange?
-    /// 短い欄の内容（4000 文字まで）。それより長ければ nil
+    /// Content of a short field (up to 4000 characters). nil if it is longer
     var shortValue: String?
 
     static func == (a: FieldState, b: FieldState) -> Bool {
@@ -182,12 +182,12 @@ enum FieldReader {
         subrole == secureSubrole || role == secureSubrole
     }
 
-    /// 欄の全文（UTF-16 で最大 maxChars。長ければキャレットの周りを切り出す）
+    /// Full text of the field (up to maxChars in UTF-16; longer text is cut around the caret)
     static func fullText(_ el: AXUIElement, maxChars: Int = 20000) -> String? {
         snapshot(el, maxChars: maxChars)?.text
     }
 
-    /// 欄の全文と、その文字列が欄の中のどこから始まるか（切り出したとき）、選択範囲
+    /// Full text of the field, where that text starts within the field (when cut), and the selection
     static func snapshot(_ el: AXUIElement, maxChars: Int = 20000) -> (text: String, start: Int, selection: CFRange?)? {
         let length = AX.int(el, kAXNumberOfCharactersAttribute)
         let sel = AX.range(el, kAXSelectedTextRangeAttribute)
@@ -200,7 +200,7 @@ enum FieldReader {
         guard let v = AX.string(el, kAXValueAttribute) else { return nil }
         let units = v.utf16.count
         if units <= maxChars { return (v, 0, sel) }
-        // TextSlicing.window と同じ位置で切り出す
+        // Cut at the same position as TextSlicing.window
         let center = sel?.location ?? units
         var start = max(0, center - maxChars / 2)
         let end = min(units, start + maxChars)

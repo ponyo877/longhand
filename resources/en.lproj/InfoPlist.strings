@@ -1,0 +1,2 @@
+/* Shown by macOS when Longhand asks for the microphone */
+"NSMicrophoneUsageDescription" = "Longhand uses the microphone for dictation. Audio is not sent off this Mac.";

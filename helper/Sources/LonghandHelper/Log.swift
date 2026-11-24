@@ -1,9 +1,9 @@
 import Foundation
 import LonghandCore
 
-/// ログは標準エラーにだけ出す（標準出力はプロトコル専用）。warn と error は log メッセージとしても main へ送る。
+/// Logs go to stderr only (stdout is reserved for the protocol). warn and error are also sent to main as log messages.
 enum Log {
-    /// LONGHAND_HELPER_DEBUG=1 でキー入力などの詳細ログを出す
+    /// LONGHAND_HELPER_DEBUG=1 turns on detailed logs such as key input
     static let debugEnabled: Bool = {
         let v = ProcessInfo.processInfo.environment["LONGHAND_HELPER_DEBUG"] ?? ""
         return v == "1" || v.lowercased() == "true"
@@ -44,23 +44,23 @@ enum Log {
 }
 
 enum Clock {
-    /// 単調増加の時刻（ミリ秒、起動からの経過。スリープ中は進まない）。
-    /// Node の process.hrtime はスリープ中も進む（CLOCK_MONOTONIC_RAW）ので、スリープした時間の分だけずれる。比べるのはこの時計どうしだけにする。
+    /// Monotonic time (milliseconds since boot; does not advance during sleep).
+    /// Node's process.hrtime keeps advancing during sleep (CLOCK_MONOTONIC_RAW), so the two drift apart by the time asleep. Only compare this clock with itself.
     static func nowMs() -> Double {
         Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) / 1_000_000
     }
 
-    /// mach_absolute_time の 1 刻みが何ナノ秒か。Intel では 1/1、Apple Silicon では 125/3（約 41.67 ns）。
+    /// How many nanoseconds one mach_absolute_time tick is. 1/1 on Intel, 125/3 (about 41.67 ns) on Apple Silicon.
     private static let timebase: mach_timebase_info_data_t = {
         var tb = mach_timebase_info_data_t()
         mach_timebase_info(&tb)
         return tb
     }()
 
-    /// CGEvent のタイムスタンプを、nowMs() と同じ基準のミリ秒に直す。
-    /// タイムスタンプは mach_absolute_time の刻みで届く。Apple Silicon ではナノ秒ではないので、
-    /// そのまま 100 万で割ると、時刻が実際の約 42 分の 1 の速さでしか進まない
-    /// （数秒の長押しが 0.4 秒未満の短いタップと判定され、録音が取り消されていた）。
+    /// Converts a CGEvent timestamp to milliseconds on the same base as nowMs().
+    /// Timestamps arrive in mach_absolute_time ticks. On Apple Silicon these are not nanoseconds, so
+    /// dividing by one million as is makes time run at only about 1/42 of the real speed
+    /// (a hold of several seconds was judged a short tap under 0.4 seconds, and the recording was canceled).
     static func eventMs(_ timestamp: UInt64) -> Double {
         timestamp == 0 ? nowMs() : MachTime.ticksToMs(timestamp, numer: timebase.numer, denom: timebase.denom)
     }
@@ -75,7 +75,7 @@ enum Clock {
     }
 }
 
-/// ミリ秒の経過時間を測る
+/// Measures elapsed time in milliseconds
 struct Stopwatch {
     let start = Clock.nowMs()
     var elapsedMs: Int { Int((Clock.nowMs() - start).rounded()) }

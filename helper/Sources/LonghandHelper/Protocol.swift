@@ -1,14 +1,14 @@
 import Foundation
 import LonghandCore
 
-// src/shared/protocol.ts の Swift 版。protocol.ts を変えたらここも合わせる。
+// Swift version of src/shared/protocol.ts. Keep it in step when protocol.ts changes.
 
 let protocolVersion = 1
 let helperVersion: String = {
     (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0-dev"
 }()
 
-// MARK: - 受信
+// MARK: - Incoming
 
 struct InEnvelopeHeader: Decodable {
     let type: String
@@ -19,7 +19,7 @@ private struct PayloadBox<P: Decodable>: Decodable {
     let payload: P?
 }
 
-/// エンベロープから payload を取り出す。payload がなければ {} として解釈する
+/// Extracts the payload from an envelope. A missing payload is read as {}
 func decodePayload<P: Decodable>(_ type: P.Type, from data: Data) throws -> P {
     let box = try JSONDecoder().decode(PayloadBox<P>.self, from: data)
     if let p = box.payload { return p }
@@ -29,7 +29,7 @@ func decodePayload<P: Decodable>(_ type: P.Type, from data: Data) throws -> P {
 struct ConfigurePayload: Decodable {
     var hotkeys: [String: [[String]]]?
     var suppressGlobe: Bool?
-    /// Chromium 系ブラウザに AXEnhancedUserInterface を立ててよいか（省略時 true）
+    /// Whether AXEnhancedUserInterface may be set on Chromium-based browsers (true when omitted)
     var chromiumEnhancedUI: Bool?
 }
 
@@ -70,7 +70,7 @@ struct RecordShortcutPayload: Decodable {
     var active: Bool
 }
 
-// MARK: - 送信
+// MARK: - Outgoing
 
 struct EmptyPayload: Codable, Sendable {}
 
@@ -119,7 +119,7 @@ struct AudioErrorPayload: Encodable, Sendable {
     let message: String
     let fatal: Bool
 
-    // sessionId が nil でも "sessionId": null を出す（protocol.ts は number | null）
+    // Writes "sessionId": null even when sessionId is nil (protocol.ts declares number | null)
     enum CodingKeys: String, CodingKey { case sessionId, code, message, fatal }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -176,11 +176,11 @@ struct PasteAckPayload: Encodable, Sendable {
     let landed: String
     let retried: Bool
     let elapsedMs: Int
-    /// 最初の ⌘V を投入した時刻（Clock.nowMs() の基準。hotkey の t と同じ）。⌘V を送る前に失敗したら nil
+    /// When the first ⌘V was posted (on the Clock.nowMs() base, the same as hotkey's t). nil if it failed before sending ⌘V
     let keyPostedAt: Double?
-    /// paste 要求を受け取ってから最初の ⌘V を投入するまで
+    /// Time from receiving the paste request to posting the first ⌘V
     let keyPostedAfterMs: Double?
-    /// 貼り付け前の AX の読み取りにかかった時間
+    /// Time spent on the AX read before pasting
     let preReadMs: Double?
 }
 
@@ -199,7 +199,7 @@ struct FieldWatchResultPayload: Encodable, Sendable {
     let inserted: String
     let settled: Bool
     let durationMs: Int
-    /// enter と sent のとき、送信で欄が空になる直前の読み取り（final と同じ値）
+    /// For enter and sent, the read just before sending emptied the field (same value as final)
     let preSend: String?
 }
 
@@ -223,7 +223,7 @@ struct FrontAppPayload: Encodable, Sendable {
 
 struct EventTapPayload: Encodable, Sendable {
     let status: String
-    /// moved_to_front と rival_in_front のときの相手のプロセス
+    /// The other process, for moved_to_front and rival_in_front
     var pid: Int32? = nil
     var name: String? = nil
 }

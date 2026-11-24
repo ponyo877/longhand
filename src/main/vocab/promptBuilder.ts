@@ -1,34 +1,34 @@
 /**
- * 音声認識（Whisper）に渡すプロンプトの文を組み立てる。
+ * Builds the prompt text for speech recognition (Whisper).
  *
- * Whisper は指示には従わない。プロンプトを「直前に話された文」として読み、その文体と語をまねる。
- * そのため、辞書の語を並べただけの文より、句読点のある自然な文に語を埋めたほうが、
- * 語の当たりと全体の精度の両方に効くという報告がある（語の列挙は、珍しい語は当たるが全体を悪くすることがある）。
- * また、使われるのはプロンプトの末尾の約 220 トークンだけなので、大事な語ほど後ろ（音声のすぐ前）に置く。
+ * Whisper does not follow instructions. It reads the prompt as the text spoken just before and imitates its style and words.
+ * So there are reports that embedding words in natural, punctuated sentences helps both term hits and overall accuracy
+ * more than a bare list of dictionary words (a list gets rare words right but can make everything else worse).
+ * Also, only the last ~220 tokens of the prompt are used, so the more important a word, the later it goes (right before the audio).
  *
- * ここでは文字列を作るだけで、どの語を選ぶかは hints.ts が決める。最後の切り詰め（トークン数）はワーカーが行う。
+ * This module only builds the string. hints.ts decides which words to use, and the worker does the final truncation (by tokens).
  */
 
-/** list: 語を「、」で並べた 1 文（従来の形）。sentence: 丁寧な書き言葉の文。spoken: 話し言葉に近い文 */
+/** list: one sentence of words separated by 「、」 (the original form). sentence: polite written sentences. spoken: sentences closer to speech */
 export type PromptStyle = 'list' | 'sentence' | 'spoken';
 
 export const PROMPT_STYLES: readonly PromptStyle[] = ['list', 'sentence', 'spoken'];
 
 export interface AsrPromptOptions {
   style: PromptStyle;
-  /** 入れる語の数の上限 */
+  /** Maximum number of words */
   maxTerms?: number;
-  /** 大事な語を後ろに置く。既定は true */
+  /** Put important words last. true by default */
   importantLast?: boolean;
-  /** 語の部分の字数の上限（おおよその目安） */
+  /** Maximum length in characters of the word part (a rough guide) */
   maxChars?: number;
-  /** 直前の文脈（前の区間の書き起こしなど）。あれば最後に置く */
+  /** Preceding context (the transcript of the previous segment, for example). Goes last if present */
   context?: string;
 }
 
 type Template = (terms: string[]) => string;
 
-/** 語を 1〜3 個ずつ埋める文。順に使い回す（同じ入力からは同じ文になる） */
+/** Sentences that hold 1-3 words each. Used in rotation (the same input gives the same sentences) */
 const TEMPLATES: Record<Exclude<PromptStyle, 'list'>, Record<1 | 2 | 3, Template[]>> = {
   sentence: {
     1: [([a]) => `${a}について確認します。`, ([a]) => `${a}を使っています。`, ([a]) => `${a}の件です。`],
@@ -45,8 +45,8 @@ const TEMPLATES: Record<Exclude<PromptStyle, 'list'>, Record<1 | 2 | 3, Template
 const length = (s: string) => Array.from(s).length;
 
 /**
- * プロンプトの文を作る。terms は大事な順（先頭がいちばん大事）で渡す。
- * 語が無く、文脈も無ければ空文字列を返す。
+ * Builds the prompt text. Pass terms in order of importance (the first is the most important).
+ * Returns an empty string when there are no words and no context.
  */
 export function buildAsrPrompt(terms: readonly string[], opts: AsrPromptOptions): string {
   const seen = new Set<string>();
@@ -60,14 +60,14 @@ export function buildAsrPrompt(terms: readonly string[], opts: AsrPromptOptions)
     if (picked.length >= (opts.maxTerms ?? 64)) break;
   }
   const maxChars = opts.maxChars ?? 400;
-  // 大事な語を後ろに置くときは、並びを逆にしてから文にする
+  // To put important words last, reverse the order before building sentences
   const ordered = (opts.importantLast ?? true) ? [...picked].reverse() : picked;
   const context = opts.context?.trim() ?? '';
 
   let body = '';
   if (ordered.length) {
     if (opts.style === 'list') {
-      // 字数を超えるときは、大事でない側の語を落とす
+      // Over the length limit, drop words from the less important end
       let list = ordered;
       const drop = (opts.importantLast ?? true) ? (l: string[]) => l.slice(1) : (l: string[]) => l.slice(0, -1);
       while (list.length > 1 && length(`${list.join('、')}。`) > maxChars) list = drop(list);
@@ -80,7 +80,7 @@ export function buildAsrPrompt(terms: readonly string[], opts: AsrPromptOptions)
         const templates = pool[chunk.length as 1 | 2 | 3];
         sentences.push(templates[n % templates.length](chunk));
       }
-      // 字数を超えるときは、大事でない側の文から落とす
+      // Over the length limit, drop sentences from the less important end
       const fromHead = opts.importantLast ?? true;
       while (sentences.length > 1 && length(sentences.join('')) > maxChars) {
         if (fromHead) sentences.shift();

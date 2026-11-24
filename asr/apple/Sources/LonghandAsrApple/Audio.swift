@@ -1,11 +1,11 @@
-// 入力音声の読み込みと変換。内部表現は 16 kHz モノラルの Float32 配列にそろえる。
+// Loading and converting input audio. The internal format is always a 16 kHz mono Float32 array.
 
 import AVFoundation
 import Foundation
 
 let SAMPLE_RATE: Double = 16_000
 
-/// base64 の Float32 リトルエンディアン PCM（16 kHz モノラル）を配列に戻す。
+/// Decodes base64 Float32 little-endian PCM (16 kHz mono) back into an array.
 func decodePcmBase64(_ base64: String) throws -> [Float] {
     guard let data = Data(base64Encoded: base64, options: [.ignoreUnknownCharacters]) else {
         throw AsrError(code: .badRequest, message: "pcm is not valid base64")
@@ -18,12 +18,12 @@ func decodePcmBase64(_ base64: String) throws -> [Float] {
     samples.withUnsafeMutableBytes { dst in
         _ = data.copyBytes(to: dst)
     }
-    // Apple Silicon はリトルエンディアンなので変換は不要
+    // Apple Silicon is little-endian, so no conversion is needed
     for i in 0..<count where !samples[i].isFinite { samples[i] = 0 }
     return samples
 }
 
-/// WAV（など AVAudioFile が読める形式）を読み、16 kHz モノラル Float32 にして返す。
+/// Reads a WAV (or another format AVAudioFile can read) and returns it as 16 kHz mono Float32.
 func loadAudioFile(path: String) throws -> [Float] {
     let url = URL(fileURLWithPath: path)
     guard FileManager.default.fileExists(atPath: path) else {
@@ -50,14 +50,14 @@ func loadAudioFile(path: String) throws -> [Float] {
        srcFormat.commonFormat == .pcmFormatFloat32, let ch = buffer.floatChannelData {
         return Array(UnsafeBufferPointer(start: ch[0], count: Int(buffer.frameLength)))
     }
-    // サンプルレートやチャンネル数が違えば 16 kHz モノラル Float32 に変換する
+    // Convert to 16 kHz mono Float32 if the sample rate or channel count differs
     let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: SAMPLE_RATE, channels: 1, interleaved: false)!
     let converted = try convert(buffer, to: target)
     guard let ch = converted.floatChannelData else { return [] }
     return Array(UnsafeBufferPointer(start: ch[0], count: Int(converted.frameLength)))
 }
 
-/// 16 kHz モノラル Float32 の配列を AVAudioPCMBuffer にする。
+/// Turns a 16 kHz mono Float32 array into an AVAudioPCMBuffer.
 func makeFloatBuffer(_ samples: [Float]) -> AVAudioPCMBuffer {
     let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: SAMPLE_RATE, channels: 1, interleaved: false)!
     let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(samples.count, 1)))!
@@ -70,7 +70,7 @@ func makeFloatBuffer(_ samples: [Float]) -> AVAudioPCMBuffer {
     return buffer
 }
 
-/// AVAudioConverter で一括変換する（ファイル 1 本分を一度に渡す前提）。
+/// Converts in one go with AVAudioConverter (assumes a whole file is passed at once).
 func convert(_ input: AVAudioPCMBuffer, to format: AVAudioFormat) throws -> AVAudioPCMBuffer {
     if input.format == format { return input }
     guard let converter = AVAudioConverter(from: input.format, to: format) else {

@@ -1,6 +1,7 @@
+import { t as translate } from '../i18n';
 import { LlmError, timeoutMessage, type FetchLike } from './types';
 
-/** タイムアウトと呼び出し側の中断を 1 つの AbortSignal にまとめる */
+/** Combines the timeout and the caller's abort into one AbortSignal */
 export function timeoutSignal(timeoutMs: number, outer?: AbortSignal): { signal: AbortSignal; cleanup: () => void; timedOut: () => boolean } {
   const ctrl = new AbortController();
   let timedOut = false;
@@ -29,7 +30,7 @@ export interface PostJsonResult {
   text: string;
 }
 
-/** JSON を POST して応答を返す。HTTP エラーは LlmError に変換する */
+/** POSTs JSON and returns the response. HTTP errors become LlmError */
 export async function postJson(fetchImpl: FetchLike, url: string, body: unknown, headers: Record<string, string>, timeoutMs: number, outer?: AbortSignal): Promise<PostJsonResult> {
   const t = timeoutSignal(timeoutMs, outer);
   try {
@@ -43,21 +44,21 @@ export async function postJson(fetchImpl: FetchLike, url: string, body: unknown,
       });
     } catch (e) {
       if (t.timedOut()) throw new LlmError('timeout', timeoutMessage(timeoutMs));
-      if (outer?.aborted) throw new LlmError('aborted', '中断しました');
-      throw new LlmError('network', `接続できませんでした: ${(e as Error).message}`);
+      if (outer?.aborted) throw new LlmError('aborted', translate('engine.llm.aborted'));
+      throw new LlmError('network', translate('engine.llm.network', { reason: (e as Error).message }));
     }
     let text: string;
     try {
       text = await res.text();
     } catch (e) {
       if (t.timedOut()) throw new LlmError('timeout', timeoutMessage(timeoutMs));
-      throw new LlmError('network', `応答の読み取りに失敗しました: ${(e as Error).message}`);
+      throw new LlmError('network', translate('engine.llm.readFailed', { reason: (e as Error).message }));
     }
     let json: unknown = undefined;
     try {
       json = text ? JSON.parse(text) : undefined;
     } catch {
-      /* JSON でない応答 */
+      /* not a JSON response */
     }
     if (!res.ok) throw httpError(res.status, json, text);
     return { status: res.status, json, text };
@@ -68,8 +69,8 @@ export async function postJson(fetchImpl: FetchLike, url: string, body: unknown,
 
 export function httpError(status: number, json: unknown, text: string): LlmError {
   const msg = extractErrorMessage(json) ?? text.slice(0, 300);
-  if (status === 401 || status === 403) return new LlmError('auth', `認証に失敗しました（${status}）: ${msg}`, status);
-  if (status === 429) return new LlmError('rate_limit', `利用上限に達しました（429）: ${msg}`, status);
+  if (status === 401 || status === 403) return new LlmError('auth', translate('engine.llm.auth', { status, reason: msg }), status);
+  if (status === 429) return new LlmError('rate_limit', translate('engine.llm.rateLimit', { reason: msg }), status);
   return new LlmError('http', `HTTP ${status}: ${msg}`, status);
 }
 
@@ -84,7 +85,7 @@ function extractErrorMessage(json: unknown): string | undefined {
   return undefined;
 }
 
-/** "choices.0.message.content" のようなパスで値を取り出す */
+/** Reads a value by a path such as "choices.0.message.content" */
 export function getByPath(obj: unknown, path: string): unknown {
   let cur: unknown = obj;
   for (const key of path.split('.').filter(Boolean)) {
@@ -96,11 +97,11 @@ export function getByPath(obj: unknown, path: string): unknown {
   return cur;
 }
 
-/** 設定の extraBody（JSON 文字列）を解釈する。壊れていれば例外 */
+/** Parses extraBody (a JSON string) from the settings. Throws if it is malformed */
 export function parseExtraBody(extra: string): Record<string, unknown> {
   if (!extra.trim()) return {};
   const v = JSON.parse(extra);
-  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new LlmError('config', 'extraBody は JSON オブジェクトにしてください');
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new LlmError('config', translate('engine.llm.extraBodyNotObject'));
   return v as Record<string, unknown>;
 }
 

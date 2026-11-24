@@ -1,33 +1,34 @@
 /**
- * 音声認識のモデルの取得（ASR-5）。
+ * Downloads the speech recognition model (ASR-5).
  *
- * - 取得元は Hugging Face のリビジョンを固定した URL。ミラーを使う場合は取得元の URL を差し替える
- *   （asr/download-models.sh と同じファイル、同じハッシュ）。
- * - 空き容量を確かめてから取得し、SHA-256 が一致したものだけを置く。
- * - 途中で切れたら、10 秒から倍々で待って再試行する。取得済みの分は Range で続きから取る。
- * - オフラインの PC 向けに、別の PC で取得したファイルを取り込むこともできる（ハッシュは同じく確かめる）。
+ * - The source is a Hugging Face URL pinned to a revision. To use a mirror, replace the source URL
+ *   (same files and same hashes as asr/download-models.sh).
+ * - Free space is checked before downloading, and only files whose SHA-256 matches are put in place.
+ * - If the download is cut off, it retries after waiting 10 seconds, doubling each time. The part already received is resumed with Range.
+ * - For offline computers, files downloaded on another computer can be imported instead (their hashes are checked the same way).
  *
- * 利用者がボタンを押したときだけ通信する。ほかの通信は LLM の接続先だけである（OPS-1）。
+ * It only goes online when the user presses the button. The only other connection is the LLM endpoint (OPS-1).
  */
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ModelDownloadState } from '../../shared/types';
+import { t } from '../i18n';
 import { createLogger } from '../log';
 
 const log = createLogger('model');
 
 export interface ModelFile {
-  /** models/ からの相対パス */
+  /** Path relative to models/ */
   path: string;
-  /** 取得元の URL のうち、ベース URL より後ろ */
+  /** The part of the source URL after the base URL */
   urlPath: string;
   sha256: string;
   size: number;
 }
 
-/** asr/download-models.sh の既定（whisper large-v3-turbo q8_0 と Silero VAD）と同じもの */
+/** The same files as the default of asr/download-models.sh (whisper large-v3-turbo q8_0 and Silero VAD) */
 export const WHISPER_FILES: ModelFile[] = [
   {
     path: 'whisper/ggml-large-v3-turbo-q8_0.bin',
@@ -43,7 +44,7 @@ export const WHISPER_FILES: ModelFile[] = [
   },
 ];
 
-/** 取得後に残しておきたい空き容量 */
+/** Free space to leave after the download */
 const SPARE_BYTES = 500 * 1024 * 1024;
 const RETRY_FIRST_SEC = 10;
 const MAX_ATTEMPTS = 6;
@@ -53,12 +54,12 @@ type FetchLike = (url: string, init: { headers: Record<string, string>; signal: 
 export interface DownloaderDeps {
   modelsDir: string;
   fetch: FetchLike;
-  /** 空き容量（バイト）。テストで差し替える */
+  /** Free space in bytes. Replaced in tests */
   freeBytes?: (dir: string) => number;
-  /** 再試行までの待ち。テストで差し替える */
+  /** Wait before a retry. Replaced in tests */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   files?: ModelFile[];
-  /** アプリに同梱したモデルのフォルダ。ここにそろっていれば、取得は要らない */
+  /** Folder of the models bundled with the app. If every file is there, no download is needed */
   bundledDir?: string;
 }
 
@@ -108,12 +109,12 @@ export class ModelDownloader extends EventEmitter {
     return this.st;
   }
 
-  /** すべてのファイルが、期待した大きさで置かれているか（ハッシュは置くときに確かめている） */
+  /** Whether every file is in place with the expected size (hashes were checked when the files were put in place) */
   installed(): boolean {
     return this.inDir(this.d.modelsDir) || this.bundled();
   }
 
-  /** アプリに同梱されたモデルがそろっているか */
+  /** Whether every model file bundled with the app is there */
   bundled(): boolean {
     return !!this.d.bundledDir && this.inDir(this.d.bundledDir);
   }
@@ -131,7 +132,7 @@ export class ModelDownloader extends EventEmitter {
     this.abort?.abort();
   }
 
-  /** 取得する。すでに走っていれば何もしない。成功したら true */
+  /** Downloads. Does nothing if a download is already running. True on success */
   async download(baseUrl: string): Promise<boolean> {
     if (this.abort) return false;
     const abort = new AbortController();
@@ -147,22 +148,22 @@ export class ModelDownloader extends EventEmitter {
       const free = (this.d.freeBytes ?? defaultFreeBytes)(this.d.modelsDir);
       if (free < total - already + SPARE_BYTES) {
         const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
-        throw new Error(`空き容量が足りません（必要 ${gb(total - already + SPARE_BYTES)} GB、空き ${gb(free)} GB）`);
+        throw new Error(t('asr.download.noSpace', { needed: gb(total - already + SPARE_BYTES), free: gb(free) }));
       }
       for (const f of todo) {
         await this.fetchWithRetry(base, f, abort.signal, (n) => this.set({ receivedBytes: done + n, file: path.basename(f.path) }));
         done += f.size;
       }
       this.set({ state: 'done', receivedBytes: total, installed: this.installed(), file: undefined });
-      log.info('モデルを取得しました');
+      log.info('Downloaded the model');
       return true;
     } catch (e) {
       if (e instanceof Cancelled || abort.signal.aborted) {
         this.set({ state: 'cancelled', retryInSec: undefined });
-        log.info('モデルの取得を取り消しました');
+        log.info('Canceled the model download');
       } else {
         this.set({ state: 'failed', error: (e as Error).message, retryInSec: undefined });
-        log.warn('モデルを取得できませんでした', e);
+        log.warn('Could not download the model', e);
       }
       return false;
     } finally {
@@ -179,7 +180,7 @@ export class ModelDownloader extends EventEmitter {
         if (e instanceof Cancelled || signal.aborted) throw new Cancelled();
         if (attempt >= MAX_ATTEMPTS || (e as { fatal?: boolean }).fatal) throw e;
         const wait = RETRY_FIRST_SEC * 2 ** (attempt - 1);
-        log.warn(`モデルの取得に失敗しました。${wait} 秒後に再試行します（${attempt}/${MAX_ATTEMPTS}）`, e);
+        log.warn(`Model download failed. Retrying in ${wait} s (${attempt}/${MAX_ATTEMPTS})`, e);
         this.set({ state: 'waiting', retryInSec: wait, error: (e as Error).message });
         await (this.d.sleep ?? defaultSleep)(wait * 1000, signal);
         this.set({ state: 'downloading', retryInSec: undefined });
@@ -202,13 +203,13 @@ export class ModelDownloader extends EventEmitter {
     if (offset < f.size) {
       const res = await this.d.fetch(base + f.urlPath, { headers, signal });
       if (res.status === 416 && offset > 0) {
-        // 取得済みの部分がおかしい。最初から取り直す
+        // The part already received is broken. Start over
         fs.rmSync(part, { force: true });
-        throw new Error('途中まで取得したファイルを再開できませんでした');
+        throw new Error(t('asr.download.resumeFailed'));
       }
       if (!res.ok || !res.body) {
-        const err = new Error(`HTTP ${res.status}（${base + f.urlPath}）`) as Error & { fatal?: boolean };
-        // 404 や 403 は待っても直らない
+        const err = new Error(t('asr.download.http', { status: res.status, url: base + f.urlPath })) as Error & { fatal?: boolean };
+        // 404 and 403 do not get better by waiting
         err.fatal = res.status === 404 || res.status === 403 || res.status === 401;
         throw err;
       }
@@ -221,7 +222,7 @@ export class ModelDownloader extends EventEmitter {
       let got = offset;
       progress(got);
       const reader = res.body.getReader();
-      // 取り消したら読み取りを打ち切る（本文の読み取り中は fetch の signal だけでは止まらないことがある）
+      // Stop reading when canceled (while the body is being read, the fetch signal alone may not stop it)
       const onAbort = () => void reader.cancel().catch(() => undefined);
       signal.addEventListener('abort', onAbort);
       try {
@@ -238,22 +239,22 @@ export class ModelDownloader extends EventEmitter {
         await new Promise<void>((r) => out.end(() => r()));
       }
       if (signal.aborted) throw new Cancelled();
-      if (got !== f.size) throw new Error(`途中で切れました（${got}/${f.size} バイト）`);
+      if (got !== f.size) throw new Error(t('asr.download.truncated', { got, size: f.size }));
     } else {
       hash = await hashFile(part, hash);
     }
     const sha = hash.digest('hex');
     if (sha !== f.sha256) {
       fs.rmSync(part, { force: true });
-      throw new Error(`SHA-256 が一致しません: ${path.basename(f.path)}`);
+      throw new Error(t('asr.download.hashMismatch', { file: path.basename(f.path) }));
     }
     fs.renameSync(part, dest);
     progress(f.size);
   }
 
   /**
-   * 別の PC で取得したファイル（またはそれを含むフォルダ）を取り込む。名前で照合し、ハッシュを確かめてから置く。
-   * 返り値は取り込んだファイル名。
+   * Imports files downloaded on another computer (or folders that contain them). Files are matched by name and put in place after
+   * their hashes are checked. Returns the names of the imported files.
    */
   async importFrom(sources: string[]): Promise<{ imported: string[]; rejected: string[] }> {
     const candidates: string[] = [];

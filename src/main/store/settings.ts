@@ -4,7 +4,7 @@ import { deepMerge, mergeSettings, type Settings } from '../../shared/settings';
 import type { DeepPartial } from '../../shared/types';
 import { JsonStore } from './json-store';
 
-// deepMerge は electron を読み込まない場所（評価のコード）からも使うので、shared に置いてある
+// deepMerge is also used where electron is not loaded (the evaluation code), so it lives in shared
 export { deepMerge };
 
 export class SettingsStore extends EventEmitter {
@@ -12,8 +12,8 @@ export class SettingsStore extends EventEmitter {
   private readonly store: JsonStore<Settings>;
 
   /**
-   * readOnly: ファイルを読むだけにする（書き戻さない。壊れていても退避しない）。
-   * 評価（LONGHAND_EVAL）が、動いている開発版の設定を触らずに接続先とキーだけを借りるために使う
+   * readOnly: only read the file (never write it back, never move it aside when corrupt).
+   * The evaluation (LONGHAND_EVAL) uses it to borrow just the connection and the key, without touching the settings of a running dev build
    */
   constructor(file: string, opts: { readOnly?: boolean } = {}) {
     super();
@@ -27,7 +27,7 @@ export class SettingsStore extends EventEmitter {
 
   update(patch: DeepPartial<Settings>): Settings {
     const prev = this.value;
-    // API キーは setApiKey 経由でしか変えさせない
+    // The API key can only be changed through setApiKey
     if (patch.llm && 'apiKeyEnc' in patch.llm) delete (patch.llm as { apiKeyEnc?: string }).apiKeyEnc;
     this.value = mergeSettings(deepMerge(this.value, patch));
     this.store.write(this.value);
@@ -35,7 +35,7 @@ export class SettingsStore extends EventEmitter {
     return this.value;
   }
 
-  /** API キーを safeStorage（macOS ではキーチェーンの鍵）で暗号化して保存する */
+  /** Encrypts the API key with safeStorage (a keychain key on macOS) and saves it */
   setApiKey(plain: string): void {
     const enc = plain ? safeStorage.encryptString(plain).toString('base64') : '';
     const prev = this.value;

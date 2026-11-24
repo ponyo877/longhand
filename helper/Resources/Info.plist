@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>ja</string>
+	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>LonghandHelper</string>
 	<key>CFBundleIdentifier</key>
@@ -27,6 +27,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>音声入力のために、話している間だけマイクの音声を取り込みます。音声はこの Mac の外には送信しません。</string>
+	<string>For dictation, Longhand records from the microphone only while you speak. Audio is not sent off this Mac.</string>
 </dict>
 </plist>

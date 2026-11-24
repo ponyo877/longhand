@@ -1,4 +1,9 @@
 import { useEffect, useState } from 'react';
+import type { DeepPartial } from '../../shared/types';
+import type { MessageKey } from '../../shared/i18n';
+import type { Settings } from '../../shared/settings';
+import type { AppSnapshot } from '../../shared/types';
+import { I18nProvider, useT } from '../common/i18n';
 import { bindingLabel } from '../common/keys';
 import { Button, cx, StatusDot, useSnapshot } from '../common/ui';
 import { History } from './History';
@@ -8,18 +13,28 @@ import { Style } from './Style';
 
 type Page = 'history' | 'style' | 'settings' | 'onboarding';
 
-const NAV: { id: Page; label: string; icon: string }[] = [
-  { id: 'history', label: '履歴', icon: 'M3 4h10M3 8h10M3 12h6' },
-  { id: 'style', label: 'スタイル', icon: 'M4 12l2.5-7h3L12 12M5.2 9.5h5.6' },
-  { id: 'settings', label: '設定', icon: 'M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4' },
+const NAV: { id: Page; label: MessageKey; icon: string }[] = [
+  { id: 'history', label: 'app.nav.history', icon: 'M3 4h10M3 8h10M3 12h6' },
+  { id: 'style', label: 'app.nav.style', icon: 'M4 12l2.5-7h3L12 12M5.2 9.5h5.6' },
+  { id: 'settings', label: 'app.nav.settings', icon: 'M8 5.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zM8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4' },
 ];
 
 export function App() {
   const [snap, update] = useSnapshot();
+  if (!snap) return null;
+  return (
+    <I18nProvider locale={snap.locale}>
+      <Frame snap={snap} update={update} />
+    </I18nProvider>
+  );
+}
+
+function Frame({ snap, update }: { snap: AppSnapshot; update: (patch: DeepPartial<Settings>) => Promise<void> }) {
+  const t = useT();
   const [page, setPage] = useState<Page>('history');
   const [settingsTab, setSettingsTab] = useState<string | undefined>();
 
-  // 'settings/connection' のように、タブまで指定して開ける
+  // A page can be opened down to a tab, as in 'settings/connection'
   useEffect(
     () =>
       window.longhand.onNavigate((p) => {
@@ -30,29 +45,27 @@ export function App() {
     [],
   );
 
-  if (!snap) return null;
-
   if (page === 'onboarding') {
     return <Onboarding snap={snap} update={update} onDone={() => setPage('history')} />;
   }
 
   const st = snap.status;
-  // 問題ごとに、直す場所のタブを開く（S5）
+  // Each problem opens the tab where it is fixed (S5)
   const problems = [
-    st.helper !== 'running' && { label: 'ヘルパー', tab: 'about' },
-    st.asr !== 'ready' && { label: '音声認識', tab: 'connection' },
-    !snap.permissions.accessibility && { label: 'アクセシビリティ', tab: 'about' },
-    snap.permissions.microphone === 'denied' && { label: 'マイク', tab: 'about' },
-    !st.llmConfigured && { label: 'LLM', tab: 'connection' },
+    st.helper !== 'running' && { label: t('app.problem.helper'), tab: 'about' },
+    st.asr !== 'ready' && { label: t('app.problem.asr'), tab: 'connection' },
+    !snap.permissions.accessibility && { label: t('app.problem.accessibility'), tab: 'about' },
+    snap.permissions.microphone === 'denied' && { label: t('app.problem.microphone'), tab: 'about' },
+    !st.llmConfigured && { label: t('app.problem.llm'), tab: 'connection' },
   ].filter(Boolean) as { label: string; tab: string }[];
   const openSettings = (tab: string) => {
     setPage('settings');
     setSettingsTab(tab);
   };
-  const activate = bindingLabel(snap.settings.hotkeys.activate[0]) || 'fn';
-  // アクセシビリティがないときは、どのページでも上に出す（N13）
+  const activate = bindingLabel(snap.settings.hotkeys.activate[0], snap.locale) || 'fn';
+  // Without accessibility, the banner shows on every page (N13)
   const accessibilityMissing = !snap.permissions.accessibility;
-  // 一度許可してから外れた場合（初回の案内を終えた後）と、まだ許可していない場合で文言を変える
+  // Different wording when permission was granted once and then removed (after the first-run setup) and when it never was
   const accessibilityLost = snap.settings.onboardingComplete;
 
   return (
@@ -72,18 +85,18 @@ export function App() {
               <svg width="16" height="16" viewBox="0 0 16 16" className="opacity-70">
                 <path d={n.icon} stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              {n.label}
+              {t(n.label)}
             </button>
           ))}
         </nav>
         <div className="no-drag mt-auto rounded-lg px-2 py-2 text-[11.5px] text-neutral-500 dark:text-neutral-400">
           {problems.length ? (
             <button className="flex items-center gap-1.5 text-left hover:underline" onClick={() => openSettings(problems[0].tab)}>
-              <StatusDot ok={false} warn /> {problems.map((x) => x.label).join('、')}を確認
+              <StatusDot ok={false} warn /> {t('app.status.check', { items: problems.map((x) => x.label).join(t('common.listSeparator')) })}
             </button>
           ) : (
             <span className="flex items-center gap-1.5">
-              <StatusDot ok /> 準備完了 · {activate} で話す
+              <StatusDot ok /> {t('app.status.ready', { activate })}
             </span>
           )}
           <div className="mt-1 opacity-70">v{snap.version}</div>
@@ -94,14 +107,11 @@ export function App() {
           <div role="alert" className="mx-auto mb-6 flex max-w-[760px] items-center gap-3 rounded-xl bg-rose-500/10 px-4 py-3 text-[13px] ring-1 ring-rose-500/30">
             <StatusDot ok={false} />
             <div className="min-w-0 flex-1">
-              <div className="font-medium">{accessibilityLost ? 'アクセシビリティの許可が外れました' : 'アクセシビリティの許可が必要です'}</div>
-              <div className="mt-0.5 text-[12px] text-neutral-600 dark:text-neutral-300">
-                キーの検出と入力ができません。システム設定の「プライバシーとセキュリティ」で、Longhand（開発中は Electron）をオンに{accessibilityLost ? 'し直して' : 'して'}
-                ください。オンにすると自動で使えるようになります。
-              </div>
+              <div className="font-medium">{t(accessibilityLost ? 'app.accessibility.lostTitle' : 'app.accessibility.neededTitle')}</div>
+              <div className="mt-0.5 text-[12px] text-neutral-600 dark:text-neutral-300">{t(accessibilityLost ? 'app.accessibility.lostBody' : 'app.accessibility.neededBody')}</div>
             </div>
             <Button variant="primary" small onClick={() => void window.longhand.openExternal('accessibility')}>
-              システム設定を開く
+              {t('common.openSystemSettings')}
             </Button>
           </div>
         )}

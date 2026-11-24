@@ -7,7 +7,7 @@ declare const UI_VITE_NAME: string;
 
 const FLOATER_W = 400;
 const FLOATER_H = 260;
-/** 画面の側からの「操作を受け取る」の知らせが、これだけ途切れたら、下のアプリに通す状態に戻す */
+/** When the renderer's "take mouse events" signals stop for this long, go back to passing events to the app below */
 const INTERACTIVE_KEEPALIVE_MS = 1500;
 
 function rendererUrl(page: 'floater' | 'management'): { url?: string; file?: string } {
@@ -24,7 +24,7 @@ function load(win: BrowserWindow, page: 'floater' | 'management'): void {
 }
 
 function secure(win: BrowserWindow): void {
-  // 外部の URL を開かせない
+  // Do not let windows open external URLs
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://')) void shell.openExternal(url);
     return { action: 'deny' };
@@ -37,9 +37,9 @@ function secure(win: BrowserWindow): void {
 const preload = () => path.join(__dirname, 'preload.cjs');
 
 /**
- * フローティングバー（UI-1、UI-2）。
- * type: 'panel' と focusable: false でフォーカスを奪わない。透明な部分はクリックを下のアプリに通す。
- * HUD 通知も同じウィンドウのバーの上に積む。
+ * Floating bar (UI-1, UI-2).
+ * type: 'panel' and focusable: false keep it from taking focus. Clicks on transparent parts pass through to the app below.
+ * HUD notifications are stacked above the bar in the same window.
  */
 export class FloaterWindow {
   win: BrowserWindow | null = null;
@@ -75,7 +75,7 @@ export class FloaterWindow {
     win.setIgnoreMouseEvents(true, { forward: true });
     secure(win);
     load(win, 'floater');
-    // 画面を読み込み直すときと、描画のプロセスが落ちたときは、操作を下のアプリに通す状態に戻す
+    // When the page reloads or the renderer process dies, go back to passing mouse events to the app below
     win.webContents.on('did-start-loading', () => this.setInteractive(false));
     win.webContents.on('render-process-gone', () => this.setInteractive(false));
     win.webContents.on('did-finish-load', () => {
@@ -85,12 +85,12 @@ export class FloaterWindow {
       this.send('floater:state', this.state);
     });
     this.win = win;
-    // 録音中と処理中はバーを動かさない（話している途中で別の画面に移ると見失う）
+    // Do not move the bar while recording or processing (if it jumps to another display mid-speech, the user loses track of it)
     const repositionIfIdle = () => this.state.phase === 'idle' && this.reposition();
     screen.on('display-metrics-changed', repositionIfIdle);
     screen.on('display-added', repositionIfIdle);
     screen.on('display-removed', () => this.reposition());
-    // 待機中は、マウスのあるディスプレイについていく（F7）
+    // While idle, follow the display with the mouse pointer (F7)
     setInterval(() => {
       if (this.state.phase !== 'idle' || !this.win || this.win.isDestroyed()) return;
       const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -100,7 +100,7 @@ export class FloaterWindow {
 
   private displayId: number | null = null;
 
-  /** マウスのあるディスプレイの下端中央に置く */
+  /** Places the bar at the bottom center of the display with the mouse pointer */
   reposition(): void {
     if (!this.win) return;
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -142,10 +142,10 @@ export class FloaterWindow {
   private interactiveAt = 0;
 
   /**
-   * マウスの操作を、このウィンドウが受け取るか（true）、下のアプリに通すか（false）。
-   * 受け取る状態のまま戻らないと、画面の下部（ウィンドウの 400×260 の範囲）でクリックもスクロールもできなくなる。
-   * そこで、受け取る状態には期限を付ける。画面の側は、ポインタがバーや通知の上にあるあいだ、true を送り続ける（mouseRouting.ts）。
-   * 知らせが途切れたとき（画面の側が止まった、など）と、ポインタがウィンドウの外に出たときは、通す状態に戻す
+   * Whether this window takes mouse events (true) or passes them to the app below (false).
+   * If it got stuck taking them, nothing could be clicked or scrolled at the bottom of the screen (the window's 400×260 area).
+   * So taking events expires. The renderer keeps sending true while the pointer is over the bar or a notification (mouseRouting.ts).
+   * When the signals stop (the renderer hung, for example) or the pointer leaves the window, go back to passing events
    */
   setInteractive(interactive: boolean): void {
     if (!this.win || this.win.isDestroyed()) return;
@@ -170,13 +170,13 @@ export class FloaterWindow {
   }
 }
 
-/** 管理ウィンドウ（MGT-1）。履歴、スタイル、設定、初回の案内 */
+/** Management window (MGT-1): history, style, settings and first-run setup */
 export class ManagementWindow {
   win: BrowserWindow | null = null;
   private pendingPage: string | null = null;
 
   open(page?: string): void {
-    // 開いている間だけ Dock に出し、⌘Tab で戻れるようにする（S4）
+    // Show in the Dock only while open, so that ⌘Tab can return to it (S4)
     void app.dock?.show();
     if (this.win && !this.win.isDestroyed()) {
       if (page) this.win.webContents.send('nav', page);

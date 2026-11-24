@@ -1,36 +1,36 @@
 /**
- * フローティングバーのウィンドウが、マウスの操作を受け取るか、下のアプリに通すかを決める。
+ * Decides whether the floating bar window takes mouse input or passes it through to the app below.
  *
- * ウィンドウは画面の下部に、通知を積むための透明な領域（400×260）を持つ。
- * ふだんは操作を下のアプリに通し、ポインタがバーや通知の上にあるときだけ受け取る。
+ * The window has a transparent area (400×260) at the bottom of the screen for stacking notifications.
+ * Normally it passes input through to the app below, and takes it only while the pointer is over the bar or a notification.
  *
- * 以前は、要素ごとの mouseenter と mouseleave で切り替えていた。
- * この方法では、ポインタが乗ったまま要素が消えたとき（通知を閉じた、バーが切り替わった）に mouseleave が来ず、
- * 受け取る状態のまま戻らなくなる。そうなると、画面の下部でクリックもスクロールもできなくなる。
+ * It used to switch on mouseenter and mouseleave of each element.
+ * With that approach, when an element disappears under the pointer (a notification was closed, the bar changed), no mouseleave arrives
+ * and the window stays in the taking state. Then nothing at the bottom of the screen can be clicked or scrolled.
  *
- * ここでは、要素の出入りを数えずに、ポインタの位置に操作できる要素があるかを毎回調べて決める。
- * - ポインタが動いたとき
- * - 画面の中身が変わったとき（recheck）
- * - 一定の間隔（ポインタが止まったまま要素が消えても、戻るように）
- * 受け取る状態のあいだは、同じ値を送り続ける。main は、この知らせが途切れたら通す状態に戻す（保険）。
+ * Here, instead of counting enters and leaves, it checks each time whether there is an interactive element at the pointer position:
+ * - when the pointer moves
+ * - when the content of the window changes (recheck)
+ * - at a fixed interval (so that it recovers even if an element disappears while the pointer stays still)
+ * While taking input, it keeps sending the same value. main goes back to passing input through if these messages stop (a safeguard).
  */
 
 export interface MouseRouterDeps {
-  /** その位置に、操作できる要素（バーや通知）があるか */
+  /** Whether there is an interactive element (the bar or a notification) at the position */
   isInteractiveAt: (x: number, y: number) => boolean;
-  /** main に知らせる。true なら受け取る、false なら下のアプリに通す */
+  /** Tells main: true to take input, false to pass it through to the app below */
   send: (interactive: boolean) => void;
   now?: () => number;
-  /** 受け取る状態を送り直す間隔 */
+  /** Interval for resending the taking state */
   resendMs?: number;
 }
 
 export interface MouseRouter {
-  /** ポインタがウィンドウの中で動いた */
+  /** The pointer moved inside the window */
   move(x: number, y: number): void;
-  /** ポインタがウィンドウの外に出た */
+  /** The pointer left the window */
   leave(): void;
-  /** いまの位置で調べ直す（画面の中身が変わったとき、定期的な確認） */
+  /** Checks again at the current position (when the content changes, and periodically) */
   recheck(): void;
 }
 

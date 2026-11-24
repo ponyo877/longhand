@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-// フローティングバーと管理ウィンドウを 1 つの renderer（ui）から複数の HTML として出す
+// Builds the floating bar and the management window as separate HTML pages from one renderer (ui)
 export default defineConfig({
   root: path.resolve(import.meta.dirname, 'src/renderer'),
   plugins: [react(), tailwindcss()],

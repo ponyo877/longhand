@@ -10,25 +10,25 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
 const root = import.meta.dirname;
 
-/** ビルド済みのネイティブ部品（ヘルパーと ASR ワーカー）を Resources に同梱する */
+/** Bundles the prebuilt native parts (the helper and the ASR workers) into Resources */
 function nativeResources(): string[] {
   const candidates = [path.join(root, 'helper/build/LonghandHelper.app'), path.join(root, 'asr/build')];
   const always = [path.join(root, 'resources/tray')];
-  // textfix の単語分割（lindera の WASM と IPADIC、約 18MB）。main のバンドルには入れず、Resources に置いてバイト列から読み込む
+  // Word segmentation for textfix (lindera's WASM and IPADIC, about 18 MB). Kept out of the main bundle; placed in Resources and loaded from bytes
   const lindera = path.join(root, 'node_modules/lindera-wasm-ipadic-web/lindera_wasm_bg.wasm');
   if (fs.existsSync(lindera)) always.push(lindera);
-  else console.warn('[forge] 単語分割の WASM が見つかりません（npm install を実行してください）。自動修正の一部の規則が動きません:', lindera);
+  else console.warn('[forge] Word segmentation WASM not found (run npm install). Some automatic correction rules will not work:', lindera);
   const found = candidates.filter((p) => fs.existsSync(p));
   if (found.length < candidates.length) {
     console.warn(
-      '[forge] ネイティブ部品が見つかりません。先に `npm run build:native` を実行してください:',
+      '[forge] Native parts not found. Run `npm run build:native` first:',
       candidates.filter((p) => !found.includes(p)),
     );
   }
-  // 音声認識のモデルは、resources/models に置いてあれば同梱する（npm run bundle:models で用意する）
+  // Speech recognition models are bundled if they are in resources/models (prepared by npm run bundle:models)
   const bundledModels = path.join(root, 'resources/models');
   const models = fs.existsSync(path.join(bundledModels, 'whisper')) ? [bundledModels] : [];
-  if (!models.length) console.warn('[forge] 音声認識のモデルは同梱しません（同梱するには先に `npm run bundle:models` を実行してください）');
+  if (!models.length) console.warn('[forge] Not bundling speech recognition models (to bundle them, run `npm run bundle:models` first)');
   return [...always, ...found, ...models];
 }
 
@@ -151,8 +151,21 @@ const config: ForgeConfig = {
     extraResource: nativeResources(),
     extendInfo: {
       LSUIElement: true,
-      NSMicrophoneUsageDescription: '音声入力のためにマイクを使います。音声は端末の外に送信しません。',
+      CFBundleDevelopmentRegion: 'en',
+      // Japanese and English versions are in resources/*.lproj/InfoPlist.strings (copied by afterCopy below)
+      NSMicrophoneUsageDescription: 'Longhand uses the microphone for dictation. Audio is not sent off this Mac.',
     },
+    // Localized usage descriptions, so that the permission prompts follow the macOS language. Runs before signing
+    afterCopy: [
+      async ({ buildPath, platform }) => {
+        if (platform !== 'darwin') return;
+        const contentsResources = path.dirname(buildPath);
+        for (const lproj of fs.readdirSync(path.join(root, 'resources')).filter((f) => f.endsWith('.lproj'))) {
+          fs.mkdirSync(path.join(contentsResources, lproj), { recursive: true });
+          fs.copyFileSync(path.join(root, 'resources', lproj, 'InfoPlist.strings'), path.join(contentsResources, lproj, 'InfoPlist.strings'));
+        }
+      },
+    ],
     osxSign: signIdentity
       ? {
           identity: signIdentity.id,

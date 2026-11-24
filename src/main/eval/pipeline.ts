@@ -1,13 +1,13 @@
 /**
- * 評価の 1 発話分の流れ。音声 → 書き起こし → 書き起こしの後の処理（postAsr）→ 段階ごとの文。
+ * The evaluation flow for one utterance. Audio → transcription → post-transcription processing (postAsr) → the text at each stage.
  *
- * アプリ（DictationController.runPipeline）と同じ手順にしてある。
- * - 28 秒以下の録音は丸ごと書き起こす。それより長い録音は、話の切れ目で区切って順に書き起こし、つなぐ
- * - 短すぎる録音と無音の録音は書き起こさない（アプリは何も入力しない）
- * - 書き起こしの後の処理は、アプリと同じ関数（postAsr）を通す
+ * It follows the same steps as the app (DictationController.runPipeline).
+ * - Recordings of 28 seconds or less are transcribed whole. Longer recordings are cut at pauses, transcribed in order and joined
+ * - Recordings that are too short or silent are not transcribed (the app enters nothing)
+ * - Post-transcription processing goes through the same function as the app (postAsr)
  *
- * アプリと違う所: 話の間での先回り（speculative）と、入力先の文脈（アプリ名、カーソルの前後）は再現しない。
- * 貼り付けの組み立て（置換、空白の補正）も通さない。
+ * Differences from the app: speculation during pauses (speculative) and the target's context (app name, text around the cursor) are not reproduced.
+ * Paste assembly (replacements, spacing fixes) is not applied either.
  */
 import type { AsrLanguage, AsrResultPayload } from '../../shared/asr-protocol';
 import type { TranscribeOptions } from '../asr/AsrService';
@@ -24,7 +24,7 @@ import type { HintContext, RecentText } from '../vocab/hints';
 
 const SR = 16000;
 
-/** 書き起こしの入口（AsrService がそのまま渡せる） */
+/** Entry point for transcription (an AsrService can be passed as is) */
 export interface Transcriber {
   transcribe(samples: Float32Array, opts: TranscribeOptions): Promise<AsrResultPayload>;
 }
@@ -32,47 +32,47 @@ export interface Transcriber {
 export interface AppAsrOptions {
   language: AsrLanguage;
   hints: string[];
-  /** 丸ごと書き起こすときの prompt。アプリは渡さない（実験用） */
+  /** Prompt for whole transcription. The app does not pass one (for experiments) */
   prompt?: string;
-  /** 設定の asr.incremental。オフなら長い録音も丸ごと書き起こす */
+  /** The asr.incremental setting. When off, long recordings are also transcribed whole */
   incremental: boolean;
   minRecordingMs: number;
   silenceDetection: boolean;
-  /** 設定の asr.engine。声の入っていない録音を、音の大きさで捨てるかどうかが変わる（既定は whisper） */
+  /** The asr.engine setting. Decides whether recordings without voice are dropped by loudness (defaults to whisper) */
   engine?: string;
-  /** 1 回の書き起こしの時間切れ。評価では待ち時間の制限がないので長めにする */
+  /** Timeout for one transcription. Evaluation has no wait limit, so it is longer */
   timeoutMs?: number;
-  /** 設定の asr.hintMode。selective なら、ヒントなしとヒントありの 2 回書き起こして、ヒントが効いた所だけを取り込む */
+  /** The asr.hintMode setting. With selective, transcribes twice, without and with hints, and takes only the parts where the hints helped */
   hintMode?: HintMode;
-  /** 設定の asr のうち、要求に付ける任意の指定（プロンプトの様式、聞き直し、別候補）。アプリと同じ関数で要求に直す */
+  /** Optional request settings from the asr settings (prompt style, rehearing, alternatives). Turned into a request by the same function as the app */
   asr?: { promptStyle?: 'legacy' | 'list' | 'sentence' | 'spoken'; promptTerms?: number; rehear?: { noHints: boolean; temperatures: number[] }; alternativesTopK?: number };
 }
 
 export interface AsrOutcome {
-  /** 書き起こしの生の出力（前後の空白を除く）。アプリが書き起こさない録音では空 */
+  /** Raw transcription output (trimmed). Empty for recordings the app does not transcribe */
   text: string;
-  /** 丸ごと書き起こしたときの語ごとの確信度 */
+  /** Per-word confidence when transcribed whole */
   tokens?: [string, number][];
-  /** 何回の書き起こしでできたか（丸ごとなら 1、書き起こさなければ 0） */
+  /** How many transcriptions it took (1 when whole, 0 when not transcribed) */
   segments: number;
   hintsUsed?: number;
   hintsGiven?: number;
-  /** 書き起こしにかかった時間の合計 */
+  /** Total time spent transcribing */
   computeMs: number;
-  /** アプリが書き起こさずに捨てる録音（短すぎる、音が無い、話していない） */
+  /** Recordings the app drops without transcribing (too short, no sound, no speech) */
   skipped?: 'too-short' | 'silent' | 'no-speech';
-  /** 聞き違いかもしれない箇所（丸ごと書き起こし、聞き直しか別候補を求めたときだけ） */
+  /** Spots that may be misheard (only for whole transcription with rehearing or alternatives requested) */
   uncertain?: Uncertain[];
 }
 
-/** アプリと同じ手順で書き起こす */
+/** Transcribes with the same steps as the app */
 export async function transcribeLikeApp(asr: Transcriber, samples: Float32Array, o: AppAsrOptions): Promise<AsrOutcome> {
   const cuts: [number, number][] = [];
   const seg = new Segmenter((s, e) => cuts.push([s, e]));
   for (let i = 0; i < samples.length; i += 1600) seg.push(samples.subarray(i, Math.min(samples.length, i + 1600)));
   const none = (skipped: AsrOutcome['skipped']): AsrOutcome => ({ text: '', segments: 0, computeMs: 0, skipped });
 
-  // 短すぎる録音と無音の判定（REC-5）
+  // Too-short and silent recording checks (REC-5)
   if ((samples.length / SR) * 1000 < o.minRecordingMs) return none('too-short');
   const stats = seg.stats();
   if (stats.peak < 0.0005) return none('silent');
@@ -82,7 +82,7 @@ export async function transcribeLikeApp(asr: Transcriber, samples: Float32Array,
   let computeMs = 0;
   const run = async (audio: Float32Array, prompt: string | undefined, whole = false) => {
     const t0 = Date.now();
-    // アプリと同じく、丸ごとの書き起こしでは任意の指定をすべて付け、区間ごとの書き起こしではプロンプトの組み立てだけを使う
+    // Like the app, whole transcription gets every optional setting, and segment transcription uses only the prompt building
     const build = (hints: string[]): TranscribeOptions => {
       const extras = whole
         ? asrRequestExtras(o.asr ?? {}, hints, prompt)
@@ -95,7 +95,7 @@ export async function transcribeLikeApp(asr: Transcriber, samples: Float32Array,
     return res;
   };
 
-  // whisper の窓（30 秒）に収まる長さなら、区切りを使わずに丸ごと書き起こす
+  // When it fits in whisper's window (30 seconds), transcribe it whole without cutting
   if (!o.incremental || !cuts.length || samples.length <= WHOLE_MAX_SEC * SR) {
     const res = await run(samples, o.prompt, true);
     const uncertain = uncertainOf(res);
@@ -109,7 +109,7 @@ export async function transcribeLikeApp(asr: Transcriber, samples: Float32Array,
       ...(uncertain.length ? { uncertain } : {}),
     };
   }
-  // 長い録音は、区切りごとに順に書き起こす。前の区切りの末尾を prompt に渡す
+  // Long recordings are transcribed cut by cut, in order. The end of the previous cut is passed as the prompt
   const texts: string[] = [];
   for (const [s, e] of cuts) {
     const res = await run(seg.slice(s, e), texts[texts.length - 1]?.slice(-200) || undefined);
@@ -123,46 +123,46 @@ export async function transcribeLikeApp(asr: Transcriber, samples: Float32Array,
   return { text: joinTexts([...texts, tailText], o.language), segments: cuts.length + 1, computeMs };
 }
 
-/** 段階ごとの文 */
+/** Text at each stage */
 export interface StageTexts {
-  /** 書き起こしの生の出力 */
+  /** Raw transcription output */
   asr: string;
-  /** 辞書の読みとの照合の後（LLM を使わないときに置き換えた文） */
+  /** After matching against dictionary readings (the replaced text when the LLM is not used) */
   match: string;
-  /** 語ごとの補正と正規化の後。LLM を使わないときに入力される文 */
+  /** After per-word correction and normalization. The text entered when the LLM is not used */
   noLlm: string;
-  /** LLM の整形の後。入力される文（LLM を使わない実行では noLlm と同じ） */
+  /** After LLM formatting. The text entered (same as noLlm in runs without the LLM) */
   final: string;
 }
 
 export interface StagesInput {
   rawText: string;
   tokens?: [string, number][];
-  /** 聞き違いかもしれない箇所（書き起こしの結果から） */
+  /** Spots that may be misheard (from the transcription result) */
   uncertain?: readonly Uncertain[];
   settings: PostAsrSettings;
   customizations: PostAsrCustomizations;
   vocab: () => { context: HintContext; recent: RecentText[]; now?: number };
   tokenizer: Tokenizer | null;
-  /** null なら LLM を使わない */
+  /** null to not use the LLM */
   provider: LlmProvider | null;
 }
 
 export interface StagesOutput {
   stages: StageTexts;
-  /** LLM を使わない経路の結果。書き起こしが空なら null */
+  /** Result of the path without the LLM. null when the transcript is empty */
   noLlm: PostAsrResult | null;
-  /** LLM を使う経路の結果。LLM を使わない実行か、書き起こしが空なら null */
+  /** Result of the path with the LLM. null in runs without the LLM or when the transcript is empty */
   llm: PostAsrResult | null;
 }
 
 /**
- * 書き起こしの後の処理を、LLM を使わない経路と使う経路の両方で通し、段階ごとの文を返す。
- * どちらもアプリと同じ postAsr を呼ぶ（LLM を使わない経路は、アプリで LLM が未設定のときと同じ動き）
+ * Runs post-transcription processing through both the path without the LLM and the path with it, and returns the text at each stage.
+ * Both call the same postAsr as the app (the path without the LLM behaves like the app when no LLM is configured)
  */
 export async function postAsrStages(input: StagesInput): Promise<StagesOutput> {
   const rawText = input.rawText.trim();
-  // 書き起こしが空なら、アプリは何も入力しない
+  // When the transcript is empty, the app enters nothing
   if (!rawText) return { stages: { asr: '', match: '', noLlm: '', final: '' }, noLlm: null, llm: null };
   const base = {
     mode: 'dictation' as const,

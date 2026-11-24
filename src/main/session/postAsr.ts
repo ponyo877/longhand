@@ -1,9 +1,9 @@
 /**
- * 書き起こしの後の処理。辞書の読みとの照合、語ごとの補正（textfix）、確信度の対応付け、整形（LLM）を順にかける。
+ * Processing after transcription: matching against dictionary readings, per-word fixes (textfix), mapping confidence, and formatting (LLM), in that order.
  *
- * アプリ（DictationController）と評価（src/main/eval）が同じ関数を通るように、ここに切り出してある。
- * 評価がアプリと違う条件で動くと、数値が実際の精度とずれるためである。
- * 状態は持たない。保存先、LLM、単語分割は引数で受け取り、electron は読み込まない。
+ * It lives here so that the app (DictationController) and the evaluation (src/main/eval) run through the same function.
+ * If the evaluation ran under different conditions from the app, its numbers would drift from the real accuracy.
+ * It holds no state. The stores, the LLM and the tokenizer come in as arguments, and electron is not loaded.
  */
 import type { ContextPayload } from '../../shared/protocol';
 import type { Settings } from '../../shared/settings';
@@ -15,7 +15,7 @@ import { fixText, type FixOutput, type Tokenizer } from '../textfix';
 import { LOW_CONFIDENCE, minContentConfidence, realign, type Confidence } from '../textfix/align';
 import type { HintContext, RecentText } from '../vocab/hints';
 
-/** ターミナル。選択範囲を編集対象にせず（CTX-7）、整形は確実にコード向けにする */
+/** Terminals. The selection is never an edit target (CTX-7), and formatting is always for code */
 export const TERMINAL_BUNDLES = new Set([
   'com.apple.Terminal',
   'com.googlecode.iterm2',
@@ -29,15 +29,15 @@ export const TERMINAL_BUNDLES = new Set([
   'org.tabby',
 ]);
 
-/** 設定のうち、書き起こしの後の処理が見る項目 */
+/** The settings that processing after transcription reads */
 export type PostAsrSettings = Pick<Settings, 'language' | 'sendAppContext' | 'sendFieldContext' | 'llmFastPath' | 'textFix'> &
   Partial<Pick<Settings, 'formatRules' | 'formatGuard' | 'formatUncertain'>> & {
     llm: Pick<Settings['llm'], 'timeoutMs' | 'maxOutputTokens'>;
   };
 
-/** 辞書と置換の保存先のうち、ここで使う部分（CustomizationsStore がそのまま渡せる） */
+/** The parts of the dictionary and replacement store used here (a CustomizationsStore can be passed as it is) */
 export interface PostAsrCustomizations {
-  /** 置換のきっかけの語句（言い換えさせない語として使う）と、利用者の指示 */
+  /** Replacement trigger phrases (used as words not to be reworded) and the user's instructions */
   get(): { replacements: readonly { from: string }[]; customInstructions: string };
   vocabulary(): string[];
   prepareFormatting(rawText: string, opts: PrepareOptions): PreparedFormatting;
@@ -50,42 +50,42 @@ export interface PostAsrLog {
 
 export interface PostAsrInput {
   mode: 'dictation' | 'edit';
-  /** 書き起こしの生の出力（前後の空白を除いたもの） */
+  /** Raw transcription output (with leading and trailing whitespace removed) */
   rawText: string;
-  /** rawText の文字ごとの確信度。録音を丸ごと書き起こしたときだけある */
+  /** Per-character confidence of rawText. Present only when the whole recording was transcribed at once */
   confidence?: Confidence | null;
-  /** 音声認識が聞き違えたかもしれない箇所と別候補（asr/requestOptions の uncertainOf）。整形の規則が v2 のときに LLM に渡す */
+  /** Spots speech recognition may have misheard, with alternatives (uncertainOf in asr/requestOptions). Passed to the LLM when the formatting rules are v2 */
   uncertain?: readonly UncertainSpan[];
   settings: PostAsrSettings;
   customizations: PostAsrCustomizations;
-  /** 入力先の文脈。取れなかったら null */
+  /** Context of the input target. null if it could not be read */
   ctx: ContextPayload | null;
-  /** 辞書の語に得点を付けるための文脈（入力先と最近の書き起こし）。音声入力のときだけ呼ぶ。now は評価が結果を固定するために渡す */
+  /** Context for scoring dictionary words (the input target and recent transcripts). Called only for dictation. The evaluation passes now to make results repeatable */
   vocab: () => { context: HintContext; recent: RecentText[]; now?: number };
-  /** null なら LLM を使わない（skipLlm、未設定） */
+  /** null means no LLM (skipLlm, or not set up) */
   provider: LlmProvider | null;
-  /** textfix の単語分割。読み込み中か使えなければ null を返す */
+  /** Tokenizer for textfix. Returns null while loading or when unavailable */
   tokenizer?: () => Tokenizer | null;
   signal?: AbortSignal;
-  /** 件数だけを記録する（本文は渡さない） */
+  /** Logs counts only (the text is never passed) */
   log?: PostAsrLog;
-  /** 整形（LLM）を始める直前に呼ぶ。呼び出し側が、照合と補正の結果を先に受け取るためのもの */
+  /** Called right before formatting (LLM) starts, so that the caller gets the matching and fix results first */
   onPlan?: (plan: PostAsrPlan) => void;
 }
 
-/** 整形の前までに決まること */
+/** What is decided before formatting */
 export interface PostAsrPlan {
-  /** 辞書の読みとの照合の結果。音声入力でなければ null */
+  /** Result of matching against dictionary readings. null when not dictating */
   prep: PreparedFormatting | null;
-  /** 照合の後の文（textfix と整形に渡す文）。LLM を使うときは生テキストのまま */
+  /** Text after matching (the text passed to textfix and formatting). The raw text as is when the LLM is used */
   matchedText: string;
-  /** 語ごとの補正の結果。動かさなかったら null */
+  /** Result of the per-word fixes. null if they did not run */
   fix: FixOutput | null;
-  /** 中身の字の確信度の最小値。確信度がなければ null */
+  /** Lowest confidence of the content characters. null without confidence */
   minConfidence: number | null;
-  /** 確信度の低い字がある（近道に入れずに LLM に回す） */
+  /** Some characters have low confidence (send to the LLM instead of the fast path) */
   lowConfidence: boolean;
-  /** formatText に渡す入力 */
+  /** Input passed to formatText */
   format: FormatInput;
 }
 
@@ -94,8 +94,8 @@ export interface PostAsrResult extends PostAsrPlan {
 }
 
 /**
- * 書き起こしの語ごとの補正（textfix）をかける。日本語の音声入力で、設定のどれかの規則がオンのときだけ動く。
- * 利用者の辞書の語、置換のきっかけ、辞書照合の候補の範囲には触らない。失敗しても音声入力は止めない（null を返す）
+ * Applies the per-word fixes (textfix) to the transcript. Runs only for Japanese dictation with at least one rule on in the settings.
+ * Leaves the user's dictionary words, replacement triggers and dictionary match candidates alone. A failure never stops dictation (returns null)
  */
 function runTextFix(
   input: PostAsrInput,
@@ -131,28 +131,28 @@ function runTextFix(
       tokenizer,
       confidence,
     });
-    // 長い録音では確信度が取れないので、その理由で飛ばした規則は記録しない
+    // Long recordings have no confidence, so rules skipped for that reason are not logged
     const skipped = out.skipped.filter((x) => !x.endsWith('no-confidence'));
     if (out.edits.length || out.candidates.length || skipped.length) {
       const byRule = new Map<string, number>();
       for (const e of out.edits) byRule.set(e.rule, (byRule.get(e.rule) ?? 0) + 1);
-      const parts = [...byRule].map(([r, n]) => `${r} ${n}`).join('、');
-      // 本文は残さず、数だけを記録する
+      const parts = [...byRule].map(([r, n]) => `${r} ${n}`).join(', ');
+      // Log counts only, never the text
       input.log?.info(
-        `自動修正: ${out.edits.length} か所${parts ? `（${parts}）` : ''}、候補 ${out.candidates.length} 件` +
-          `${skipped.length ? `、飛ばした規則 ${skipped.join(' / ')}` : ''}、${(performance.now() - started).toFixed(1)}ms`,
+        `textfix: edits=${out.edits.length}${parts ? ` (${parts})` : ''}, candidates=${out.candidates.length}` +
+          `${skipped.length ? `, skipped rules ${skipped.join(' / ')}` : ''}, ${(performance.now() - started).toFixed(1)}ms`,
       );
     }
     return out;
   } catch (e) {
-    input.log?.warn(`自動修正に失敗しました（そのまま続けます）: ${(e as Error).message}`);
+    input.log?.warn(`textfix failed (continuing without it): ${(e as Error).message}`);
     return null;
   }
 }
 
 /**
- * 整形の前までを決める（同期）。照合、補正、確信度の対応付けを行い、formatText に渡す入力を組み立てる。
- * LLM は呼ばない。
+ * Decides everything up to formatting (synchronously). Runs matching, fixes and confidence mapping, and builds the input for formatText.
+ * Does not call the LLM.
  */
 export function planPostAsr(input: PostAsrInput): PostAsrPlan {
   const { mode, rawText, ctx, provider } = input;
@@ -168,23 +168,23 @@ export function planPostAsr(input: PostAsrInput): PostAsrPlan {
     promptCtx.beforeCursor = ctx.field.beforeCursor;
     promptCtx.afterCursor = ctx.field.afterCursor;
   }
-  // 辞書の語との照合（G4-10、G4-11）。LLM を使うなら候補を整形に渡し、使わないなら確かめた読みだけを置き換える。
-  // 履歴の rawText には、置き換える前の書き起こしを残す
+  // Matching against dictionary words (G4-10, G4-11). With the LLM, the candidates go to formatting; without it, only confirmed readings are replaced.
+  // rawText in the history keeps the transcript from before the replacement
   const prep = mode === 'dictation' ? input.customizations.prepareFormatting(rawText, { useLlm: !!provider, ...input.vocab() }) : null;
-  // 書き起こしの語ごとの補正（textfix）。直した文は LLM を通さない経路で使い、LLM には直す前の文と候補を渡す
+  // Per-word fixes (textfix). The fixed text is used on the path without the LLM; the LLM gets the text before the fixes, with candidates
   const matchedText = prep?.text ?? rawText;
   const confidence = mode === 'dictation' && input.confidence ? realign(rawText, input.confidence, matchedText) : null;
   const replacementFroms = custom.replacements.map((r) => r.from);
-  // 利用者が元に戻した語句は、語ごとの補正でも書き換えない
+  // Phrases the user changed back are not rewritten by the per-word fixes either
   const keptPhrases = (prep?.kept ?? []).map((k) => k.phrase);
   const fix = mode === 'dictation' ? runTextFix(input, matchedText, prep?.candidates ?? [], replacementFroms, confidence, keptPhrases) : null;
-  // 確信度の低い字がある発話は、近道に入れずに LLM に回す（聞き違いがありそうなため。自動修正の設定とは関係なく動く）
+  // An utterance with low-confidence characters goes to the LLM instead of the fast path (it is likely misheard; this works regardless of the textfix settings)
   const minConfidence = minContentConfidence(matchedText, confidence);
   const lowConfidence = minConfidence !== null && minConfidence < LOW_CONFIDENCE;
   if (lowConfidence && provider && cfg.llmFastPath) {
-    input.log?.info(`確信度の低い字があるので、近道に入れずに LLM に回します（最小 ${minConfidence.toFixed(2)}）`);
+    input.log?.info(`low-confidence characters, sending to the LLM instead of the fast path (min ${minConfidence.toFixed(2)})`);
   }
-  // 出力の検査で、読みが同じ置き換えを見分けるための単語分割（検査がオフなら読み込まない）
+  // Tokenizer for the output check, to tell replacements with the same reading apart (not loaded when the check is off)
   const guard = cfg.formatGuard ?? 'off';
   let guardTokenizer: Tokenizer | null = null;
   if (guard !== 'off') {
@@ -212,9 +212,9 @@ export function planPostAsr(input: PostAsrInput): PostAsrPlan {
     textFix: fix ?? undefined,
     lowConfidence: lowConfidence || undefined,
     customInstructions: custom.customInstructions,
-    // 置換の対象の語は、LLM に言い換えさせない
+    // The LLM must not reword replacement targets
     protectedPhrases: replacementFroms,
-    // ターミナルなら確実にコード向けにする。ほかはアプリ名から推定させる（undefined）
+    // Always format for code in a terminal. Elsewhere, let it guess from the app name (undefined)
     codeLike: ctx && TERMINAL_BUNDLES.has(ctx.app.bundleId) ? true : undefined,
     fastPath: cfg.llmFastPath,
     provider,
@@ -225,7 +225,7 @@ export function planPostAsr(input: PostAsrInput): PostAsrPlan {
   return { prep, matchedText, fix, minConfidence, lowConfidence, format };
 }
 
-/** 書き起こしの後の処理を通しで行う。LLM の失敗は例外にせず、fmt.error に入れて返す（formatText と同じ） */
+/** Runs the whole processing after transcription. An LLM failure does not throw but comes back in fmt.error (as in formatText) */
 export async function postAsr(input: PostAsrInput): Promise<PostAsrResult> {
   const plan = planPostAsr(input);
   input.onPlan?.(plan);

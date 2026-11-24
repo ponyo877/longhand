@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { pairedBootstrap, seededRandom, type PairedItem } from './bootstrap';
 
 describe('seededRandom', () => {
-  it('同じ種なら同じ並びになる', () => {
+  it('gives the same sequence for the same seed', () => {
     const a = seededRandom(7);
     const b = seededRandom(7);
     const xs = [a(), a(), a()];
@@ -13,7 +13,7 @@ describe('seededRandom', () => {
 });
 
 describe('pairedBootstrap', () => {
-  it('同じ結果どうしなら、差も区間も 0', () => {
+  it('gives a zero difference and interval for identical results', () => {
     const items: PairedItem[] = Array.from({ length: 20 }, (_, i) => ({ a: i % 3, b: i % 3, len: 10 }));
     const r = pairedBootstrap(items, { iterations: 500 });
     expect(r.diff).toBe(0);
@@ -21,7 +21,7 @@ describe('pairedBootstrap', () => {
     expect(r.bBetter).toBe(0);
   });
 
-  it('どの発話でも B が良ければ、区間は 0 より下に収まる', () => {
+  it('keeps the interval below 0 when B is better on every utterance', () => {
     const items: PairedItem[] = Array.from({ length: 30 }, (_, i) => ({ a: 3 + (i % 2), b: 1, len: 20 }));
     const r = pairedBootstrap(items, { iterations: 2000 });
     expect(r.editsA).toBe(105);
@@ -36,7 +36,7 @@ describe('pairedBootstrap', () => {
     expect(r.bBetter).toBe(1);
   });
 
-  it('1 つの発話だけで付いた差は、区間が 0 をまたぐ', () => {
+  it('crosses 0 when the difference comes from a single utterance', () => {
     const items: PairedItem[] = [{ a: 10, b: 0, len: 20 }, ...Array.from({ length: 19 }, () => ({ a: 1, b: 1, len: 20 }))];
     const r = pairedBootstrap(items, { iterations: 2000 });
     expect(r.diff).toBe(-10);
@@ -44,7 +44,7 @@ describe('pairedBootstrap', () => {
     expect(r.ci[0]).toBeLessThan(-10);
   });
 
-  it('種が同じなら結果も同じ。空なら区間を出さない', () => {
+  it('gives the same result for the same seed and no interval when empty', () => {
     const items: PairedItem[] = [
       { a: 2, b: 1, len: 10 },
       { a: 0, b: 3, len: 12 },

@@ -1,10 +1,10 @@
-// longhand-asr-whisper: whisper.cpp（Metal）を使う ASR ワーカー。
-// src/shared/asr-protocol.ts の stdio JSON Lines プロトコルを話す。
+// longhand-asr-whisper: ASR worker using whisper.cpp (Metal).
+// Speaks the stdio JSON Lines protocol in src/shared/asr-protocol.ts.
 //
-// - stdout はプロトコル専用。起動直後に fd 1 を stderr に付け替え、元の stdout は g_out でだけ使う
-//   （whisper.cpp や ggml が誤って stdout に書いてもプロトコルが壊れないようにするため）。
-// - 要求は 1 件ずつ順に処理する。stdin が EOF になったら終了する。
-// - stdin は別のスレッドで読む。cancel だけはそのスレッドで受け、書き起こしの途中でも止められるようにする。
+// - stdout is for the protocol only. Right after startup fd 1 is redirected to stderr, and the original stdout is used only through g_out
+//   (so that the protocol does not break even if whisper.cpp or ggml writes to stdout by mistake).
+// - Requests are handled one at a time, in order. The worker exits when stdin reaches EOF.
+// - stdin is read on a separate thread. Only cancel is handled on that thread, so a transcription can be stopped midway.
 
 #include "audio.hpp"
 #include "textfilter.hpp"
@@ -38,11 +38,11 @@ using longhand::kSampleRate;
 #endif
 
 static constexpr int kProtocolVersion = 1;
-static constexpr const char * kDefaultInitialPrompt = "";  // 既定はプロンプトなし（ベンチマークの結果。docs/evaluation.md）
+static constexpr const char * kDefaultInitialPrompt = "";  // No prompt by default (benchmark result, docs/evaluation.md)
 
 static FILE * g_out = nullptr;
 static bool g_verbose = false;
-static bool g_debug = false;  // result.payload に debug（スキップ理由、捨てた区間など）を付ける。ベンチマーク用
+static bool g_debug = false;  // Adds debug (skip reason, dropped segments and so on) to result.payload. For benchmarks
 
 static void logf(const char * fmt, ...) {
     va_list ap;
@@ -60,7 +60,7 @@ static void send(const json & j) {
     fflush(g_out);
 }
 
-// UTF-8 の文字が途中で切れていないか（末尾の文字のバイトが揃っているか）
+// Whether the last UTF-8 character is complete (all of its bytes are present)
 static bool utf8_complete(const std::string & s) {
     int i = (int) s.size() - 1, cont = 0;
     while (i >= 0 && (((unsigned char) s[i]) & 0xC0) == 0x80) { --i; ++cont; }
@@ -85,47 +85,47 @@ static double now_ms() {
     return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
 }
 
-// ---- 取り消し ---------------------------------------------------------------
-// cancel は「それまでに受け取った要求をすべて取り消す」。後から届く要求には効かない。
-// 要求には受け取った順に通し番号を振り、処理中の要求の番号が取り消しの範囲に入ったら止める。
+// ---- Cancellation -----------------------------------------------------------
+// cancel means "cancel every request received so far". It does not affect requests that arrive later.
+// Requests are numbered in the order received, and the current request stops once its number falls within the cancelled range.
 
-static std::atomic<uint64_t> g_received{0};     // 最後に受け取った要求の番号
-static std::atomic<uint64_t> g_cancel_upto{0};  // この番号までの要求は取り消す
-static std::atomic<uint64_t> g_current{0};      // 処理中の要求の番号（0 = 処理中の要求なし）
+static std::atomic<uint64_t> g_received{0};     // Number of the last request received
+static std::atomic<uint64_t> g_cancel_upto{0};  // Requests up to this number are cancelled
+static std::atomic<uint64_t> g_current{0};      // Number of the request being processed (0 = none)
 
 static bool cancelled_now() {
     const uint64_t cur = g_current.load();
     return cur != 0 && g_cancel_upto.load() >= cur;
 }
 
-// whisper.cpp はエンコーダとデコーダの計算のたびにこれを呼び、true なら打ち切る
+// whisper.cpp calls this on every encoder and decoder computation, and aborts if it returns true
 static bool abort_cb(void *) { return cancelled_now(); }
 
-// エンコーダを動かす前に呼ばれる。false を返すとエンコードせずに打ち切る
+// Called before the encoder runs. Returning false aborts without encoding
 static bool encoder_begin_cb(whisper_context *, whisper_state *, void *) { return !cancelled_now(); }
 
-// デコードの各ステップで、上位の候補を記録する（確信度の低い箇所の別候補を出すため）。
-// greedy で best_of=1 のときだけ使う（デコーダが 1 本なので、呼ばれる順がそのままステップの順になる）
+// Records the top candidates at each decoding step (to offer alternatives where confidence is low).
+// Used only with greedy and best_of=1 (with a single decoder, the call order is the step order)
 struct LogitsTap {
     int top_k = 0;
     int n_vocab = 0;
     whisper_token eot = 0;
-    // steps[s]: s 番目のステップの上位候補（テキストのトークンだけ。確率の降順）
+    // steps[s]: top candidates at step s (text tokens only, in descending order of probability)
     std::vector<std::vector<std::pair<whisper_token, float>>> steps;
-    // chosen[s]: s 番目のステップで選ばれたトークン（次のステップが呼ばれたときに分かる）
+    // chosen[s]: token chosen at step s (known when the next step is called)
     std::vector<whisper_token> chosen;
 };
 
 static void logits_tap_cb(whisper_context *, whisper_state *, const whisper_token_data * tokens, int n_tokens, float * logits, void * user) {
     auto * tap = static_cast<LogitsTap *>(user);
     if (!tap || tap->top_k <= 0) return;
-    // 温度を上げたやり直しと、次の 30 秒窓では、0 から数え直す
+    // A retry at a higher temperature and the next 30-second window start counting from 0 again
     if (n_tokens == 0) {
         tap->steps.clear();
         tap->chosen.clear();
     }
     if ((int) tap->steps.size() != n_tokens) {
-        tap->top_k = 0;  // 呼ばれる順がずれた。以後は記録しない（別候補は出さない）
+        tap->top_k = 0;  // The call order is off. Stop recording (no alternatives)
         return;
     }
     if (n_tokens > 0) tap->chosen.push_back(tokens[n_tokens - 1].id);
@@ -135,7 +135,7 @@ static void logits_tap_cb(whisper_context *, whisper_state *, const whisper_toke
     double sum = 0;
     for (int i = 0; i < tap->n_vocab; ++i)
         if (std::isfinite(logits[i])) sum += std::exp((double) logits[i] - mx);
-    // 選ばれた 1 つを除いても top_k 個が残るように、1 つ多く持つ
+    // Keep one extra so that top_k remain after removing the chosen one
     const size_t keep = (size_t) tap->top_k + 1;
     std::vector<std::pair<whisper_token, float>> top;
     top.reserve(keep + 1);
@@ -152,7 +152,7 @@ static void logits_tap_cb(whisper_context *, whisper_state *, const whisper_toke
     tap->steps.push_back(std::move(top));
 }
 
-// ---- 設定 -----------------------------------------------------------------
+// ---- Configuration ----------------------------------------------------------
 
 struct Config {
     std::string model_path;
@@ -162,39 +162,39 @@ struct Config {
     bool use_gpu = true;
     bool flash_attn = true;
 
-    int beam_size = 1;                 // 1 なら greedy
+    int beam_size = 1;                 // 1 means greedy
     int best_of = 1;
-    bool temperature_fallback = true;  // 失敗判定（エントロピー、logprob）時に温度を上げて再デコード
+    bool temperature_fallback = true;  // Decode again at a higher temperature when a failure is detected (entropy, logprob)
     float no_speech_thold = 0.6f;
     float logprob_thold = -1.0f;
     float entropy_thold = 2.4f;
     bool suppress_nst = true;
-    int audio_ctx = 0;                 // 0 = 既定（30 秒窓）。-1 = 音声の長さに合わせて縮める（実験用。速いが精度が落ちうる）
+    int audio_ctx = 0;                 // 0 = default (30-second window). -1 = shrink to the audio length (experimental: faster, but accuracy may drop)
     float audio_ctx_pad_sec = 1.0f;
 
-    // 発話検出（ハルシネーション対策）
+    // Voice activity detection (against hallucinations)
     std::string vad_mode = "trim";     // off | gate | trim | filter
     std::string vad_model_path;
     float vad_threshold = 0.5f;
     int vad_min_speech_ms = 250;
     int vad_min_silence_ms = 300;
     int vad_pad_ms = 300;
-    int min_duration_ms = 250;         // これより短い音声は推論せず空を返す
-    float silence_peak_dbfs = -50.0f;  // ピークがこれ未満なら無音とみなす
-    float min_speech_sec = 0.2f;       // VAD の発話合計がこれ未満なら空を返す
+    int min_duration_ms = 250;         // Audio shorter than this is not transcribed; returns empty
+    float silence_peak_dbfs = -50.0f;  // Treated as silence if the peak is below this
+    float min_speech_sec = 0.2f;       // Returns empty if the total VAD speech is below this
 
-    // プロンプト
+    // Prompt
     std::string initial_prompt = kDefaultInitialPrompt;
     bool hints_in_prompt = true;
     int max_hints = 64;
-    bool carry_initial_prompt = true;  // 30 秒を超える音声でも各窓にプロンプトを入れる
-    // whisper のプロンプトは最大 223 トークン（n_text_ctx / 2 - 1）で、超えると先頭（辞書語）から切られる。
-    // そこで辞書語と直前の区間の書き起こし（transcribe の prompt）に別々の上限を設け、合計も抑える。
+    bool carry_initial_prompt = true;  // Put the prompt in every window, even for audio longer than 30 seconds
+    // whisper's prompt is at most 223 tokens (n_text_ctx / 2 - 1); beyond that it is cut from the start (the dictionary words).
+    // So the dictionary words and the transcript of the previous segment (transcribe's prompt) get separate limits, and the total is capped too.
     int prompt_max_tokens = 220;
     int hints_max_tokens = 120;
     int context_max_tokens = 100;
 
-    bool filter = true;                // ハルシネーションの語句フィルタと繰り返しの圧縮
+    bool filter = true;                // Hallucination phrase filter and repetition collapsing
     bool warmup = true;
 };
 
@@ -247,7 +247,7 @@ static std::string dirname_of(const std::string & p) {
 
 static bool file_exists(const std::string & p) { return !p.empty() && access(p.c_str(), R_OK) == 0; }
 
-// ---- エンジン ---------------------------------------------------------------
+// ---- Engine -----------------------------------------------------------------
 
 struct Engine {
     Config cfg;
@@ -264,7 +264,7 @@ struct Engine {
         ctx = nullptr;
     }
 
-    // 戻り値: エラーコード（空なら成功）
+    // Returns an error code (empty on success)
     std::string load(const Config & c, std::string & err) {
         unload();
         cfg = c;
@@ -285,7 +285,7 @@ struct Engine {
 
         if (cfg.vad_mode != "off") {
             if (cfg.vad_model_path.empty()) {
-                // 既定: モデルと同じフォルダの Silero VAD
+                // Default: Silero VAD in the same folder as the model
                 for (const char * name : {"ggml-silero-v6.2.0.bin", "ggml-silero-v5.1.2.bin"}) {
                     const std::string p = dirname_of(cfg.model_path) + "/" + name;
                     if (file_exists(p)) { cfg.vad_model_path = p; break; }
@@ -299,7 +299,7 @@ struct Engine {
             if (cfg.vad_mode != "filter") {
                 whisper_vad_context_params vp = whisper_vad_default_context_params();
                 vp.n_threads = std::min(cfg.threads, 4);
-                vp.use_gpu = false;  // Silero は小さいので CPU の方が速い
+                vp.use_gpu = false;  // Silero is small, so the CPU is faster
                 vctx = whisper_vad_init_from_file_with_params(cfg.vad_model_path.c_str(), vp);
                 if (!vctx) {
                     err = "failed to load VAD model: " + cfg.vad_model_path;
@@ -311,8 +311,8 @@ struct Engine {
         }
 
         if (cfg.warmup) {
-            // Metal のパイプライン生成などの初回コストをここで払っておく。
-            // VAD を通さずに 1 秒の弱い雑音でエンコーダとデコーダを 1 回ずつ動かす。
+            // Pay first-run costs such as building the Metal pipelines here.
+            // Run the encoder and decoder once each on 1 second of faint noise, without VAD.
             std::vector<float> noise(kSampleRate);
             uint32_t s = 12345;
             for (float & v : noise) {
@@ -340,13 +340,13 @@ struct Engine {
         return vp;
     }
 
-    // initial_prompt の文字列は呼び出し側で保持する（params はポインタを持つだけ）
+    // The caller keeps the initial_prompt string alive (params only holds a pointer)
     whisper_full_params make_params(const std::string & language, const std::string & prompt, float temperature, bool fallback) const {
         const bool beam = cfg.beam_size > 1;
         whisper_full_params p = whisper_full_default_params(beam ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
         p.n_threads = cfg.threads;
         p.translate = false;
-        p.no_context = true;  // 前回の書き起こしを次の呼び出しに持ち込まない
+        p.no_context = true;  // Do not carry the previous transcript into the next call
         p.no_timestamps = false;
         p.single_segment = false;
         p.print_special = false;
@@ -379,31 +379,31 @@ struct Engine {
 
     int count_tokens(const std::string & text) const {
         if (text.empty()) return 0;
-        std::vector<whisper_token> buf(text.size() + 16);  // バイト単位の BPE なので、トークン数はバイト数を超えない
+        std::vector<whisper_token> buf(text.size() + 16);  // Byte-level BPE, so the token count never exceeds the byte count
         const int n = whisper_tokenize(ctx, text.c_str(), buf.data(), (int) buf.size());
         return n < 0 ? -n : n;
     }
 
     struct Prompt {
-        std::string text;     // whisper に渡す全体（辞書語 + initialPrompt + 直前の文脈）
-        std::string context;  // そのうち直前の文脈として使った部分（切り詰め後）
+        std::string text;     // Everything passed to whisper (dictionary words + initialPrompt + preceding context)
+        std::string context;  // The part of it used as preceding context (after truncation)
         int tokens = 0;
         int hints_used = 0;
         int hints_given = 0;
     };
 
-    // 辞書語を「、」で並べた 1 文を先に置き、直前の区間の書き起こしを最後に置く
-    // （whisper はプロンプトを直前の発話として読むので、直前の文脈は音声のすぐ前に来るのがよい）。
-    // 直前の文脈は長ければ先頭を落とし、なるべく文や読点の切れ目から始める。
-    // 末尾から budget トークンに収まる最長の部分を返す（UTF-8 の文字境界で切る）。
-    // 文の途中から始まらないよう、先頭 1/3 以内に句点や読点があれば、その直後から始める
+    // Put a sentence of dictionary words joined with 「、」 first, and the transcript of the previous segment last
+    // (whisper reads the prompt as the preceding speech, so the preceding context should come right before the audio).
+    // If the preceding context is long, drop its start, and start at a sentence or comma boundary where possible.
+    // Returns the longest tail that fits in budget tokens (cut at a UTF-8 character boundary).
+    // To avoid starting mid-sentence, if a period or comma appears in the first third, start right after it
     std::string tail_within(const std::string & text, int budget) const {
         if (budget <= 0) return std::string();
         if (count_tokens(text) <= budget) return text;
         std::vector<size_t> starts;
         for (size_t i = 0; i < text.size(); ++i)
             if ((text[i] & 0xC0) != 0x80) starts.push_back(i);
-        size_t lo = 0, hi = starts.size();  // starts[lo..] のどこかで収まる。hi は空文字列
+        size_t lo = 0, hi = starts.size();  // It fits somewhere in starts[lo..]. hi is the empty string
         while (lo < hi) {
             const size_t mid = (lo + hi) / 2;
             if (count_tokens(text.substr(starts[mid])) <= budget) hi = mid; else lo = mid + 1;
@@ -424,7 +424,7 @@ struct Engine {
     Prompt build_prompt(const std::vector<std::string> & hints, const std::string & context, const std::string & prompt_text) const {
         Prompt pr;
         if (!longhand::trim(prompt_text).empty()) {
-            // main の側で組んだ文をそのまま使う。長ければ先頭を落とす（whisper が使うのは末尾だけなので、大事な語は後ろに置いてある）
+            // Use the text built by main as is. If too long, drop its start (whisper only uses the end, so the important words are placed last)
             pr.text = tail_within(longhand::trim(prompt_text), cfg.prompt_max_tokens);
             for (const auto & h0 : hints) {
                 const std::string h = longhand::trim(h0);
@@ -458,17 +458,17 @@ struct Engine {
         if (budget < 8) {
             ctx_t.clear();
         } else if (count_tokens(ctx_t) > budget) {
-            // 末尾から budget に収まる最長の部分を二分探索する（UTF-8 の文字境界で切る）
+            // Binary search for the longest tail that fits in budget (cut at a UTF-8 character boundary)
             std::vector<size_t> starts;
             for (size_t i = 0; i < ctx_t.size(); ++i)
                 if ((ctx_t[i] & 0xC0) != 0x80) starts.push_back(i);
-            size_t lo = 0, hi = starts.size();  // starts[lo..] のどこかで収まる。hi は空文字列
+            size_t lo = 0, hi = starts.size();  // It fits somewhere in starts[lo..]. hi is the empty string
             while (lo < hi) {
                 const size_t mid = (lo + hi) / 2;
                 if (count_tokens(ctx_t.substr(starts[mid])) <= budget) hi = mid; else lo = mid + 1;
             }
             std::string tail = lo < starts.size() ? ctx_t.substr(starts[lo]) : std::string();
-            // 文の途中から始まらないよう、先頭 1/3 以内に句点や読点があればその直後から始める
+            // To avoid starting mid-sentence, if a period or comma appears in the first third, start right after it
             size_t cut = std::string::npos;
             for (const char * d : {"。", "？", "！", "?", "!", "、", ","}) {
                 const size_t k = tail.find(d);
@@ -493,24 +493,24 @@ struct Engine {
         json debug = json::object();
         int hints_used = 0;
         int hints_given = 0;
-        /** 語ごとの確信度。[文字列, 確率] の並び（UTF-8 の文字の切れ目でまとめ、確率は最小値） */
+        /** Per-word confidence. A list of [text, probability] (grouped at UTF-8 character boundaries; probability is the minimum) */
         json tokens = json::array();
-        /** 確信度の低い箇所の別候補。{index: tokens の添字, candidates: [[文字列, 確率], ...]} の並び */
+        /** Alternatives where confidence is low. A list of {index: index into tokens, candidates: [[text, probability], ...]} */
         json alternatives = json::array();
-        /** 条件を変えて聞き直した、文全体の別の仮説。{text, source, temperature?, avgLogprob} の並び */
+        /** Alternative whole-sentence hypotheses from re-hearing under other conditions. A list of {text, source, temperature?, avgLogprob} */
         json hypotheses = json::array();
     };
 
-    /** transcribe の任意の指定 */
+    /** Optional settings for transcribe */
     struct Extras {
-        std::string prompt_text;                 // main の側で組んだプロンプト。あれば hints と context からは組まない
-        int alt_top_k = 0;                       // 別候補の数（0 なら出さない）
-        float alt_below = 0.5f;                  // この確率未満の箇所に別候補を付ける
-        bool rehear_no_hints = false;            // プロンプトなしで聞き直す
-        std::vector<float> rehear_temperatures;  // 温度を変えて聞き直す
+        std::string prompt_text;                 // Prompt built by main. If given, none is built from hints and context
+        int alt_top_k = 0;                       // Number of alternatives (0 = none)
+        float alt_below = 0.5f;                  // Add alternatives where the probability is below this
+        bool rehear_no_hints = false;            // Re-hear without a prompt
+        std::vector<float> rehear_temperatures;  // Re-hear at other temperatures
     };
 
-    /** 1 回のデコードの結果 */
+    /** Result of one decoding pass */
     struct Pass {
         std::string text;
         std::string language;
@@ -521,7 +521,7 @@ struct Engine {
         double avg_logprob = 0;
     };
 
-    // 切り出した音声を 1 回デコードし、区間ごとのフィルタを掛けた結果を out に入れる
+    // Decodes the cut audio once, and puts the result after the per-segment filter into out
     bool run_pass(const float * samples, size_t len, size_t off, float speech_sec, const std::string & language, const std::string & prompt,
                   const std::string & context, float temperature, bool fallback, LogitsTap * tap, float alt_below, json & debug, Pass & out,
                   std::string & err) {
@@ -531,7 +531,7 @@ struct Engine {
             p.logits_filter_callback_user_data = tap;
         }
         if (cfg.audio_ctx < 0) {
-            // エンコーダの窓（30 秒 = 1500 フレーム）を音声の長さまで縮める。30 秒以上なら既定のまま
+            // Shrink the encoder window (30 seconds = 1500 frames) to the audio length. Keep the default at 30 seconds or more
             const double sec = (double) len / kSampleRate + cfg.audio_ctx_pad_sec;
             int actx = (int) std::ceil(sec * 50.0);
             actx = ((actx + 31) / 32) * 32;
@@ -547,7 +547,7 @@ struct Engine {
             return false;
         }
         if (cancelled_now()) {
-            // 最後のデコードの後に取り消された。結果は捨てる
+            // Cancelled after the last decode. Discard the result
             err = "cancelled";
             return false;
         }
@@ -557,7 +557,7 @@ struct Engine {
         }
         if (language == "auto" || language.empty()) out.language = whisper_lang_str(whisper_full_lang_id(ctx));
 
-        // 区間ごとのフィルタ
+        // Per-segment filter
         const std::u32string prompt_norm = longhand::normalize_for_match(prompt);
         const std::u32string context_norm = longhand::normalize_for_match(context);
         const whisper_token eot = whisper_token_eot(ctx);
@@ -565,7 +565,7 @@ struct Engine {
         std::vector<std::string> kept;
         double lp_all = 0;
         int nt_all = 0;
-        // 別候補: 結果のトークンを、記録したステップに順に対応させる（区間の境目の時刻のトークンは結果に入らないので、少し先まで探す）
+        // Alternatives: match the result tokens to the recorded steps in order (timestamp tokens at segment boundaries are not in the result, so look a little ahead)
         bool aligned = tap && tap->top_k > 0;
         size_t step = 0;
         for (int i = 0; i < nseg; ++i) {
@@ -587,7 +587,7 @@ struct Engine {
                         step_of[k] = (int) look;
                         step = look + 1;
                     } else if (look >= tap->chosen.size() && k == m - 1 && i == nseg - 1) {
-                        // 最後に選ばれたトークンは、次のステップが無いので記録に無い。別候補を付けないだけでよい
+                        // The last chosen token is not recorded because there is no next step. Just skip its alternatives
                     } else {
                         aligned = false;
                     }
@@ -598,7 +598,7 @@ struct Engine {
                 text = longhand::collapse_repeats(text);
                 std::string why = longhand::hallucination_reason(text, ev, prompt_norm);
                 if (why.empty() && !context_norm.empty()) {
-                    // 直前の区間の書き起こしをそのまま繰り返した区間（音声が不明瞭なときに起きうる）
+                    // A segment that repeats the previous segment's transcript verbatim (can happen when the audio is unclear)
                     const std::u32string tn = longhand::normalize_for_match(text);
                     if (tn.size() >= 10 && tn.size() * 10 >= context_norm.size() * 8 && context_norm.find(tn) != std::u32string::npos)
                         why = "context-echo";
@@ -615,9 +615,9 @@ struct Engine {
             const double t1 = whisper_full_get_segment_t1(ctx, i) / 100.0 + (double) off / kSampleRate;
             out.segments.push_back({{"start", std::round(t0 * 100) / 100}, {"end", std::round(t1 * 100) / 100}, {"text", text}});
             kept.push_back(text);
-            // 語ごとの確信度（main の textfix が、確信度の低い所だけを直したり、LLM へ回したりするのに使う）。
-            // 1 つの文字が複数のトークンに分かれることがあるので、UTF-8 の文字の切れ目までまとめ、確率は最小値を採る。
-            // 書き起こしの文字列とは、main の側で文字の並びを突き合わせて対応させる（ここでは区間の繰り返しの除去などを反映しない）
+            // Per-word confidence (main's textfix uses it to fix only low-confidence spots or send them to the LLM).
+            // One character can be split across several tokens, so group up to a UTF-8 character boundary and take the minimum probability.
+            // main maps these to the transcript by matching the character sequence (removal of repeated segments and so on is not reflected here)
             std::string piece;
             float pmin = 1.0f;
             int piece_tokens = 0;
@@ -634,7 +634,7 @@ struct Engine {
                 }
                 if (utf8_complete(piece)) {
                     out.tokens.push_back(json::array({piece, std::round((double) pmin * 1000.0) / 1000.0}));
-                    // 別候補は、1 つのトークンでできた箇所にだけ付ける（複数のトークンにまたがる字は、候補が字の断片になる）
+                    // Add alternatives only where the piece is a single token (for a character spanning several tokens, the candidates would be character fragments)
                     if (aligned && piece_tokens == 1 && piece_step >= 0 && piece_step < (int) tap->steps.size() && pmin < alt_below) {
                         json cands = json::array();
                         for (const auto & c : tap->steps[piece_step]) {
@@ -653,7 +653,7 @@ struct Engine {
                 }
             }
         }
-        if (tap && !aligned) out.alternatives = json::array();  // 対応が取れなかった。誤った位置に付けるより、出さない
+        if (tap && !aligned) out.alternatives = json::array();  // Could not align. Better to give none than to attach them at the wrong place
         out.text = longhand::join_segments(kept);
         if (cfg.filter) out.text = longhand::collapse_repeats(out.text);
         out.avg_logprob = nt_all > 0 ? lp_all / nt_all : 0.0;
@@ -667,7 +667,7 @@ struct Engine {
         r.language = language == "auto" ? "" : language;
         r.debug["durationSec"] = dur;
 
-        // 1) 短すぎる・無音の音声は推論しない（whisper は無音でも文を出すことがあるため）
+        // 1) Do not transcribe audio that is too short or silent (whisper can produce sentences even from silence)
         if (n < (size_t) (cfg.min_duration_ms * kSampleRate / 1000)) {
             r.debug["skipped"] = "too-short";
             return true;
@@ -679,7 +679,7 @@ struct Engine {
             return true;
         }
 
-        // 2) VAD（gate: 発話がなければ空、trim: さらに前後の無音を落とす）
+        // 2) VAD (gate: empty if there is no speech; trim: also drop leading and trailing silence)
         size_t off = 0, len = n;
         float speech_sec = (float) dur;
         if (vctx && (cfg.vad_mode == "gate" || cfg.vad_mode == "trim")) {
@@ -741,7 +741,7 @@ struct Engine {
         r.alternatives = first.alternatives;
         if (!first.dropped.empty()) r.debug["dropped"] = first.dropped;
 
-        // 4) 聞き直し。同じ音声を、プロンプトなしや温度を変えてもう一度デコードし、違う結果だけを別の仮説として返す
+        // 4) Re-hearing. Decode the same audio again without a prompt or at other temperatures, and return only differing results as alternative hypotheses
         if (!r.text.empty()) {
             auto rehear = [&](const char * source, const std::string & p2, const std::string & c2, float temperature) -> bool {
                 Pass alt;
@@ -763,7 +763,7 @@ struct Engine {
     }
 };
 
-// ---- メインループ -----------------------------------------------------------
+// ---- Main loop --------------------------------------------------------------
 
 static std::vector<std::string> str_list(const json & j) {
     std::vector<std::string> v;
@@ -773,7 +773,7 @@ static std::vector<std::string> str_list(const json & j) {
     return v;
 }
 
-// stdin を読むスレッドからメインループへ渡す受け箱
+// Inbox passed from the stdin reader thread to the main loop
 struct Inbox {
     std::mutex m;
     std::condition_variable cv;
@@ -782,8 +782,8 @@ struct Inbox {
 };
 static Inbox g_inbox;
 
-// cancel はこのスレッドで処理し、それ以外の行は通し番号を付けてメインループへ渡す。
-// cancel は短い行なので、長い行（pcm を含む transcribe など）は解析せずにそのまま渡す。
+// cancel is handled on this thread; every other line is numbered and passed to the main loop.
+// cancel is a short line, so long lines (such as transcribe with pcm) are passed on without parsing.
 static void reader_loop() {
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -794,7 +794,7 @@ static void reader_loop() {
                 const json j = json::parse(line);
                 is_cancel = j.is_object() && j.contains("type") && j["type"] == "cancel";
             } catch (...) {
-                // 解析できない行はメインループでエラーを返す
+                // The main loop returns an error for lines that cannot be parsed
             }
             if (is_cancel) {
                 g_cancel_upto.store(g_received.load());
@@ -817,14 +817,14 @@ static void reader_loop() {
     g_inbox.cv.notify_one();
 }
 
-// 処理中の要求の番号を、ループの 1 回分だけ設定する（continue で抜けても戻す）
+// Sets the current request number for one loop iteration (reset even when leaving with continue)
 struct CurrentRequest {
     explicit CurrentRequest(uint64_t seq) { g_current.store(seq); }
     ~CurrentRequest() { g_current.store(0); }
 };
 
 int main(int argc, char ** argv) {
-    // 元の stdout をプロトコル用に複製し、fd 1 は stderr に向ける
+    // Duplicate the original stdout for the protocol, and point fd 1 at stderr
     int proto_fd = dup(STDOUT_FILENO);
     g_out = fdopen(proto_fd, "w");
     dup2(STDERR_FILENO, STDOUT_FILENO);
@@ -894,7 +894,7 @@ int main(int argc, char ** argv) {
                     continue;
                 }
                 if (cancelled_now()) {
-                    // 処理を始める前に取り消された
+                    // Cancelled before processing started
                     send_error(id, "cancelled", "cancelled");
                     continue;
                 }
@@ -947,7 +947,7 @@ int main(int argc, char ** argv) {
                 if (!r.alternatives.empty()) pl["alternatives"] = r.alternatives;
                 if (!r.hypotheses.empty()) pl["hypotheses"] = r.hypotheses;
                 if (r.hints_given > 0) {
-                    // 渡した語彙ヒントのうち、プロンプトの上限に収まった数（main の完了ログに出す）
+                    // How many of the given vocabulary hints fit within the prompt limit (shown in main's completion log)
                     pl["hintsUsed"] = r.hints_used;
                     pl["hintsGiven"] = r.hints_given;
                 }

@@ -22,14 +22,14 @@ describe('HotkeyInterpreter', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('押しっぱなしで開始し、離すと停止する', () => {
+  it('starts on press and stops on release', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 2000 });
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'stop']);
   });
 
-  it('短いタップ 1 回は誤操作として黙って取り消す', () => {
+  it('silently cancels a single short tap as a mistake', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 100 });
@@ -40,7 +40,7 @@ describe('HotkeyInterpreter', () => {
     ]);
   });
 
-  it('ダブルタップでロックし、もう一度押すと停止する', () => {
+  it('locks on a double tap and stops on the next press', () => {
     const { it: h, cmds, state } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 100 });
@@ -52,14 +52,14 @@ describe('HotkeyInterpreter', () => {
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'lock', 'stop']);
   });
 
-  it('ダブルタップが無効なら短いタップでも停止する', () => {
+  it('stops even on a short tap when double tap is off', () => {
     const { it: h, cmds } = setup({ doubleTap: false });
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 100 });
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'stop']);
   });
 
-  it('Fn を押してから Space でロックし、Fn を離しても止まらない', () => {
+  it('locks with Space while Fn is held, and keeps going after Fn is released', () => {
     const { it: h, cmds, state } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'lock', phase: 'down', t: 150 });
@@ -72,13 +72,13 @@ describe('HotkeyInterpreter', () => {
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'lock', 'stop']);
   });
 
-  it('待機中に Lock を押すとロック状態で開始する', () => {
+  it('starts locked when Lock is pressed while idle', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'lock', phase: 'down', t: 0 });
     expect(cmds).toEqual([{ kind: 'start', locked: true }]);
   });
 
-  it('Fn を修飾キーとして使ったら黙って取り消す', () => {
+  it('silently cancels when Fn is used as a modifier', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'interrupted', t: 200 });
@@ -88,30 +88,30 @@ describe('HotkeyInterpreter', () => {
     ]);
   });
 
-  it('長く話した後の interrupted は無視する', () => {
+  it('ignores interrupted after a long recording', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'interrupted', t: 5000 });
     expect(cmds.map((c) => c.kind)).toEqual(['start']);
   });
 
-  it('ダブルタップの窓は 1 回目の押下から数える（離してからではない）', () => {
+  it('counts the double-tap window from the first press (not from the release)', () => {
     const { it: h, cmds, state } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 250 });
-    // 1 回目の押下から 300ms で窓が閉じる（離してから 50ms）
+    // The window closes 300 ms after the first press (50 ms after the release)
     vi.advanceTimersByTime(60);
     expect(cmds).toEqual([
       { kind: 'start', locked: false },
       { kind: 'cancel', silent: true },
     ]);
-    // 離してから 300ms 以内でも、窓の外の 2 回目はロックにならない（クールダウン中なので開始もしない）
+    // A second press outside the window does not lock, even within 300 ms of the release (and does not start either, because of the cooldown)
     h.handle({ action: 'activate', phase: 'down', t: 420 });
     expect(state.locked).toBe(false);
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'cancel']);
   });
 
-  it('停止の直後 200ms は Activate の押下で開始しない', () => {
+  it('does not start on Activate for 200 ms right after a stop', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'activate', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'up', t: 2000 });
@@ -122,7 +122,7 @@ describe('HotkeyInterpreter', () => {
     expect(cmds.map((c) => c.kind)).toEqual(['start', 'stop', 'start']);
   });
 
-  it('ロック中の停止の直後もクールダウンになるが、Lock キーでの開始は妨げない', () => {
+  it('applies the cooldown after stopping a locked recording, but still allows a start with the Lock key', () => {
     const { it: h, cmds } = setup();
     h.handle({ action: 'lock', phase: 'down', t: 0 });
     h.handle({ action: 'activate', phase: 'down', t: 3000 });
@@ -133,7 +133,7 @@ describe('HotkeyInterpreter', () => {
     expect(cmds).toEqual([{ kind: 'start', locked: true }, { kind: 'stop' }, { kind: 'start', locked: true }]);
   });
 
-  it('Esc は録音中と確定処理中だけ取り消しになる', () => {
+  it('cancels with Esc only while recording or finalizing', () => {
     const { it: h, cmds, state } = setup();
     h.handle({ action: 'cancel', phase: 'down', t: 0 });
     expect(cmds).toEqual([]);

@@ -164,10 +164,10 @@ Requests follow the system proxy settings and trust the certificates in your key
 
 ## Project status
 
-Longhand works day to day on the author's machine, and the core pipeline is covered by 649 unit and integration tests plus 87 Swift tests.
+Longhand works day to day on the author's machine, and the core pipeline is covered by 702 unit and integration tests plus 87 Swift tests.
 It is still early:
 
-- macOS on Apple Silicon only. The UI is in Japanese.
+- macOS on Apple Silicon only. Dictation is tuned for Japanese; the interface is in English and Japanese and follows the macOS language.
 - No signed or notarized releases yet.
 - Speed has been measured on an M5 Mac only.
 

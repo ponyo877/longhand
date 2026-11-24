@@ -28,7 +28,7 @@ export class HistoryStore extends EventEmitter {
     return this.items.find((i) => i.id === id);
   }
 
-  /** 最後に貼り付けた（貼り付けるはずだった）書き起こし（HK-7） */
+  /** The last transcript that was pasted, or was meant to be (HK-7) */
   last(): HistoryItem | undefined {
     return this.list().find((i) => i.text && i.paste !== 'cancelled');
   }

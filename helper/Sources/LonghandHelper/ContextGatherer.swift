@@ -3,8 +3,8 @@ import ApplicationServices
 import Foundation
 import LonghandCore
 
-/// get_context の実装。前面アプリ、フォーカス中の要素、入力欄の内容、ウィンドウのタイトル、ブラウザのホスト名を取る。
-/// 全体で約 300ms、ホスト名の探索は約 150ms を上限にする。AX の各呼び出しは 0.25 秒のタイムアウトで切る。
+/// Implements get_context. Reads the frontmost app, the focused element, the input field's content, the window title and the browser's host name.
+/// The whole call is capped at about 300ms, and the host name search at about 150ms. Each AX call times out after 0.25 seconds.
 enum ContextGatherer {
     static let totalBudgetMs: Double = 300
     static let hostBudgetMs: Double = 150
@@ -23,7 +23,7 @@ enum ContextGatherer {
         return AppInfoPayload(name: app.localizedName ?? "", bundleId: app.bundleIdentifier ?? "", pid: pid)
     }
 
-    /// targetPid を渡すと、フォーカス中のアプリの代わりにそのアプリを調べる（--probe-context 用）
+    /// With targetPid, inspects that app instead of the focused one (for --probe-context)
     static func gather(includeField: Bool, includeHost: Bool, maxContextChars: Int, targetPid: pid_t? = nil) -> ContextPayload {
         let sw = Stopwatch()
         let trusted = AX.isTrusted()
@@ -65,7 +65,7 @@ enum ContextGatherer {
                 isSecure: secure, editable: editable
             )
             ctx.canPaste = canPaste(role: role, secure: secure, editable: editable, element: el)
-            // ボタンなど文字を受け付けない要素の本文は読まない（空文字を返すと「空の入力欄」と誤解される）
+            // Do not read the text of elements that take no text, such as buttons (returning an empty string would be mistaken for an empty input field)
             if includeField && !secure && ctx.canPaste != "no" {
                 readText(el, into: &field, maxChars: max(0, maxContextChars), deadline: sw.start + totalBudgetMs - 30,
                          maxValueChars: AppObserver.isChromiumLike(pid: pid) ? Self.chromiumMaxValueChars : Self.maxValueChars)
@@ -92,12 +92,12 @@ enum ContextGatherer {
         return "unknown"
     }
 
-    /// 値を丸ごと読む経路（StringForRange に対応しない要素向け）の上限。
-    /// Chromium と Electron は大きな値を返すのが遅く、AX のタイムアウトまで待たされやすいので小さくする（CTX-3）
+    /// Limit for the path that reads the whole value (for elements without StringForRange).
+    /// Chromium and Electron are slow to return large values and tend to hit the AX timeout, so their limit is smaller (CTX-3)
     static let maxValueChars = 300_000
     static let chromiumMaxValueChars = 10_000
 
-    /// 選択範囲とキャレット前後の文字列を読む（UTF-16 単位）
+    /// Reads the selection and the text before and after the caret (in UTF-16 units)
     static func readText(_ el: AXUIElement, into field: inout FieldInfoPayload, maxChars: Int, deadline: Double,
                          maxValueChars: Int = maxValueChars) {
         let m = AX.multiple(el, [kAXSelectedTextRangeAttribute, kAXNumberOfCharactersAttribute])
@@ -109,7 +109,7 @@ enum ContextGatherer {
         let total = (m[kAXNumberOfCharactersAttribute] as? NSNumber)?.intValue
         field.totalLength = total
 
-        // 1. StringForRange で必要な部分だけ読む（巨大な欄でも速い）
+        // 1. Read only the needed part with StringForRange (fast even for huge fields)
         if let sel, let total, sel.location >= 0, sel.location + sel.length <= total {
             let beforeStart = max(0, sel.location - maxChars)
             let end = sel.location + sel.length
@@ -131,7 +131,7 @@ enum ContextGatherer {
             }
         }
 
-        // 2. AXValue から切り出す（StringForRange に対応しない要素向け）
+        // 2. Cut from AXValue (for elements without StringForRange)
         if let total, total > maxValueChars { return }
         guard Clock.nowMs() < deadline, let value = AX.string(el, kAXValueAttribute) else {
             if field.selectedText == nil, let s = AX.string(el, kAXSelectedTextAttribute) { field.selectedText = s }
@@ -147,13 +147,13 @@ enum ContextGatherer {
                 field.selectedText = TextSlicing.substring(value, utf16Start: sel.location, end: min(end, sel.location + 20000))
             }
         } else {
-            // キャレット位置が分からない。末尾にあるとみなす
+            // Caret position unknown. Assume it is at the end
             field.beforeCursor = TextSlicing.before(value, location: units, maxChars: maxChars)
             if field.selectedText == nil { field.selectedText = AX.string(el, kAXSelectedTextAttribute) }
         }
     }
 
-    /// StringForRange がサロゲートペアの後半から始まったときに捨てる
+    /// Drops a trailing surrogate when StringForRange starts in the middle of a surrogate pair
     private static func trimLeadingHalf(_ s: String) -> String {
         if let first = s.utf16.first, UTF16.isTrailSurrogate(first) {
             return String(decoding: s.utf16.dropFirst(), as: UTF16.self)
@@ -162,7 +162,7 @@ enum ContextGatherer {
     }
 }
 
-/// ブラウザのホスト名を AX から探す
+/// Finds the browser's host name through AX
 enum BrowserHost {
     static let browserBundleIds: Set<String> = [
         "com.apple.Safari", "com.apple.SafariTechnologyPreview",
@@ -181,7 +181,7 @@ enum BrowserHost {
     }
 
     static func find(app: AXUIElement, focused: AXUIElement?, deadline: Double) -> String? {
-        // 1. フォーカス中の要素から親をたどって AXWebArea を探す（ページ内にフォーカスがあれば速い）
+        // 1. Walk up the parents of the focused element to find AXWebArea (fast when the focus is in the page)
         if let focused {
             var el: AXUIElement? = focused
             var steps = 0
@@ -191,7 +191,7 @@ enum BrowserHost {
                 steps += 1
             }
         }
-        // 2. ウィンドウの中を幅優先で探す（AXWebArea の AXURL、またはアドレスバーの値）
+        // 2. Search the window breadth-first (the AXURL of AXWebArea, or the address bar's value)
         guard Clock.nowMs() < deadline, let window = AX.element(app, kAXFocusedWindowAttribute) else { return nil }
         var queue: [AXUIElement] = [window]
         var visited = 0
@@ -210,7 +210,7 @@ enum BrowserHost {
                     if let v = AX.string(el, kAXValueAttribute), let h = parseHost(v) { addressCandidate = h }
                 }
             }
-            if role == "AXWebArea" { continue } // ページの中までは潜らない
+            if role == "AXWebArea" { continue } // Do not descend into the page
             queue.append(contentsOf: AX.children(el))
         }
         return addressCandidate
@@ -222,7 +222,7 @@ enum BrowserHost {
         return url.host
     }
 
-    /// アドレスバーの文字列（スキームがないこともある）からホスト名を取り出す
+    /// Extracts the host name from the address bar text (which may have no scheme)
     static func parseHost(_ text: String) -> String? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, !t.contains(" ") else { return nil }

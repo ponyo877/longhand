@@ -1,4 +1,4 @@
-// ショートカット記録モードで、押されているキーと「最大になった組み合わせ」を追跡する。
+// In shortcut recording mode, tracks the pressed keys and the largest combination reached.
 
 public struct ShortcutUpdate: Equatable, Sendable {
     public let keys: [String]
@@ -7,9 +7,9 @@ public struct ShortcutUpdate: Equatable, Sendable {
 }
 
 public struct ShortcutRecorder: Sendable {
-    /// 押されているキー（押した順）
+    /// Pressed keys (in the order pressed)
     private var pressed: [String] = []
-    /// 押下が始まってから最大になった組み合わせ（表示順に並べたもの）
+    /// The largest combination since keys started being pressed (in display order)
     public private(set) var combo: [String] = []
 
     public init() {}
@@ -41,7 +41,7 @@ public struct ShortcutRecorder: Sendable {
         return ShortcutUpdate(keys: keys, combo: combo, done: false)
     }
 
-    /// 修飾キー（Fn, Control, Alt, Shift, Meta の順、左 → 右）を先に、残りは押した順に並べる
+    /// Puts modifier keys first (in the order Fn, Control, Alt, Shift, Meta, left → right) and the rest in the order pressed
     static func ordered(_ keys: [String]) -> [String] {
         let mods = keys.filter(KeyTable.isModifier).sorted { KeyTable.sortKey($0) < KeyTable.sortKey($1) }
         let others = keys.filter { !KeyTable.isModifier($0) && !KeyTable.isMouse($0) }

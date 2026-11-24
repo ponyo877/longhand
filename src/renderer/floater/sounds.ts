@@ -1,7 +1,7 @@
 import type { SoundName } from '../../shared/types';
 
 /**
- * 効果音（REC-4）。音源ファイルを持たず、WebAudio で毎回合成する。
+ * Sound effects (REC-4). There are no audio files; each sound is synthesized with WebAudio when played.
  */
 let ctx: AudioContext | null = null;
 
@@ -26,7 +26,7 @@ export function playSound(name: SoundName, volume: number): void {
   if (c.state === 'suspended') void c.resume();
   const t = c.currentTime + 0.005;
   const v = Math.min(1, volume) * 0.18;
-  // 開始と停止は 100ms 以内に収める（A1）。開始音はマイクが開いてから鳴るので、長いと録音に入って認識の邪魔になる
+  // Start and stop sounds stay within 100 ms (A1). The start sound plays after the microphone opens, so a long one would be recorded and disturb recognition
   switch (name) {
     case 'start':
       tone(c, 740, t, 0.045, v);

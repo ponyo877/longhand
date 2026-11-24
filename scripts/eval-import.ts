@@ -1,14 +1,15 @@
 /**
- * 評価に使う録音を、消える前に ~/longhand-eval/datasets/ に写す。
+ * Copies recordings used for evaluation into ~/longhand-eval/datasets/ before they are deleted.
  *
- *   npx tsx scripts/eval-import.ts            # 取り込む
- *   npx tsx scripts/eval-import.ts --dry-run  # 件数だけを見る
+ *   npx tsx scripts/eval-import.ts            # import
+ *   npx tsx scripts/eval-import.ts --dry-run  # show counts only
  *
- * 写すもの:
- * - longhand-v1: Longhand の履歴と録音（手元のファイルを読むだけで、通信はしない）
+ * What it copies:
+ * - longhand-v1: Longhand's history and recordings (it only reads local files, no network)
  *
- * Longhand は録音を 72 時間で消すので、評価に使いたい録音は、消える前に走らせて写しておく。何度走らせても、増えた分だけを足す。
- * 個人の書き起こしを含むので、出力先はリポジトリの外に固定し、画面には件数だけを出す。
+ * Longhand deletes recordings after 72 hours, so run this before then to copy the recordings you want for evaluation. Each run adds only
+ * what is new.
+ * The data contains personal transcripts, so the output stays outside the repository and only counts are printed.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -29,31 +30,31 @@ const DATASETS = path.join(ROOT, 'datasets');
 const LONGHAND_APP = path.join(os.homedir(), 'Library', 'Application Support', 'Longhand');
 const DRY = args['dry-run']!;
 
-/** データセットの 1 行。最初の取り込みの形（id, audio, durationSec, timestamp, kind, rawText, content）に項目を足したもの */
+/** One dataset row: the shape of the first import (id, audio, durationSec, timestamp, kind, rawText, content) plus more fields */
 interface Row {
   id: string;
-  /** データセットのフォルダからの相対パス */
+  /** Path relative to the dataset folder */
   audio: string;
   durationSec: number;
   timestamp: string;
   kind: string;
-  /** そのアプリの音声認識の生の出力 */
+  /** Raw speech recognition output of that app */
   rawText: string;
-  /** そのアプリが入力した文（整形の後） */
+  /** Text that app typed (after formatting) */
   content: string;
-  /** external は、ほかの道具で用意した録音（手で置いたデータセット） */
+  /** external means recordings prepared with other tools (a dataset placed by hand) */
   source: 'external' | 'longhand';
   audioSha256: string;
   sampleRate: number;
   importedAt: string;
-  /** Longhand の録音だけ: 入力先のアプリ、貼り付けの結果、整形したか */
+  /** Longhand recordings only: the target app, the paste result, and whether it was formatted */
   app?: string;
   paste?: string;
   formatted?: boolean;
   fastPath?: boolean;
-  /** Longhand の録音だけ: キーを離した後も録音を続けた時間（録音の末尾のこの長さが、離した後の音声） */
+  /** Longhand recordings only: how long recording continued after the key was released (this much at the end is audio after release) */
   postRollMs?: number;
-  /** Longhand の録音だけ: 入力先の画面の文から拾えた、名前らしい英字の語 */
+  /** Longhand recordings only: Latin-letter words that look like names, picked from the text on the target screen */
   contextTerms?: string[];
 }
 
@@ -69,7 +70,7 @@ function readRows(dir: string): Row[] {
     .map((l) => JSON.parse(l) as Row);
 }
 
-/** すでに取り込んだ発話の id と、音声の中身のハッシュ */
+/** IDs of utterances already imported, and hashes of their audio content */
 function known(): { ids: Set<string>; hashes: Set<string> } {
   const ids = new Set<string>();
   const hashes = new Set<string>();
@@ -81,7 +82,7 @@ function known(): { ids: Set<string>; hashes: Set<string> } {
       ids.add(row.id);
       if (row.audioSha256) hashes.add(row.audioSha256);
       else {
-        // 最初の取り込みにはハッシュが無いので、音声から求める
+        // The first import has no hash, so compute it from the audio
         const file = path.join(dir, row.audio);
         if (fs.existsSync(file)) hashes.add(sha256(fs.readFileSync(file)));
       }
@@ -169,7 +170,7 @@ function importInto(name: string, source: Row['source'], cands: Candidate[], see
   return c;
 }
 
-/** Longhand の履歴と録音 */
+/** Longhand's history and recordings */
 function longhandCandidates(): Candidate[] {
   const file = path.join(LONGHAND_APP, 'history.json');
   if (!fs.existsSync(file)) return [];
@@ -212,8 +213,8 @@ function main(): void {
 
   const report = (name: string, c: Counts) =>
     console.log(
-      `${name}: 履歴 ${c.found} 件 → 追加 ${c.added} 件（取り込み済み ${c.already}、音声なし ${c.noAudio}、同じ音声 ${c.duplicate}、読めない ${c.unreadable}）` +
-        (c.otherRate ? `、16 kHz 以外 ${c.otherRate} 件` : ''),
+      `${name}: ${c.found} in history → ${c.added} added (${c.already} already imported, ${c.noAudio} without audio, ${c.duplicate} duplicate audio, ${c.unreadable} unreadable)` +
+        (c.otherRate ? `, ${c.otherRate} not 16 kHz` : ''),
     );
   report('longhand-v1', importInto('longhand-v1', 'longhand', longhandCandidates(), seen));
 
@@ -223,9 +224,9 @@ function main(): void {
       if (!fs.statSync(dir).isDirectory()) continue;
       const rows = readRows(dir);
       const withText = rows.filter((r) => r.content.trim()).length;
-      console.log(`  ${name}: ${rows.length} 件（文あり ${withText} 件、合計 ${Math.round(rows.reduce((n, r) => n + r.durationSec, 0))} 秒）`);
+      console.log(`  ${name}: ${rows.length} rows (${withText} with text, ${Math.round(rows.reduce((n, r) => n + r.durationSec, 0))} s in total)`);
     }
-  } else console.log('（--dry-run: 何も書いていません）');
+  } else console.log('(--dry-run: nothing was written)');
 }
 
 main();

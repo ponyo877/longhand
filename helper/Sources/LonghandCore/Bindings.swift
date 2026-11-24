@@ -1,4 +1,4 @@
-// ショートカット（Binding）の表現と、configure で受け取ったキー名の配列からの解析・検証。
+// Representation of shortcuts (Binding), and parsing and validation of the key name arrays received in configure.
 
 public enum HotkeyAction: String, CaseIterable, Sendable, Codable {
     case activate
@@ -20,11 +20,11 @@ public enum PttState: String, Sendable, Codable {
     case finalizing
 }
 
-/// Binding を構成する 1 キー分の条件。"Control" のように左右を区別しない名前は、どちらの物理キーでも満たす
+/// The condition for one key of a Binding. A name that does not distinguish left and right, such as "Control", is satisfied by either physical key
 public struct KeySpec: Hashable, Sendable {
-    /// 設定に書かれた名前
+    /// The name written in the settings
     public let name: String
-    /// この条件を満たす物理キーの名前
+    /// Names of the physical keys that satisfy this condition
     public let physical: Set<String>
 
     public init(name: String) {
@@ -37,7 +37,7 @@ public struct KeySpec: Hashable, Sendable {
 
 public struct Binding: Hashable, Sendable, CustomStringConvertible {
     public let action: HotkeyAction
-    /// 同じ action の中での番号（0..2）
+    /// Number within the same action (0..2)
     public let index: Int
     public let specs: [KeySpec]
 
@@ -47,21 +47,21 @@ public struct Binding: Hashable, Sendable, CustomStringConvertible {
         self.specs = keys.map(KeySpec.init(name:))
     }
 
-    /// 修飾キー以外（文字キー、マウスボタンなど）を含むか
+    /// Whether it includes a non-modifier (a character key, a mouse button and so on)
     public var hasNonModifier: Bool { specs.contains { !$0.isModifier } }
 
-    /// 押されているキーがちょうどこの Binding のキーだけか
+    /// Whether the pressed keys are exactly this Binding's keys
     public func isExactlySatisfied(by down: Set<String>) -> Bool {
         guard !down.isEmpty, isHeld(by: down) else { return false }
         return down.allSatisfy { key in specs.contains { $0.physical.contains(key) } }
     }
 
-    /// この Binding のキーがすべて押されているか（ほかのキーが一緒に押されていてもよい）
+    /// Whether all of this Binding's keys are pressed (other keys may be pressed too)
     public func isHeld(by down: Set<String>) -> Bool {
         specs.allSatisfy { !$0.physical.isDisjoint(with: down) }
     }
 
-    /// 2 つの Binding が同じキーの組み合わせで同時に成立しうるか
+    /// Whether the two Bindings can match at the same time on the same key combination
     public func conflicts(with other: Binding) -> Bool {
         guard specs.count == other.specs.count else { return false }
         let a = specs.allSatisfy { s in other.specs.contains { !$0.physical.isDisjoint(with: s.physical) } }
@@ -73,12 +73,12 @@ public struct Binding: Hashable, Sendable, CustomStringConvertible {
         "\(action.rawValue)[\(index)]=" + specs.map(\.name).joined(separator: "+")
     }
 
-    /// Fn（地球儀キー）だけのショートカットか。地球儀キーのシステム動作を止めるのは、これがあるときだけにする（HK-6）
+    /// Whether the shortcut is Fn (the Globe key) alone. The Globe key's system action is suppressed only when such a shortcut exists (HK-6)
     public var isBareFn: Bool { specs.count == 1 && specs[0].physical == Set(["Fn"]) }
 
-    /// ⌃⌥⌘⇧ だけでできたショートカットか（Fn も文字キーも含まない）。
-    /// 押したままのクリックやスクロールで中断とみなすのは、これだけにする（HK-1）。
-    /// Fn を押したままクリックして入力位置を決めてから話すのは普通の使い方なので、Fn を含むものは対象外
+    /// Whether the shortcut is made only of ⌃⌥⌘⇧ (no Fn and no character key).
+    /// Only these are treated as interrupted by a click or scroll while held (HK-1).
+    /// Holding Fn, clicking to place the cursor and then speaking is normal use, so shortcuts with Fn are excluded
     public var isPlainModifierOnly: Bool {
         !specs.isEmpty && specs.allSatisfy { $0.isModifier && !$0.physical.contains("Fn") }
     }
@@ -93,7 +93,7 @@ public enum BindingParser {
     public static let maxBindingsPerAction = 3
     public static let maxKeysPerBinding = 5
 
-    /// configure.hotkeys を解析する。受け付けられないショートカットは除外して errors に理由を入れる
+    /// Parses configure.hotkeys. Shortcuts that cannot be accepted are left out, with the reason added to errors
     public static func parse(_ hotkeys: [String: [[String]]]) -> BindingParseResult {
         var result = BindingParseResult(bindings: [], errors: [])
         for key in hotkeys.keys.sorted() where HotkeyAction(rawValue: key) == nil {

@@ -1,11 +1,11 @@
-// longhand-asr-apple のエントリポイント。stdin から 1 行ずつ要求を読み、順に処理する。
+// Entry point of longhand-asr-apple. Reads requests from stdin one line at a time and handles them in order.
 
 import Foundation
 
 @main
 struct LonghandAsrApple {
     static func main() async {
-        // 親が先に終了して stdout が閉じても、SIGPIPE で落とさず書き込みエラーとして扱う
+        // If the parent exits first and stdout closes, treat it as a write error instead of dying from SIGPIPE
         signal(SIGPIPE, SIG_IGN)
 
         let writer = ProtocolWriter()

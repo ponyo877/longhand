@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { LlmProvider } from '../llm/types';
 import { LlmError } from '../llm/types';
 import {
@@ -25,43 +26,43 @@ export interface FormatInput {
   rawText: string;
   language: string;
   context: PromptContext;
-  /** 編集モードの選択テキスト */
+  /** Selected text in edit mode */
   selectedText?: string;
   vocabulary: string[];
   customInstructions: string;
-  /** 置換のきっかけの語句。LLM に言い換えさせないようにプロンプトで渡す（置換そのものは貼り付けのときに行う） */
+  /** Replacement trigger phrases. Passed in the prompt so the LLM does not reword them (the replacement itself happens at paste time) */
   protectedPhrases?: string[];
-  /** 生テキストの一部が辞書の語を指しているかもしれない、という候補（G4-11）。ユーザーメッセージで渡す */
+  /** Candidates where part of the raw text may refer to a dictionary word (G4-11). Passed in the user message */
   dictionaryCandidates?: DictionaryCandidate[];
-  /** 利用者の手直しから覚えたこと（聞き違えた形、書き換えない語句）。システムプロンプトに入れる */
+  /** What was learned from the user's corrections (misheard forms, phrases not to rewrite). Goes into the system prompt */
   learned?: LearnedHints;
-  /** 生テキストに出ている、以前の取り違えの組。ユーザーメッセージで渡す。あれば近道に入れない */
+  /** Past mix-up pairs that appear in the raw text. Passed in the user message. If there are any, the fast path is not taken */
   pastCorrections?: readonly PastCorrectionHint[];
-  /** 入力先がターミナルかコードエディタか。未指定ならアプリ名から推定する（和英間の空白を詰めるかどうかに使う） */
+  /** Whether the target is a terminal or code editor. Guessed from the app name if unset (decides whether spaces between Japanese and Latin text are removed) */
   codeLike?: boolean;
-  /** 整った短い発話は LLM を飛ばす（N6、設定の llmFastPath） */
+  /** Skip the LLM for short, clean utterances (N6, the llmFastPath setting) */
   fastPath?: boolean;
   /**
-   * 書き起こしの語ごとの補正（textfix）の結果。LLM を通さない経路（LLM なし、近道、LLM の失敗）では直した文を使う。
-   * LLM には直す前の書き起こしを渡し、英字に直した語と用語集の候補を lexicon_candidates として添える
+   * Result of word-level transcript fixes (textfix). Paths that skip the LLM (no LLM, fast path, LLM failure) use the fixed text.
+   * The LLM gets the transcript before fixing, with the words turned into Latin letters and the glossary candidates attached as lexicon_candidates
    */
   textFix?: { text: string; edits: readonly FixEdit[]; candidates: readonly LexiconCandidate[] };
-  /** 音声認識の確信度の低い字がある。近道に入れずに LLM に回す（llmReason の low-confidence） */
+  /** Some characters have low recognition confidence. Skip the fast path and send to the LLM (llmReason low-confidence) */
   lowConfidence?: boolean;
-  /** 整形の規則の版（既定は v1） */
+  /** Version of the formatting rules (v1 by default) */
   promptVersion?: PromptVersion;
-  /** 音声認識が聞き違えたかもしれない箇所と、その別候補。v2 の規則か、useUncertain のときに LLM に渡す。渡すときは近道に入れない */
+  /** Spots speech recognition may have misheard, with alternatives. Passed to the LLM with the v2 rules or when useUncertain is set. When passed, the fast path is not taken */
   uncertain?: readonly UncertainSpan[];
-  /** v1 の規則でも、uncertain を LLM に渡して選ばせる（設定の formatUncertain） */
+  /** Pass uncertain to the LLM to choose from even with the v1 rules (the formatUncertain setting) */
   useUncertain?: boolean;
   /**
-   * LLM の出力の検査（guards.ts）。off: しない。shadow: 調べて結果を返すだけ（出力は変えない）。
-   * enforce: 根拠のない書き換えを整形前の文に戻し、数や否定の変化などが残るなら整形前の文を使う
+   * Checks on the LLM output (guards.ts). off: none. shadow: check and only return the result (the output is unchanged).
+   * enforce: revert unsupported rewrites to the text before formatting, and use the text before formatting if changes in numbers, negation and so on remain
    */
   guard?: GuardMode;
-  /** 検査で、読みが同じ置き換えを見分けるための単語分割（なければその判定を飛ばす） */
+  /** Tokenizer for spotting replacements with the same reading during the checks (that check is skipped without it) */
   tokenizer?: Tokenizer | null;
-  /** null なら LLM を使わない（skipLlm、未設定） */
+  /** null means the LLM is not used (skipLlm, not configured) */
   provider: LlmProvider | null;
   timeoutMs: number;
   maxOutputTokens: number;
@@ -70,41 +71,41 @@ export interface FormatInput {
 
 export type GuardMode = 'off' | 'shadow' | 'enforce';
 
-/** 出力の検査の結果（本文は含めない。件数と、見つかった問題の種類だけ） */
+/** Result of the output checks (no text, only counts and the kinds of problems found) */
 export interface GuardSummary {
   mode: GuardMode;
-  /** 差分の塊の、種類ごとの数 */
+  /** Number of diff hunks per kind */
   counts: Record<HunkKind, number>;
-  /** 見つかった問題 */
+  /** Problems found */
   violations: GuardCheck[];
-  /** enforce で、出力をどう変えたか。none: 変えていない、repaired: 根拠のない塊だけを戻した、fallback: 整形前の文を使った */
+  /** How enforce changed the output. none: unchanged, repaired: reverted only the unsupported hunks, fallback: used the text before formatting */
   action: 'none' | 'repaired' | 'fallback';
 }
 
 export interface FormatOutput {
   text: string;
-  /** 整形済みとして扱えるか。LLM で整形できたとき、または近道（fastPath）で LLM が要らないと判断したとき true */
+  /** Whether the text counts as formatted. true when the LLM formatted it, or when the fast path decided the LLM was not needed */
   formatted: boolean;
-  /** 近道に入り、LLM を呼ばなかった */
+  /** Took the fast path and did not call the LLM */
   fastPath?: boolean;
-  /** 貼る文に、textfix で直した文を使った（履歴に直した箇所を残す） */
+  /** The pasted text is the textfix output (the history keeps the fixes) */
   autoFixed?: boolean;
-  /** LLM を使おうとして失敗した理由 */
+  /** Why the attempt to use the LLM failed */
   error?: string;
   errorKind?: string;
   deleted?: boolean;
   unclear?: boolean;
   llmMs: number;
   model?: string;
-  /** 出力の検査の結果（guard が off でなく、LLM の出力を調べたとき） */
+  /** Result of the output checks (when guard is not off and the LLM output was checked) */
   guard?: GuardSummary;
-  /** 検査の前の、LLM の出力（正規化の後）。評価で、検査の当たり外れを調べるために返す */
+  /** LLM output before the checks (after normalization). Returned so evaluation can judge whether the checks were right */
   llmText?: string;
 }
 
 /**
- * 何を頼むかを決める層。プロンプトの組み立て、出力の検証、失敗時の代替を受け持つ。
- * どこに頼むか（HTTP の形式と認証）は LlmProvider が受け持つ。
+ * The layer that decides what to ask for. Handles building the prompt, validating the output and falling back on failure.
+ * Where to ask (HTTP format and authentication) is LlmProvider's job.
  */
 export async function formatText(input: FormatInput): Promise<FormatOutput> {
   const raw = input.rawText.trim();
@@ -116,10 +117,10 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
     // The user's number notation is applied to whatever text is inserted. Not in terminals and code editors, where digits are code
     const numberStyle = codeLike ? undefined : input.learned?.numberStyle;
     const finish = (o: FormatOutput): FormatOutput => (numberStyle && o.text ? { ...o, text: applyNumberStyle(o.text, numberStyle) } : o);
-    // LLM を通さない経路では、textfix で直した文を使う
+    // Paths that skip the LLM use the textfix output
     const fix = input.textFix;
     const version = input.promptVersion ?? 'v1';
-    // 食い違った箇所は、規則が v2 か、設定がオンのときだけ LLM に渡す
+    // Pass disagreeing spots to the LLM only with the v2 rules or when the setting is on
     const passUncertain = version === 'v2' || !!input.useUncertain;
     const uncertain = passUncertain ? (input.uncertain ?? []) : [];
     const fixedRaw = fix && fix.edits.length ? fix.text.trim() : raw;
@@ -127,7 +128,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
     const fallback = normalize(fixedRaw);
     if (!raw || !hasSubstance(raw) || !fixedRaw) return finish({ text: '', formatted: false, llmMs: 0 });
     if (!input.provider) return finish({ text: fallback, formatted: false, llmMs: 0, autoFixed });
-    // 英字に直した語は知っている語として扱い、直さなかった用語集の候補は LLM に判断させる
+    // Treat words turned into Latin letters as known words, and let the LLM decide on glossary candidates that were not fixed
     const fixedWords = (fix?.edits ?? []).filter((e) => e.rule === 'latin').map((e) => e.after.trim());
     if (
       input.fastPath &&
@@ -137,7 +138,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
         customInstructions: input.customInstructions,
         protectedPhrases,
         vocabulary: fixedWords.length ? [...input.vocabulary, ...fixedWords] : input.vocabulary,
-        // 以前の取り違えの組も、文脈で判断させる候補として数える
+        // Past mix-up pairs also count as candidates to judge from context
         dictionaryCandidates: [...(input.dictionaryCandidates ?? []), ...(fix?.candidates ?? []), ...(input.pastCorrections ?? [])],
         lowConfidence: input.lowConfidence || uncertain.length > 0,
         beforeCursor: input.context.beforeCursor,
@@ -152,7 +153,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
       const res = await input.provider.complete({
         system: dictationSystemPrompt(input.vocabulary, input.customInstructions, protectedPhrases, version, {
           ...input.learned,
-          // v2 の規則は、uncertain の説明を本文に持っている。v1 では、渡すときだけ説明を足す
+          // The v2 rules already explain uncertain. With v1, add the explanation only when passing it
           explainUncertain: version === 'v1' && !!input.useUncertain,
         }),
         user: dictationUserMessage(raw, input.language, input.context, input.dictionaryCandidates, lexicon, uncertain, input.pastCorrections),
@@ -165,17 +166,17 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
       const parsed = parseJsonObject(res.text);
       const text = typeof parsed?.text === 'string' ? parsed.text : parsed ? null : res.text;
       if (text === null) {
-        return finish({ text: fallback, formatted: false, error: 'LLM の出力を解釈できませんでした', errorKind: 'parse', llmMs, model: res.model, autoFixed });
+        return finish({ text: fallback, formatted: false, error: t('text.format.unparseable'), errorKind: 'parse', llmMs, model: res.model, autoFixed });
       }
       const cleaned = normalize(text);
       if (!cleaned && normalizeLen(raw) > 8) {
-        return finish({ text: fallback, formatted: false, error: 'LLM が空の結果を返しました', errorKind: 'guard', llmMs, model: res.model, autoFixed });
+        return finish({ text: fallback, formatted: false, error: t('text.format.emptyResult'), errorKind: 'guard', llmMs, model: res.model, autoFixed });
       }
       if (cleaned && looksLikeAnswer(raw, cleaned)) {
         return finish({
           text: fallback,
           formatted: false,
-          error: 'LLM の出力が書き起こしから大きく外れたため、生テキストを使いました',
+          error: t('text.format.strayedFromTranscript'),
           errorKind: 'guard',
           llmMs,
           model: res.model,
@@ -184,7 +185,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
       }
       const guardMode = input.guard ?? 'off';
       if (guardMode !== 'off' && cleaned) {
-        // 置き換えの根拠になる語: 辞書、照合の候補、用語集の候補、英字に直した語、別候補
+        // Words that support a replacement: dictionary, match candidates, glossary candidates, words turned into Latin letters, alternatives
         const evidence = [
           ...input.vocabulary,
           ...(input.dictionaryCandidates ?? []).map((c) => c.word),
@@ -198,7 +199,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
         if (guardMode === 'shadow' || (!report.violations.length && report.repaired === cleaned)) {
           return finish({ text: cleaned, formatted: true, llmMs, model: res.model, guard, llmText: cleaned });
         }
-        // 根拠のない塊だけを戻した文で、問題が残らなければそれを使う。残るなら、整形前の文を使う
+        // Use the text with only the unsupported hunks reverted if no problems remain. Otherwise, use the text before formatting
         const repaired = normalize(report.repaired);
         const again = inspectFormatting(fallback, repaired, opts);
         if (!again.violations.length) {
@@ -213,11 +214,11 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
     }
   }
 
-  // 編集モード。失敗したら貼り付けない（呼び出し側で error を見て判断する）
+  // Edit mode. Nothing is pasted on failure (the caller checks error)
   const selected = input.selectedText ?? '';
   if (!raw || !hasSubstance(raw)) return { text: '', formatted: false, unclear: true, llmMs: 0 };
   if (!input.provider) {
-    return { text: '', formatted: false, error: '編集モードには LLM の設定が必要です', errorKind: 'config', llmMs: 0 };
+    return { text: '', formatted: false, error: t('text.format.editNeedsLlm'), errorKind: 'config', llmMs: 0 };
   }
   const started = Date.now();
   try {
@@ -232,10 +233,10 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
     const llmMs = Date.now() - started;
     const parsed = parseJsonObject(res.text);
     if (!parsed || typeof parsed.text !== 'string') {
-      return { text: '', formatted: false, error: 'LLM の出力を解釈できませんでした', errorKind: 'parse', llmMs, model: res.model };
+      return { text: '', formatted: false, error: t('text.format.unparseable'), errorKind: 'parse', llmMs, model: res.model };
     }
     const deleted = parsed.deleted === true;
-    // 削除の指示でないのに本文が空なら、不明確な指示として扱う（空を貼らない。N5）
+    // An empty text without a delete instruction counts as an unclear instruction (do not paste nothing. N5)
     const unclear = parsed.unclear === true || (!deleted && !parsed.text.trim());
     return {
       text: unclear ? '' : parsed.text,

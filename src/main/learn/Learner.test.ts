@@ -17,28 +17,28 @@ function provider(answer: (user: string) => unknown): LlmProvider {
   } as unknown as LlmProvider;
 }
 
-describe('heuristicAccept（LLM を使わないときの判定、G4-05）', () => {
+describe('heuristicAccept (judgment without the LLM, G4-05)', () => {
   const r = (from: string, to: string) => ({ from, to, context: '' });
 
-  it('かなで聞き取った語を、音の近い英字の語に直したものは採る', () => {
+  it('accepts a word heard as kana corrected into a Latin word that sounds alike', () => {
     expect(heuristicAccept(r('ぐらふぁな', 'Grafana'))).toBe(true);
     expect(heuristicAccept(r('でーたどっぐ', 'Datadog'))).toBe(true);
   });
 
-  it('形に意味がある英字の語の大文字小文字の直しは採る', () => {
+  it('accepts a case fix to a Latin word whose case carries meaning', () => {
     expect(heuristicAccept(r('iphone', 'iPhone'))).toBe(true);
   });
 
-  it('音の違う言い換えは採らない', () => {
+  it('rejects a rewording that sounds different', () => {
     expect(heuristicAccept(r('打ち合わせ', 'ミーティング'))).toBe(false);
     expect(heuristicAccept(r('うちあわせ', 'ミーティング'))).toBe(false);
   });
 
-  it('漢字の語は読みが分からないので採らない', () => {
+  it('rejects kanji words because their reading is unknown', () => {
     expect(heuristicAccept(r('日高', '日鷹'))).toBe(false);
   });
 
-  it('漢字で聞き取られた語を英字に直したものも採らない', () => {
+  it('also rejects a word heard as kanji corrected into Latin letters', () => {
     expect(heuristicAccept(r('公正', 'Grafana'))).toBe(false);
   });
 });
@@ -46,24 +46,24 @@ describe('heuristicAccept（LLM を使わないときの判定、G4-05）', () =
 describe('learnFromWatch', () => {
   const base = { before: '', afterPaste: 'ぐらふぁなを見てください。', final: 'Grafanaを見てください。' };
 
-  it('LLM なしでも、音の近い直しから語を学習する', async () => {
+  it('learns words from corrections that sound alike, even without the LLM', async () => {
     const words = await learnFromWatch(watch(base), ctx({ inserted: base.afterPaste }));
     expect(words.map((w) => [w.from, w.word])).toEqual([['ぐらふぁな', 'Grafana']]);
   });
 
-  it('利用者がキーを押していなければ学習しない（G4-03）', async () => {
+  it('learns nothing when the user pressed no keys (G4-03)', async () => {
     const r = await learnFromWatchDetailed(watch({ ...base, keystrokes: 0 }), ctx());
     expect(r.words).toEqual([]);
     expect(r.skipped).toBe('no_keystrokes');
   });
 
-  it('入力欄を読めなかったときは学習しない', async () => {
+  it('learns nothing when the field could not be read', async () => {
     const r = await learnFromWatchDetailed(watch({ ...base, reason: 'unreadable' } as never), ctx());
     expect(r.skipped).toBe('unreadable');
   });
 
-  it('打ち始める前の読み取りを基準にして、アプリによる変化を除く（G4-03）', async () => {
-    // 貼り付けの後にアプリが末尾に署名を足し、そのあと利用者が語を直した
+  it('uses the reading from before typing started as the reference, excluding changes made by the app (G4-03)', async () => {
+    // After the paste, the app appended a signature, and then the user corrected a word
     const r = await learnFromWatchDetailed(
       watch({
         before: '',
@@ -77,17 +77,17 @@ describe('learnFromWatch', () => {
     expect(r.words.map((w) => w.word)).toEqual(['Grafana']);
   });
 
-  it('送信で欄が空になったら、送信直前の読み取りから学習する（G4-01）', async () => {
+  it('learns from the reading right before sending when sending empties the field (G4-01)', async () => {
     const r = await learnFromWatchDetailed(watch({ ...base, final: '', preSend: 'Grafanaを見てください。', reason: 'sent', keystrokes: 3 } as never), ctx({ inserted: base.afterPaste }));
     expect(r.words.map((w) => w.word)).toEqual(['Grafana']);
   });
 
-  it('貼り付けた範囲が消えて送信直前の読み取りもなければ学習しない', async () => {
+  it('learns nothing when the pasted range is gone and there is no reading from before sending', async () => {
     const r = await learnFromWatchDetailed(watch({ ...base, final: '' }), ctx({ inserted: base.afterPaste }));
     expect(r.skipped).toBe('removed');
   });
 
-  it(`1 回の手直しで ${MAX_WORDS_PER_EDIT} 語を超える置き換えがあれば、何も学習しない（G4-16）`, async () => {
+  it(`learns nothing when one correction replaces more than ${MAX_WORDS_PER_EDIT} words (G4-16)`, async () => {
     const r = await learnFromWatchDetailed(
       watch({
         before: '',
@@ -100,12 +100,12 @@ describe('learnFromWatch', () => {
     expect(r.skipped).toBe('too_many');
   });
 
-  it('辞書にある語と、学習しない語は候補から除く', async () => {
+  it('leaves dictionary words and words not to learn out of the candidates', async () => {
     expect(await learnFromWatch(watch(base), ctx({ vocabulary: ['grafana'] }))).toEqual([]);
     expect(await learnFromWatch(watch(base), ctx({ blocked: ['Grafana'] }))).toEqual([]);
   });
 
-  it('LLM があれば、LLM が登録すべきとした語だけを学習する', async () => {
+  it('learns only the words the LLM says to add when an LLM is available', async () => {
     const p = provider(() => ({ words: [{ word: 'Grafana', add: true }] }));
     const words = await learnFromWatch(watch(base), ctx({ provider: p }));
     expect(words.map((w) => w.word)).toEqual(['Grafana']);
@@ -113,20 +113,20 @@ describe('learnFromWatch', () => {
     expect(await learnFromWatch(watch(base), ctx({ provider: p2 }))).toEqual([]);
   });
 
-  it('LLM が失敗したら規則で判定する', async () => {
+  it('judges with the rules when the LLM fails', async () => {
     const p = { complete: vi.fn(async () => Promise.reject(new Error('timeout'))) } as unknown as LlmProvider;
     const words = await learnFromWatch(watch(base), ctx({ provider: p }));
     expect(words.map((w) => w.word)).toEqual(['Grafana']);
   });
 
-  it('同じ直しが 2 か所あっても、学習する語は 1 つ', async () => {
+  it('learns one word when the same fix appears twice', async () => {
     const words = await learnFromWatch(watch({ before: '', afterPaste: 'ぐらふぁなとぐらふぁなの設定', final: 'GrafanaとGrafanaの設定' }), ctx());
     expect(words.map((w) => w.word)).toEqual(['Grafana']);
   });
 });
 
-describe('learnFromEdit（履歴の画面での手直し、G4-08）', () => {
-  it('履歴の文を直したときも、同じ規則で学習する', async () => {
+describe('learnFromEdit (corrections in the history page, G4-08)', () => {
+  it('learns with the same rules when a history item is corrected', async () => {
     const r = await learnFromEdit('でーたどっぐで共有します', 'Datadogで共有します', ctx());
     expect(r.words.map((w) => [w.from, w.word])).toEqual([['でーたどっぐ', 'Datadog']]);
   });

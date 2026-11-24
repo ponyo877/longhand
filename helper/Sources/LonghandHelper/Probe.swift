@@ -2,8 +2,8 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// 開発用: `LonghandHelper --probe-context <bundleId|pid>` で、指定したアプリ（前面でなくてよい）の
-/// get_context 相当の結果を 1 行の JSON で標準出力に出して終了する。フォーカスを動かさずに AX の読み取りを確かめられる。
+/// For development: `LonghandHelper --probe-context <bundleId|pid>` writes what get_context would return for the given app (it does
+/// not have to be in front) as one line of JSON to stdout, then exits. Lets you check AX reads without moving the focus.
 enum Probe {
     static func runIfRequested() {
         let args = CommandLine.arguments

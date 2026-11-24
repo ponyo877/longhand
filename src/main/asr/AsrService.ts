@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AsrLanguage, AsrResultPayload } from '../../shared/asr-protocol';
 import type { AsrSettings } from '../../shared/settings';
 import { JsonLinesProcess } from '../JsonLinesProcess';
+import { t } from '../i18n';
 import { asrLog, createLogger } from '../log';
 
 const log = createLogger('asr');
@@ -14,25 +15,25 @@ export interface TranscribeOptions {
   language: AsrLanguage;
   hints: string[];
   prompt?: string;
-  /** main の側で組み立てたプロンプトの文（対応しているワーカーだけが使う。asr-protocol の promptText） */
+  /** Prompt text built on the main side (only workers that support it use it; promptText in asr-protocol) */
   promptText?: string;
-  /** 確信度の低い箇所の別候補を求める */
+  /** Asks for alternative candidates where confidence is low */
   alternatives?: { topK: number; below: number };
-  /** 条件を変えて聞き直し、別の仮説を求める */
+  /** Asks the worker to listen again under different conditions and return other hypotheses */
   rehear?: { noHints?: boolean; temperatures?: number[] };
   timeoutMs: number;
   /**
-   * 取り消し。待ち行列にあるうちに取り消されたら実行しない。処理中ならワーカーに cancel を送る。
-   * どちらの場合も、呼び出し側にはワーカーの応答を待たずに AsrCancelledError で失敗を返す
+   * Cancellation. A request canceled while still in the queue is never run. A request in progress sends cancel to the worker.
+   * Either way, the caller gets an AsrCancelledError right away without waiting for the worker's reply
    */
   signal?: AbortSignal;
 }
 
-/** 書き起こしを取り消したときの失敗 */
+/** The error for a canceled transcription */
 export class AsrCancelledError extends Error {
   readonly code = 'cancelled';
   constructor() {
-    super('書き起こしを取り消しました');
+    super(t('asr.cancelled'));
     this.name = 'AsrCancelledError';
   }
 }
@@ -41,7 +42,7 @@ export function isAsrCancelled(e: unknown): boolean {
   return e instanceof AsrCancelledError || (e as { code?: string } | null)?.code === 'cancelled';
 }
 
-/** Float32Array を base64 にする（リトルエンディアン前提。Apple Silicon はリトルエンディアン） */
+/** Encodes a Float32Array as base64 (assumes little-endian, which Apple Silicon is) */
 export function floatToBase64(samples: Float32Array): string {
   return Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).toString('base64');
 }
@@ -52,19 +53,19 @@ export interface ResolvedModel {
   description?: string;
 }
 
-/** default.json がないときに探す、エンジンごとの既定のモデル（asr/download-models.sh が取得するもの。models/ からの相対パス） */
+/** Default model per engine, looked for when there is no default.json (the ones asr/download-models.sh fetches; relative to models/) */
 const BUILTIN_MODELS: Record<string, string> = {
   whisper: 'whisper/ggml-large-v3-turbo-q8_0.bin',
   parakeet: 'parakeet-ja',
 };
 
-/** モデルを OS が管理するので、モデルファイルの指定が要らないエンジン */
+/** Engines whose model the OS manages, so they need no model file */
 const OS_MANAGED_MODEL = new Set(['apple']);
 
 /**
- * モデルの場所を決める。設定に明示されていればそれ、なければ models/<engine>/default.json、
- * それもなければエンジンごとの既定のファイル名で models/<engine>/ を探す。
- * 利用者のフォルダ（modelsDir）に見つからなければ、アプリに同梱したフォルダ（bundledDir）を同じ手順で探す。
+ * Decides where the model is. The path set in the settings if there is one, otherwise models/<engine>/default.json,
+ * otherwise the engine's default file name in models/<engine>/.
+ * If nothing is found in the user's folder (modelsDir), the folder bundled with the app (bundledDir) is searched the same way.
  */
 export function resolveModel(cfg: AsrSettings, modelsDir: string, bundledDir?: string): ResolvedModel | null {
   if (cfg.modelPath) return { modelPath: cfg.modelPath, options: cfg.options };
@@ -77,7 +78,7 @@ export function resolveModel(cfg: AsrSettings, modelsDir: string, bundledDir?: s
   return resolveIn(cfg, modelsDir, true);
 }
 
-/** 1 つのフォルダの中でモデルを探す。osManaged が true なら、モデルを OS が持つエンジンを「空のパス」で返す */
+/** Looks for the model in one folder. When osManaged is true, an engine whose model the OS holds is returned with an empty path */
 function resolveIn(cfg: AsrSettings, modelsDir: string, osManaged: boolean): ResolvedModel | null {
   const dir = path.join(modelsDir, cfg.engine);
   try {
@@ -93,20 +94,21 @@ function resolveIn(cfg: AsrSettings, modelsDir: string, osManaged: boolean): Res
 }
 
 /**
- * ASR ワーカー（longhand-asr-<engine>）を常駐させ、モデルを読み込んだまま保持する（ASR-1、ASR-2）。
- * 要求は 1 件ずつ順に処理する。ワーカーが落ちたら再起動してモデルを読み直す。
+ * Keeps the ASR worker (longhand-asr-<engine>) running with the model loaded (ASR-1, ASR-2).
+ * Requests are handled one at a time in order. If the worker dies, it is restarted and the model is loaded again.
  */
 export class AsrService extends EventEmitter {
   private proc: JsonLinesProcess | null = null;
   private queue: Promise<unknown> = Promise.resolve();
-  /** 待ち行列にある要求と処理中の要求の数 */
+  /** Number of requests in the queue and in progress */
   private pending = 0;
   private stopping = false;
   private restarts = 0;
-  /** 予約中の再起動。二重に予約しないよう 1 つだけ持つ */
+  /** The scheduled restart. Only one is kept so that a restart is never scheduled twice */
   private restartTimer: NodeJS.Timeout | null = null;
   status: AsrStatus = 'starting';
-  message = '';
+  /** Status text, kept as a function so that it follows the interface language when that changes */
+  private messageText: () => string = () => '';
   modelDescription = '';
 
   constructor(
@@ -114,40 +116,45 @@ export class AsrService extends EventEmitter {
     private readonly workerPath: (engine: string) => string,
     private readonly modelsDir: string,
     private readonly language: () => AsrLanguage,
-    /** アプリに同梱したモデルのフォルダ（あれば、利用者のフォルダの次に探す） */
+    /** Folder of the models bundled with the app (if given, searched after the user's folder) */
     private readonly bundledModelsDir?: string,
   ) {
     super();
   }
 
-  private setStatus(s: AsrStatus, message = ''): void {
+  /** Status text in the current interface language ('' when there is nothing to say) */
+  get message(): string {
+    return this.messageText();
+  }
+
+  private setStatus(s: AsrStatus, message: () => string = () => ''): void {
     this.status = s;
-    this.message = message;
-    this.emit('status', s, message);
+    this.messageText = message;
+    this.emit('status', s, this.message);
   }
 
   async start(): Promise<void> {
     this.stopping = false;
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = null;
-    // 前のワーカーが残っていれば止める（モデルを読み込んだまま残さない）
+    // Stop the previous worker if it is still there (do not leave a model loaded)
     const old = this.proc;
     this.proc = null;
     old?.kill();
     const cfg = this.cfg();
     const exe = cfg.workerPath || this.workerPath(cfg.engine);
     if (!fs.existsSync(exe)) {
-      this.setStatus('missing', `ASR ワーカーが見つかりません: ${exe}（npm run build:asr でビルドしてください）`);
+      this.setStatus('missing', () => t('asr.workerMissing', { path: exe }));
       return;
     }
     const model = resolveModel(cfg, this.modelsDir, this.bundledModelsDir);
     if (!model || (!OS_MANAGED_MODEL.has(cfg.engine) && !model.modelPath)) {
-      const how = cfg.engine === 'whisper' ? '設定 > 接続 の「音声認識」からダウンロードしてください' : `asr/download-models.sh --${cfg.engine} で取得してください`;
-      this.setStatus('missing', `音声認識のモデルがありません（${path.join(this.modelsDir, cfg.engine)}）。${how}`);
+      const dir = path.join(this.modelsDir, cfg.engine);
+      this.setStatus('missing', () => (cfg.engine === 'whisper' ? t('asr.modelMissing.download', { dir }) : t('asr.modelMissing.script', { dir, engine: cfg.engine })));
       return;
     }
     if (model.modelPath && !fs.existsSync(model.modelPath)) {
-      this.setStatus('missing', `ASR のモデルが見つかりません: ${model.modelPath}`);
+      this.setStatus('missing', () => t('asr.modelFileMissing', { path: model.modelPath }));
       return;
     }
     this.setStatus('starting');
@@ -155,13 +162,13 @@ export class AsrService extends EventEmitter {
     this.proc = proc;
     proc.on('exit', (code, signal) => {
       if (proc !== this.proc || this.stopping) return;
-      log.warn(`ASR ワーカーが終了しました（code=${code} signal=${signal}）`);
-      this.setStatus('failed', 'ASR ワーカーが終了しました。再起動しています');
+      log.warn(`ASR worker exited (code=${code} signal=${signal})`);
+      this.setStatus('failed', () => t('asr.workerExited'));
       if (this.restarts < 5 && !this.restartTimer) {
         const delay = 1000 * 2 ** this.restarts++;
         this.restartTimer = setTimeout(() => {
           this.restartTimer = null;
-          if (!this.stopping) this.start().catch((e) => log.error('ASR の再起動に失敗', e));
+          if (!this.stopping) this.start().catch((e) => log.error('Failed to restart ASR', e));
         }, delay);
       }
     });
@@ -171,14 +178,15 @@ export class AsrService extends EventEmitter {
       const loaded = await proc.request('load', { modelPath: model.modelPath, language: this.language(), options: model.options }, 120000);
       const p = loaded.payload as { elapsedMs: number; model: string };
       this.modelDescription = p.model || model.description || '';
-      log.info(`ASR のモデルを読み込みました（${this.modelDescription}、${p.elapsedMs}ms）`);
+      log.info(`Loaded the ASR model (${this.modelDescription}, ${p.elapsedMs}ms)`);
       this.restarts = 0;
       this.setStatus('ready');
-      // ウォームアップ（初回推論の遅さを録音のたびに払わないように）
+      // Warm up (so that recordings do not pay for the slow first inference)
       this.transcribe(new Float32Array(16000 * 0.5), { language: this.language(), hints: [], timeoutMs: 30000 }).catch(() => undefined);
     } catch (e) {
-      log.error('ASR ワーカーの起動に失敗しました', e);
-      this.setStatus('failed', (e as Error).message);
+      log.error('Failed to start the ASR worker', e);
+      const message = (e as Error).message;
+      this.setStatus('failed', () => message);
       proc.kill();
     }
   }
@@ -194,12 +202,12 @@ export class AsrService extends EventEmitter {
     return this.status === 'ready' && !!this.proc?.running;
   }
 
-  /** 待ち行列が空で、処理中の要求もない */
+  /** The queue is empty and no request is in progress */
   get idle(): boolean {
     return this.pending === 0;
   }
 
-  /** 準備ができるまで待つ（最大 timeoutMs）。準備ができたら true */
+  /** Waits until ready (up to timeoutMs). True when ready */
   waitReady(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     if (this.ready) return Promise.resolve(true);
     if (this.status === 'missing') return Promise.resolve(false);
@@ -221,15 +229,15 @@ export class AsrService extends EventEmitter {
     });
   }
 
-  /** 音声を書き起こす。要求は順に処理する */
+  /** Transcribes audio. Requests are handled in order */
   transcribe(samples: Float32Array, opts: TranscribeOptions): Promise<AsrResultPayload> {
     const signal = opts.signal;
     const run = async () => {
       if (signal?.aborted) throw new AsrCancelledError();
       const proc = this.proc;
-      if (!proc?.running || this.status !== 'ready') throw new Error(this.message || 'ASR が準備できていません');
+      if (!proc?.running || this.status !== 'ready') throw new Error(this.message || t('asr.notReady'));
       if (samples.length === 0) return { text: '', elapsedMs: 0 };
-      // 処理中に取り消されたらワーカーに知らせる。対応していないワーカーは最後まで処理して結果を返す
+      // Tell the worker if canceled while in progress. A worker that does not support it finishes and returns the result
       const onAbort = () => proc.send('cancel', {});
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
@@ -249,9 +257,9 @@ export class AsrService extends EventEmitter {
         return res.payload as AsrResultPayload;
       } catch (e) {
         if (isAsrCancelled(e)) throw new AsrCancelledError();
-        // 時間切れでもワーカーは処理を続けていて、次の要求と重なる。止めて起動し直す（exit で再起動する）
+        // After a timeout the worker keeps working and would overlap the next request. Kill it so that it restarts (on exit)
         if ((e as { code?: string }).code === 'timeout' && proc === this.proc) {
-          log.warn('ASR が時間内に応答しないので、ワーカーを起動し直します');
+          log.warn('ASR did not reply in time; restarting the worker');
           proc.kill();
         }
         throw e;
@@ -263,8 +271,8 @@ export class AsrService extends EventEmitter {
   }
 
   /**
-   * 要求を待ち行列に入れる。次の要求は、ワーカーが実際に応答するまで送らない
-   * （取り消しても、ワーカーの処理が終わるまで待ち行列は進まない）
+   * Puts a request in the queue. The next request is not sent until the worker actually replies
+   * (even after a cancel, the queue does not move on until the worker has finished)
    */
   private enqueue<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const job = this.queue.then(run, run);

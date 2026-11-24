@@ -31,13 +31,13 @@ final class KeyTableTests: XCTestCase {
     func testJISKeys() {
         XCTAssertEqual(KeyTable.nameByKeyCode[0x5D], "IntlYen")
         XCTAssertEqual(KeyTable.nameByKeyCode[0x5E], "IntlRo")
-        XCTAssertEqual(KeyTable.nameByKeyCode[0x66], "Lang2") // 英数
-        XCTAssertEqual(KeyTable.nameByKeyCode[0x68], "Lang1") // かな
+        XCTAssertEqual(KeyTable.nameByKeyCode[0x66], "Lang2") // Eisu (英数)
+        XCTAssertEqual(KeyTable.nameByKeyCode[0x68], "Lang1") // Kana (かな)
         XCTAssertEqual(KeyTable.nameByKeyCode[0x5F], "NumpadComma")
         for name in KeyTable.jisOnlyNames {
             XCTAssertNotNil(KeyTable.keyCodeByName[name], name)
         }
-        // JIS 配列の「@」キーは US の [ と同じ位置（BracketLeft）
+        // The "@" key on the JIS layout is in the same position as [ on US (BracketLeft)
         XCTAssertEqual(KeyTable.keyCodeByName["BracketLeft"], 0x21)
     }
 
@@ -73,7 +73,7 @@ final class ShortcutRecorderTests: XCTestCase {
         XCTAssertNil(r.press("MetaLeft"), "already pressed")
         _ = r.release("MetaLeft")
         XCTAssertEqual(r.release("ControlLeft"), ShortcutUpdate(keys: [], combo: ["ControlLeft", "MetaLeft", "KeyK"], done: true))
-        // 次の記録は空から
+        // The next recording starts empty
         XCTAssertEqual(r.press("Fn")?.combo, ["Fn"])
     }
 

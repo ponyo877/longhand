@@ -1,124 +1,120 @@
 import { randomUUID } from 'node:crypto';
+import { rawMessage, type Message, type MessageKey } from '../../shared/i18n';
 import type { NotificationState } from '../../shared/settings';
 import type { HudAction, HudKind, HudMessage } from '../../shared/types';
+import { currentLocale, t } from '../i18n';
+
+/** A button in a notification's definition. label is a catalog key, translated when the notification is shown */
+export interface DefAction {
+  id: string;
+  label: MessageKey;
+}
 
 /**
- * 通知に付ける決まったボタン。id は main の組み込みの動作（BUILTIN_ACTIONS）に対応する。
- * 呼び出し側が渡すボタン（学習語の取り消しなど）は、この後ろに並ぶ。
+ * Fixed buttons attached to notifications. Each id maps to a built-in action in main (BUILTIN_ACTIONS).
+ * Buttons passed by the caller (undoing a learned word, for example) come after these.
  */
 export const ACTION = {
-  openHistory: { id: 'open-history', label: '履歴を開く' },
-  openAudio: { id: 'open-audio', label: 'オーディオ設定' },
-  openConnection: { id: 'open-connection', label: '接続を設定' },
-  openMicPrivacy: { id: 'open-mic-privacy', label: 'システム設定を開く' },
-  openAccessibility: { id: 'open-accessibility', label: 'システム設定を開く' },
-  restartHelper: { id: 'restart-helper', label: '再起動する' },
-} satisfies Record<string, HudAction>;
+  openHistory: { id: 'open-history', label: 'hud.action.openHistory' },
+  openAudio: { id: 'open-audio', label: 'hud.action.openAudio' },
+  openConnection: { id: 'open-connection', label: 'hud.action.openConnection' },
+  openMicPrivacy: { id: 'open-mic-privacy', label: 'hud.action.openMicPrivacy' },
+  openAccessibility: { id: 'open-accessibility', label: 'hud.action.openAccessibility' },
+  restartHelper: { id: 'restart-helper', label: 'hud.action.restartHelper' },
+} satisfies Record<string, DefAction>;
 
+/** How a notification behaves. Its text is in the catalog: `hud.<Key>.title` and, if it has one, `hud.<Key>.body` (shared/i18n/messages/hud.ts) */
 export interface Def {
   kind: HudKind;
-  title: string;
-  body?: string;
-  /** 自動で消えるまでのミリ秒。0 なら、解決するか閉じるまで消えない */
+  /** Milliseconds until it disappears by itself. 0 keeps it until it is resolved or closed */
   durationMs?: number;
-  /** 「今後表示しない」を出すか（既定は出さない。案内の性格の通知だけ出す） */
+  /** Whether to offer "Don't show again" (off by default; only for notifications that are tips) */
   mutable?: boolean;
-  /** 既定は card */
+  /** card by default */
   style?: 'card' | 'pill';
-  actions?: HudAction[];
-  /** 表示回数の上限。windowMs を省くと生涯の回数 */
+  actions?: DefAction[];
+  /** Maximum number of times to show it. Without windowMs, the count is over the whole lifetime */
   limit?: { count: number; windowMs?: number };
-  /** 前回の表示からの最小の間隔 */
+  /** Minimum time since it was last shown */
   minIntervalMs?: number;
-  /** 起動ごとに 1 回だけ */
+  /** Only once per launch */
   oncePerRun?: boolean;
-  /** 表示と同時に通知音を鳴らす（効果音の設定に従う） */
+  /** Play the notification sound when it is shown (follows the sound effects setting) */
   sound?: boolean;
-  /** 録音中と処理中は出さずに、待機に戻ってから出す */
+  /** Not shown while recording or processing; shown once back to idle */
   deferWhileBusy?: boolean;
 }
 
 const DAY = 24 * 3600_000;
 
 /**
- * HUD 通知の一覧（UI-6）。
- * {name} の形の差し込みは show() の vars で埋める。
- * main は {paste}（直前の書き起こしを貼り付ける方法）、{activate}、{cancel}、{lockExtra}、{mic} などを自動で補う。
+ * HUD notifications (UI-6).
+ * Placeholders of the form {name} in the text are filled from the vars passed to show().
+ * main fills in {paste} (how to paste the last transcript), {activate}, {cancel}, {lockExtra}, {mic} and others automatically.
  */
 export const NOTIFICATIONS = {
-  // 整形と編集
-  LlmFailed: { kind: 'warning', title: '整形できなかったので、書き起こしをそのまま入力しました', body: '{reason}', durationMs: 6000 },
-  LlmFailedRepeat: { kind: 'warning', style: 'pill', title: '整形せずに入力しました', durationMs: 3000 },
+  // Formatting and editing
+  LlmFailed: { kind: 'warning', durationMs: 6000 },
+  LlmFailedRepeat: { kind: 'warning', style: 'pill', durationMs: 3000 },
   LlmNotConfigured: {
     kind: 'info',
-    title: 'LLM が未設定のため、書き起こしをそのまま入力しました',
-    body: '設定の「接続」で LLM を設定すると整形されます',
     durationMs: 6000,
     actions: [ACTION.openConnection],
     oncePerRun: true,
     mutable: true,
   },
-  EditFailed: { kind: 'error', title: '編集できませんでした', body: '{reason}', durationMs: 6000, sound: true, actions: [ACTION.openHistory] },
-  /** 画面ではバーの中に短く出す（カードにしない） */
-  EditUnclear: { kind: 'warning', style: 'pill', title: '言い直してください', durationMs: 3200 },
-  EditTargetChanged: { kind: 'warning', style: 'pill', title: '選択範囲が変わったため、書き換えませんでした', durationMs: 6000, actions: [ACTION.openHistory] },
+  EditFailed: { kind: 'error', durationMs: 6000, sound: true, actions: [ACTION.openHistory] },
+  /** Shown briefly inside the bar (not as a card) */
+  EditUnclear: { kind: 'warning', style: 'pill', durationMs: 3200 },
+  EditTargetChanged: { kind: 'warning', style: 'pill', durationMs: 6000, actions: [ACTION.openHistory] },
 
-  // 入力
-  NoPaste: { kind: 'warning', title: '入力先が見つかりませんでした', body: '{paste}', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
-  PasteUnconfirmed: { kind: 'warning', title: '入力できなかったかもしれません', body: '入っていなければ、{paste}', durationMs: 7000, actions: [ACTION.openHistory] },
-  PasteFailed: { kind: 'error', title: '貼り付けに失敗しました', body: '{reason}', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
-  PastedLast: { kind: 'success', style: 'pill', title: '直前の書き起こしを貼り付けました', durationMs: 2500 },
-  NoLastTranscript: { kind: 'info', style: 'pill', title: '貼り付けられる書き起こしがありません', durationMs: 3000 },
-  StaleResult: { kind: 'info', title: '前の書き起こしは履歴に保存しました', body: '履歴からコピーできます', durationMs: 6000, actions: [ACTION.openHistory] },
+  // Typing
+  NoPaste: { kind: 'warning', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
+  PasteUnconfirmed: { kind: 'warning', durationMs: 7000, actions: [ACTION.openHistory] },
+  PasteFailed: { kind: 'error', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
+  PastedLast: { kind: 'success', style: 'pill', durationMs: 2500 },
+  NoLastTranscript: { kind: 'info', style: 'pill', durationMs: 3000 },
+  StaleResult: { kind: 'info', durationMs: 6000, actions: [ACTION.openHistory] },
   Cancelled: {
     kind: 'info',
     style: 'pill',
-    title: '取り消しました',
     durationMs: 5000,
     actions: [ACTION.openHistory],
     limit: { count: 3, windowMs: 14 * DAY },
   },
 
-  // 録音とマイク
+  // Recording and the microphone
   AllSilence: {
     kind: 'warning',
-    title: 'マイクがミュートになっているかもしれません',
-    body: '{silenceDetail}',
     durationMs: 9000,
     actions: [ACTION.openAudio],
     mutable: true,
     sound: true,
   },
-  MicNoSignal: { kind: 'warning', style: 'pill', title: 'マイクから音が届いていません{micParen}', durationMs: 5000, sound: true },
+  MicNoSignal: { kind: 'warning', style: 'pill', durationMs: 5000, sound: true },
   QuietMicrophone: {
     kind: 'warning',
-    title: 'マイクの音がとても小さいです{micParen}',
-    body: '認識の精度が落ちます。マイクに近づくか、入力音量を上げるか、別のマイクを選んでください',
     durationMs: 9000,
     actions: [ACTION.openAudio],
     mutable: true,
     limit: { count: 3, windowMs: 7 * DAY },
     minIntervalMs: DAY,
   },
-  MicrophoneChanged: { kind: 'info', style: 'pill', title: '{mic} で録音しています', durationMs: 4000, mutable: true },
-  NoSpeech: { kind: 'info', style: 'pill', title: '音声を聞き取れませんでした', durationMs: 3000 },
+  MicrophoneChanged: { kind: 'info', style: 'pill', durationMs: 4000, mutable: true },
+  NoSpeech: { kind: 'info', style: 'pill', durationMs: 3000 },
   MicPermissionDenied: {
     kind: 'error',
-    title: 'マイクの使用が許可されていません',
-    body: 'システム設定の「プライバシーとセキュリティ」で、Longhand のマイクをオンにしてください',
     durationMs: 0,
     actions: [ACTION.openMicPrivacy],
     sound: true,
   },
-  NoMicrophone: { kind: 'error', title: 'マイクが見つかりません', body: 'マイクをつなぐと、すぐに使えます', durationMs: 0, actions: [ACTION.openAudio], sound: true },
-  MicrophoneConnected: { kind: 'success', style: 'pill', title: '{name} をつなぎました', durationMs: 5000 },
-  MicrophoneLost: { kind: 'error', title: '録音中にマイクが切断されました', durationMs: 7000, actions: [ACTION.openAudio], sound: true },
-  MicrophoneSwitched: { kind: 'warning', style: 'pill', title: 'マイクが外れたので、別のマイクで録音を続けています', durationMs: 6000, sound: true },
-  MicrophoneError: { kind: 'error', title: 'マイクを開けませんでした', body: '{reason}', durationMs: 7000, actions: [ACTION.openAudio], sound: true },
+  NoMicrophone: { kind: 'error', durationMs: 0, actions: [ACTION.openAudio], sound: true },
+  MicrophoneConnected: { kind: 'success', style: 'pill', durationMs: 5000 },
+  MicrophoneLost: { kind: 'error', durationMs: 7000, actions: [ACTION.openAudio], sound: true },
+  MicrophoneSwitched: { kind: 'warning', style: 'pill', durationMs: 6000, sound: true },
+  MicrophoneError: { kind: 'error', durationMs: 7000, actions: [ACTION.openAudio], sound: true },
   BluetoothMic: {
     kind: 'info',
-    title: 'Bluetooth のマイクを使っています',
-    body: '音質が下がり、認識の精度が落ちることがあります。内蔵マイクも選べます',
     durationMs: 7000,
     actions: [ACTION.openAudio],
     mutable: true,
@@ -126,71 +122,59 @@ export const NOTIFICATIONS = {
     minIntervalMs: DAY,
   },
 
-  // 音声認識
-  AsrFailed: { kind: 'error', title: '書き起こしに失敗しました', body: '{reason}', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
+  // Speech recognition
+  AsrFailed: { kind: 'error', durationMs: 7000, actions: [ACTION.openHistory], sound: true },
   AsrNotReady: {
     kind: 'error',
-    title: '音声認識の準備ができていませんでした',
-    body: '準備ができたら、履歴の「書き起こし直す」で書き起こせます',
     durationMs: 8000,
     actions: [ACTION.openHistory],
     sound: true,
   },
-  AsrWaiting: { kind: 'info', style: 'pill', title: '音声認識の準備を待って入力します', durationMs: 4000 },
-  AsrReady: { kind: 'success', style: 'pill', title: '準備ができました。{activate} を押しながら話してください', durationMs: 5000 },
+  AsrWaiting: { kind: 'info', style: 'pill', durationMs: 4000 },
+  AsrReady: { kind: 'success', style: 'pill', durationMs: 5000 },
 
-  // ヘルパーと権限
-  HelperCrashed: { kind: 'error', title: '録音中にヘルパーが終了しました', body: 'それまでに録れた分を書き起こします。ヘルパーは自動で起動し直します', durationMs: 7000 },
+  // The helper and permissions
+  HelperCrashed: { kind: 'error', durationMs: 7000 },
   HelperFailed: {
     kind: 'error',
-    title: 'ヘルパーが動いていません',
-    body: 'ホットキーと貼り付けが使えません',
     durationMs: 0,
     actions: [ACTION.restartHelper],
     sound: true,
   },
   AccessibilityMissing: {
     kind: 'error',
-    title: 'アクセシビリティの許可が必要です',
-    body: 'システム設定の「プライバシーとセキュリティ」で、Longhand をオンにしてください',
     durationMs: 10000,
     actions: [ACTION.openAccessibility],
     sound: true,
   },
   AccessibilityRevoked: {
     kind: 'error',
-    title: 'アクセシビリティの許可が外れました',
-    body: 'キーの検出と入力ができません。システム設定で Longhand をオンにし直してください',
     durationMs: 0,
     actions: [ACTION.openAccessibility],
     sound: true,
   },
-  AccessibilityRestored: { kind: 'success', style: 'pill', title: 'アクセシビリティが使えるようになりました', durationMs: 3000 },
-  /** 別のアプリがキー入力を先に受け取り続けている（ヘルパーの event_tap: rival_in_front） */
+  AccessibilityRestored: { kind: 'success', style: 'pill', durationMs: 3000 },
+  /** Another app keeps receiving key presses first (the helper's event_tap: rival_in_front) */
   HotkeyRival: {
     kind: 'warning',
-    title: '別のアプリがキー入力を先に受け取っています',
-    body: '{name} が先にキーを受け取るため、{activate} が効かないことがあります。効かないときは {name} を終了してください',
     durationMs: 10000,
     oncePerRun: true,
     minIntervalMs: DAY,
     mutable: true,
   },
 
-  // 学習と案内
-  WordsLearned: { kind: 'success', style: 'pill', title: '「{words}」を辞書に追加しました', durationMs: 6000, deferWhileBusy: true },
-  /** 学習した語が複数のとき（main が WordsLearned から切り替える） */
-  WordsLearnedMany: { kind: 'success', style: 'pill', title: '「{first}」など {count} 語を辞書に追加しました', durationMs: 6000 },
-  WordsLearnedUndone: { kind: 'info', style: 'pill', title: '学習を取り消しました', durationMs: 2000 },
-  /** 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）。text は直した後の形 */
-  CorrectionLearned: { kind: 'success', style: 'pill', title: '「{text}」の直し方を覚えました', durationMs: 6000, deferWhileBusy: true },
-  CorrectionsLearnedMany: { kind: 'success', style: 'pill', title: '「{text}」など {count} 件の直し方を覚えました', durationMs: 6000, deferWhileBusy: true },
+  // Learning and tips
+  WordsLearned: { kind: 'success', style: 'pill', durationMs: 6000, deferWhileBusy: true },
+  /** When several words were learned (main switches to this from WordsLearned) */
+  WordsLearnedMany: { kind: 'success', style: 'pill', durationMs: 6000 },
+  WordsLearnedUndone: { kind: 'info', style: 'pill', durationMs: 2000 },
+  /** Learning that adds no word to the dictionary (misheard forms, swapped pairs, phrases to keep). text is the corrected form */
+  CorrectionLearned: { kind: 'success', style: 'pill', durationMs: 6000, deferWhileBusy: true },
+  CorrectionsLearnedMany: { kind: 'success', style: 'pill', durationMs: 6000, deferWhileBusy: true },
   /** A correction that only changed how a number is written. text is the corrected number */
-  NumberStyleLearned: { kind: 'success', style: 'pill', title: '数字の書き方を覚えました（「{text}」）', durationMs: 6000, deferWhileBusy: true },
+  NumberStyleLearned: { kind: 'success', style: 'pill', durationMs: 6000, deferWhileBusy: true },
   HandsFreeInfo: {
     kind: 'info',
-    title: 'ハンズフリーで録音中',
-    body: 'もう一度キーを押すと確定、{cancel} で取り消します',
     durationMs: 4000,
     mutable: true,
     limit: { count: 3 },
@@ -198,7 +182,6 @@ export const NOTIFICATIONS = {
   HoldLongHint: {
     kind: 'info',
     style: 'pill',
-    title: '押したまま {lockExtra} を押すと、キーを離しても録音が続きます',
     durationMs: 5000,
     mutable: true,
     limit: { count: 3 },
@@ -211,12 +194,12 @@ export function notificationDef(key: string): Def | undefined {
   return (NOTIFICATIONS as Record<string, Def>)[key];
 }
 
-/** 表示の記録として残す時刻の数（上限の判定に使う分だけ） */
+/** Number of display times to keep in the record (only as many as the limit check needs) */
 const MAX_TIMES = 10;
 
 /**
- * 表示回数の上限を確かめる（N4）。
- * runShown は、この起動で既に出した通知の集合。
+ * Checks the display limits (N4).
+ * runShown is the set of notifications already shown in this launch.
  */
 export function shouldShow(key: string, def: Def, st: NotificationState | undefined, now: number, runShown: ReadonlySet<string>): boolean {
   if (st?.muted) return false;
@@ -231,7 +214,7 @@ export function shouldShow(key: string, def: Def, st: NotificationState | undefi
   return true;
 }
 
-/** 表示したことを記録した新しい状態 */
+/** A new state that records one more display */
 export function recordShown(st: NotificationState | undefined, now: number): NotificationState {
   return {
     muted: st?.muted ?? false,
@@ -241,16 +224,22 @@ export function recordShown(st: NotificationState | undefined, now: number): Not
   };
 }
 
+/** A notification's text in the current interface language, or undefined when the catalog has none (a notification without a body) */
+function hudText(key: NotificationKey, part: 'title' | 'body'): Message | undefined {
+  return rawMessage(currentLocale(), `hud.${key}.${part}` as MessageKey) as Message | undefined;
+}
+
 export function buildHud(key: NotificationKey, vars: Record<string, string> = {}, actions?: HudAction[]): HudMessage {
   const d: Def = NOTIFICATIONS[key];
-  const fill = (s?: string) => s?.replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '').trim();
-  const all = [...(d.actions ?? []), ...(actions ?? [])];
+  // A placeholder without a value becomes '' (an optional part such as {micParen} drops out)
+  const fill = (m?: Message) => (m === undefined ? undefined : (typeof m === 'function' ? m(vars) : m).replace(/\{(\w+)\}/g, (_, k: string) => vars[k] ?? '').trim());
+  const all = [...(d.actions ?? []).map((a) => ({ id: a.id, label: t(a.label) })), ...(actions ?? [])];
   return {
     id: randomUUID(),
     key,
     kind: d.kind,
-    title: fill(d.title) ?? '',
-    body: fill(d.body) || undefined,
+    title: fill(hudText(key, 'title')) ?? '',
+    body: fill(hudText(key, 'body')) || undefined,
     actions: all.length ? all : undefined,
     durationMs: d.durationMs ?? 4000,
     mutable: d.mutable ?? false,

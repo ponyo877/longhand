@@ -1,19 +1,19 @@
 import { JsonStore } from '../store/json-store';
 
 /**
- * マイクの状態の記録（N6）。
+ * Record of microphone health (N6).
  *
- * 録音中に届く音量（約 100ms ごとのチャンクの RMS）から、セッションごとに 95 パーセンタイルの dBFS を求める。
- * マイクごとに直近 5 回分を残し、3 回以上が -50 dBFS 以下なら「音がとても小さい」と判断する。
- * 95 パーセンタイルを使うのは、話していない間の静けさではなく、話しているときの大きさを見るため。
+ * From the levels that arrive while recording (the RMS of each chunk of about 100ms), computes the 95th percentile in dBFS per session.
+ * Keeps the last 5 sessions per microphone, and judges it "very quiet" when 3 or more are at or below -50 dBFS.
+ * The 95th percentile looks at the level while the user speaks, not at the silence between phrases.
  */
 
 export const QUIET_DBFS = -50;
-/** これより短い録音は判定に使わない */
+/** Recordings shorter than this are not used for the judgment */
 export const MIN_SESSION_MS = 3000;
 const KEEP = 5;
 const QUIET_NEEDED = 3;
-/** 完全な無音（ミュート）は別の通知（AllSilence）で扱うので、記録しない */
+/** Complete silence (muted) is handled by another notification (AllSilence), so it is not recorded */
 const SILENT_DBFS = -90;
 
 export function dbfs(rms: number): number {
@@ -29,15 +29,15 @@ export function percentile(values: readonly number[], p: number): number {
 
 interface Data {
   version: 1;
-  /** マイク名ごとの、直近のセッションの 95 パーセンタイル（dBFS） */
+  /** Per microphone name, the 95th percentile (dBFS) of the recent sessions */
   devices: Record<string, number[]>;
-  /** 前回の録音に使ったマイク（マイクが変わったことを知らせるため） */
+  /** Microphone used for the previous recording (to tell the user when it changes) */
   lastDevice?: string;
 }
 
 export interface SessionVerdict {
   p95: number;
-  /** 直近 5 回中 3 回以上が小さい */
+  /** 3 or more of the last 5 sessions were quiet */
   quiet: boolean;
 }
 
@@ -71,7 +71,7 @@ export class MicHealth {
     if (this.levels.length < 20000) this.levels.push(dbfs(rms));
   }
 
-  /** セッションの終わり。判定に使えない録音なら null */
+  /** End of a session. null when the recording cannot be used for the judgment */
   end(device: string | undefined, durationMs: number): SessionVerdict | null {
     const levels = this.levels;
     this.levels = [];

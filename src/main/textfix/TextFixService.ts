@@ -1,6 +1,6 @@
 /**
- * textfix の単語分割を、裏で 1 回だけ読み込んで持っておく。
- * 読み込めないときや例外のときは、単語分割を使う規則だけを飛ばす（音声入力は止めない）。
+ * Loads the textfix tokenizer once in the background and keeps it.
+ * If it cannot be loaded or throws, only the rules that need tokens are skipped (dictation keeps working).
  */
 import fs from 'node:fs';
 import { createLogger } from '../log';
@@ -19,7 +19,7 @@ export class TextFixService {
 
   constructor(private readonly wasmPath: () => string) {}
 
-  /** 単語分割を読み込む。何度呼んでも 1 回だけ読み込む */
+  /** Loads the tokenizer. Loads only once however many times it is called */
   load(): Promise<void> {
     this.loading ??= this.doLoad();
     return this.loading;
@@ -32,18 +32,18 @@ export class TextFixService {
       const file = this.wasmPath();
       const bytes = await fs.promises.readFile(file);
       this.tokenizer = await createLinderaTokenizer(bytes);
-      // 最初の 1 回は遅いので、ここで済ませておく
+      // The first call is slow, so get it out of the way here
       this.tokenizer.tokenize('準備ができました。');
       this.status = 'ready';
-      log.info(`単語分割を読み込みました（${Math.round(performance.now() - started)}ms）`);
+      log.info(`Loaded the tokenizer (${Math.round(performance.now() - started)} ms)`);
     } catch (e) {
       this.status = 'failed';
       this.error = (e as Error).message;
-      log.warn(`単語分割を読み込めませんでした。単語分割を使う自動修正は飛ばします: ${this.error}`);
+      log.warn(`Could not load the tokenizer. Skipping the automatic fixes that need it: ${this.error}`);
     }
   }
 
-  /** 読み込み済みなら単語分割を返す。読み込み中か失敗したら null */
+  /** Returns the tokenizer if loaded. null while loading or after a failure */
   get(): Tokenizer | null {
     return this.tokenizer;
   }

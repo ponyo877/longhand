@@ -1,17 +1,17 @@
 /**
- * Whisper の語ごとの確信度を、書き起こしの文字ごとの確信度にする。
+ * Turns Whisper's per-token confidence into per-character confidence for the transcript.
  *
- * ワーカーは [文字列, 確率] の並びを送る。つなげた文字列は書き起こしとほぼ同じだが、区間の繰り返しの除去や前後の空白の違いがある。
- * 文字の並びを突き合わせ、一致した文字だけに確信度を割り当て、対応が取れない文字は null（確信度なし）にする。
- * 確信度を使う規則は、null の文字を含む所では動かない。
+ * The worker sends a list of [text, probability] pairs. The joined text is nearly the same as the transcript, but differs where repeated segments were removed or in leading and trailing whitespace.
+ * The character sequences are aligned; only matching characters get a confidence, and characters with no counterpart get null (no confidence).
+ * Rules that use confidence do not act on spans containing null characters.
  */
 
 export type Confidence = (number | null)[];
 
-/** 突き合わせる部分の長さの上限（文字数）。超えた部分は確信度なしにする（短い発話が対象なので支障はない） */
+/** Maximum length (in characters) of the part to align. Longer parts get no confidence (fine, since the targets are short utterances) */
 const MAX_ALIGN = 2000;
 
-/** from の文字ごとの値を、to の文字に移す。共通の先頭と末尾を除いた残りを、最長共通部分列で突き合わせる */
+/** Moves per-character values from `from` onto the characters of `to`. After removing the common prefix and suffix, aligns the rest by longest common subsequence */
 export function realign(from: string, conf: readonly (number | null)[], to: string): Confidence {
   if (from === to) return [...conf];
   const out: Confidence = Array.from({ length: to.length }, () => null);
@@ -28,7 +28,7 @@ export function realign(from: string, conf: readonly (number | null)[], to: stri
   const a = from.slice(pre, from.length - suf);
   const b = to.slice(pre, to.length - suf);
   if (!a.length || !b.length || a.length > MAX_ALIGN || b.length > MAX_ALIGN) return out;
-  // 最長共通部分列の表（後ろから）
+  // Longest common subsequence table (from the end)
   const n = a.length;
   const m = b.length;
   const dp = new Uint16Array((n + 1) * (m + 1));
@@ -49,7 +49,7 @@ export function realign(from: string, conf: readonly (number | null)[], to: stri
   return out;
 }
 
-/** ワーカーの [文字列, 確率] の並びから、text の文字ごとの確信度を作る。並びがなければ null */
+/** Builds per-character confidence for text from the worker's [text, probability] pairs. null if there are none */
 export function charConfidence(text: string, tokens: readonly (readonly [string, number])[] | null | undefined): Confidence | null {
   if (!tokens?.length || !text) return null;
   let joined = '';
@@ -62,7 +62,7 @@ export function charConfidence(text: string, tokens: readonly (readonly [string,
   return realign(joined, conf, text);
 }
 
-/** 範囲の確信度（最小値）。確信度のない文字を含むか、確信度がなければ null */
+/** Confidence of a range (the minimum). null if it contains a character without confidence, or there is no confidence */
 export function rangeConfidence(conf: readonly (number | null)[] | null | undefined, start: number, end: number): number | null {
   if (!conf || start >= end) return null;
   let min = 1;
@@ -74,7 +74,7 @@ export function rangeConfidence(conf: readonly (number | null)[] | null | undefi
   return min;
 }
 
-/** 発話の中身の文字（文字と数字）の確信度の最小値。確信度のある文字がなければ null */
+/** Minimum confidence over the content characters (letters and digits) of the utterance. null if no character has a confidence */
 export function minContentConfidence(text: string, conf: readonly (number | null)[] | null | undefined): number | null {
   if (!conf) return null;
   let min: number | null = null;
@@ -87,11 +87,11 @@ export function minContentConfidence(text: string, conf: readonly (number | null
 }
 
 /**
- * 発話の中にこれより確信度の低い字があれば、近道に入れずに LLM に回す（llmReason の low-confidence）。
+ * If the utterance has a character with lower confidence than this, it skips the fast path and goes to the LLM (llmReason low-confidence).
  *
- * 0.3 未満の字は、ほぼ誤りの印になる。評価の 60 字以下の発話では、0.3 未満の字がある 9 件のうち 8 件で、その字のそばに誤りがあった。
- * 0.3 以上 0.5 未満の字は、誤りの手がかりにならない。この範囲の字だけがある 21 件のうち、誤りのある発話は 10 件（48%）で、
- * 60 字以下の発話の全体（42%）とほとんど変わらず、その字のそばに誤りがあったのは 6 件だけだった。
- * LLM に回すと 1.5〜2 秒遅くなるので、手がかりにならない範囲は回さない（docs/evaluation.md）。
+ * A character below 0.3 almost always marks an error. Among evaluation utterances of 60 characters or less, 8 of the 9 with a character below 0.3 had an error next to it.
+ * Characters from 0.3 up to 0.5 are no clue to errors. Of the 21 utterances whose low-confidence characters all fall in this range, 10 (48%) had errors,
+ * hardly different from all utterances of 60 characters or less (42%), and only 6 had an error next to such a character.
+ * Sending to the LLM adds 1.5-2 seconds, so the range that is no clue is not sent (docs/evaluation.md).
  */
 export const LOW_CONFIDENCE = 0.3;

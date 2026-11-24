@@ -1,11 +1,11 @@
 import Foundation
 
-/// 標準出力（プロトコル専用）への書き込み。すべての行を 1 本のシリアルキューで書くので、行が混ざらない。
+/// Writes to stdout (reserved for the protocol). Every line goes through one serial queue, so lines never interleave.
 final class Output: Sendable {
     static let shared = Output()
 
     private let queue = DispatchQueue(label: "longhand.stdout", qos: .userInteractive)
-    /// 書き込みに失敗したとき（親がパイプを閉じたとき）に呼ぶ
+    /// Called when a write fails (the parent closed the pipe)
     private let brokenPipeHandler = LockedValue<(@Sendable () -> Void)?>(nil)
     private let broken = LockedValue(false)
 
@@ -31,7 +31,7 @@ final class Output: Sendable {
         send("error", id: id, ErrorPayload(code: code, message: message))
     }
 
-    /// キューに積んだ行をすべて書き終えるまで待つ
+    /// Waits until every queued line has been written
     func flush() {
         queue.sync {}
     }
@@ -66,7 +66,7 @@ private struct OutEnvelope<P: Encodable>: Encodable {
     let payload: P
 }
 
-/// ロックで守った値（Swift 6 の Sendable 要件を満たすための小さな箱）
+/// A value guarded by a lock (a small box to meet Swift 6's Sendable requirements)
 final class LockedValue<T>: @unchecked Sendable {
     private var value: T
     private let lock = NSLock()

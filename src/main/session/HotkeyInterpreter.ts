@@ -3,43 +3,43 @@ import type { HotkeyPayload } from '../../shared/protocol';
 export type Command = { kind: 'start'; locked: boolean } | { kind: 'lock' } | { kind: 'stop' } | { kind: 'cancel'; silent: boolean } | { kind: 'paste_last' };
 
 export interface InterpreterState {
-  /** 録音中か（finalizing は含まない） */
+  /** Whether recording (finalizing does not count) */
   recording: boolean;
   locked: boolean;
-  /** 確定処理中のセッションがあるか（Esc の対象になる） */
+  /** Whether a session is finalizing (Esc applies to it) */
   finalizing: boolean;
 }
 
 export interface InterpreterOptions {
-  /** ダブルタップの窓。1 回目の押下から 2 回目の押下までの時間で測る */
+  /** Double-tap window, measured from the first press to the second press */
   doubleTapMs: () => number;
   doubleTapToLock: () => boolean;
-  /** Fn を修飾キーとして使ったとみなして取り消す、録音開始からの時間の上限 */
+  /** Time since recording started within which Fn counts as used as a modifier, and the recording is canceled */
   interruptCancelMs?: number;
-  /** 停止や取り消しの直後に、Activate の押下で新しい録音を始めない時間（チャタリング、押し直し対策） */
+  /** Time right after a stop or cancel during which pressing Activate does not start a new recording (against key bounce and re-presses) */
   cooldownMs?: number;
 }
 
-/** ダブルタップの窓の既定値（settings.doubleTapMs が無いときの値の目安） */
+/** Default double-tap window (a guide value for when settings.doubleTapMs is missing) */
 export const DEFAULT_DOUBLE_TAP_MS = 400;
 export const DEFAULT_COOLDOWN_MS = 200;
 
 /**
- * ヘルパーから来るホットキーのイベントを、録音の操作に翻訳する（HK-1〜5）。
- * - Activate を押している間だけ録音する（押しっぱなし）
- * - Activate のダブルタップ、または Lock で、ハンズフリー（ロック）にする
- *   ダブルタップは「1 回目の押下から doubleTapMs 以内に 2 回目を押した」ときだけ成立する
- * - ロック中に Activate か Lock を押すと停止する
- * - Esc で取り消す
- * - Activate を修飾キーとして使った（Fn+Delete など）ら、録音開始直後なら黙って取り消す
- * - 停止や取り消しの直後 cooldownMs の間は、Activate の押下で録音を始めない
+ * Translates hotkey events from the helper into recording commands (HK-1 to 5).
+ * - Records only while Activate is held (push to talk)
+ * - A double tap of Activate, or Lock, switches to hands-free (locked)
+ *   A double tap counts only when the second press comes within doubleTapMs of the first press
+ * - Pressing Activate or Lock while locked stops
+ * - Esc cancels
+ * - If Activate is used as a modifier (Fn+Delete and so on) right after recording starts, the recording is canceled silently
+ * - For cooldownMs right after a stop or cancel, pressing Activate does not start recording
  *
- * 状態は呼び出し側（DictationController）が持ち、getState で渡す。時刻はイベントの t を使う。
+ * The caller (DictationController) holds the state and passes it through getState. Times come from the event's t.
  */
 export class HotkeyInterpreter {
   private downAt = 0;
   private tapTimer: NodeJS.Timeout | null = null;
-  /** 最後に停止か取り消しをした時刻（イベントの t の基準）。クールダウンに使う */
+  /** Time of the last stop or cancel (on the clock of the event's t). Used for the cooldown */
   private endedAt = Number.NEGATIVE_INFINITY;
 
   constructor(
@@ -70,7 +70,7 @@ export class HotkeyInterpreter {
       case 'activate':
         if (ev.phase === 'down') {
           if (this.clearTap()) {
-            // ダブルタップの 2 回目（タイマーは 1 回目の押下から doubleTapMs で切れるので、ここに来れば窓の内側）
+            // Second tap of a double tap (the timer expires doubleTapMs after the first press, so reaching here means inside the window)
             if (s.recording) this.exec({ kind: 'lock' });
             return;
           }
@@ -88,7 +88,7 @@ export class HotkeyInterpreter {
           const held = ev.t - this.downAt;
           const window = this.opts.doubleTapMs();
           if (this.opts.doubleTapToLock() && held < window) {
-            // 短いタップ。1 回目の押下から window までに 2 回目が来なければ、誤操作として取り消す
+            // A short tap. If no second press comes within window of the first press, cancel it as a mistake
             const expiresAt = this.downAt + window;
             this.tapTimer = setTimeout(
               () => {

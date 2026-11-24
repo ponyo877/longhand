@@ -1,19 +1,19 @@
 /**
- * 規則 a の用語集。音声認識がカタカナで書きがちな製品名と技術用語を、英字の綴りに戻すための表。
+ * Glossary for rule a. Maps product names and technical terms that speech recognition tends to write in katakana back to their Latin spelling.
  *
- * 一般に知られた製品名と技術用語から作った（利用者の書き起こしや評価の参照文は見ていない）。
- * - 段階 1: 取り違えようのない語。カタカナの連なり全体が読みと一致すれば、常に直す
- * - 段階 2: 普通の語でもある語（ライン、ズーム、ラスト など）。利用者の辞書にその英字の語があるか、
- *   入力先のアプリが apps に一致するときだけ直す。それ以外は LLM への候補にとどめる
- * 日本語での正式な表記がカタカナの社名や製品名（国内の会社など）は入れない。
- * 読みは、音声認識が書きそうなカタカナの形を 1〜4 個。照合は matchForm（長音、促音、小書きの母音、ヴを正規化）で行う。
+ * Built from widely known product names and technical terms (without looking at user transcripts or evaluation references).
+ * - Tier 1: words that cannot be mistaken. Always fixed when the whole katakana run matches a reading
+ * - Tier 2: words that are also ordinary words (ライン, ズーム, ラスト and so on). Fixed only when the user dictionary has that Latin word
+ *   or the target app matches apps. Otherwise they stay as candidates for the LLM
+ * Company and product names whose official Japanese spelling is katakana (domestic companies and so on) are left out.
+ * Readings are 1-4 katakana forms that speech recognition is likely to write. Matching uses matchForm (normalizes long vowels, small tsu, small vowels and ヴ).
  */
 
 export interface LatinEntry {
   word: string;
   readings: string[];
   tier: 1 | 2;
-  /** 段階 2 の語を直してよい入力先のアプリ（bundle ID の前方一致、またはアプリ名の部分一致） */
+  /** Target apps where a tier 2 word may be fixed (bundle ID prefix match, or partial match on the app name) */
   apps?: string[];
 }
 
@@ -21,7 +21,7 @@ const t1 = (word: string, ...readings: string[]): LatinEntry => ({ word, reading
 const t2 = (word: string, readings: string[], apps: string[] = []): LatinEntry => ({ word, readings, tier: 2, apps });
 
 export const LATIN_LEXICON: LatinEntry[] = [
-  // 連絡と共同作業
+  // Communication and collaboration
   t1('Slack', 'スラック'),
   t1('Discord', 'ディスコード'),
   t2('Zoom', ['ズーム'], ['us.zoom.', 'zoom']),
@@ -63,7 +63,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t2('Outlook', ['アウトルック'], ['com.microsoft.outlook']),
   t2('Thunderbird', ['サンダーバード'], ['org.mozilla.thunderbird']),
 
-  // 開発とホスティング
+  // Development and hosting
   t1('GitHub', 'ギットハブ', 'ギッハブ', 'ギットハップ'),
   t1('GitLab', 'ギットラボ', 'ギットラブ'),
   t1('Git', 'ギット'),
@@ -147,7 +147,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t1('Gradle', 'グレードル', 'グラドル'),
   t1('Maven', 'メイブン', 'メイヴン'),
 
-  // 言語、フレームワーク、ライブラリ
+  // Languages, frameworks, libraries
   t1('Python', 'パイソン'),
   t1('JavaScript', 'ジャバスクリプト', 'ジャヴァスクリプト'),
   t1('TypeScript', 'タイプスクリプト'),
@@ -267,7 +267,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t2('Opus', ['オーパス']),
   t2('Haiku', ['ハイク']),
 
-  // 業務とデザインのアプリ
+  // Business and design apps
   t1('Photoshop', 'フォトショップ', 'フォトショ'),
   t2('Illustrator', ['イラストレーター'], ['com.adobe.illustrator']),
   t1('Adobe', 'アドビ', 'アドビー'),
@@ -321,7 +321,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t1('Google Workspace', 'グーグルワークスペース'),
   t1('Google Colab', 'グーグルコラボ'),
 
-  // ブラウザとウェブのサービス
+  // Browsers and web services
   t1('Google', 'グーグル'),
   t2('Chrome', ['クローム'], ['com.google.chrome']),
   t1('Google Chrome', 'グーグルクローム'),
@@ -364,7 +364,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t1('Bluetooth', 'ブルートゥース', 'ブルートゥス'),
   t1('Wi-Fi', 'ワイファイ'),
 
-  // 略語と形式
+  // Abbreviations and formats
   t1('API', 'エーピーアイ'),
   t1('SDK', 'エスディーケー'),
   t1('CLI', 'シーエルアイ'),
@@ -411,7 +411,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t1('MVP', 'エムブイピー'),
   t1('B2B', 'ビーツービー'),
 
-  // 開発（続き）
+  // Development (continued)
   t1('OpenAPI', 'オープンエーピーアイ'),
   t2('Postman', ['ポストマン'], ['com.postmanlabs.mac']),
   t1('Lodash', 'ロダッシュ'),
@@ -485,7 +485,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t2('Mermaid', ['マーメイド']),
   t1('draw.io', 'ドローアイオー'),
 
-  // AI（続き）
+  // AI (continued)
   t2('Whisper', ['ウィスパー']),
   t1('NotebookLM', 'ノートブックエルエム'),
   t2('Codex', ['コーデックス']),
@@ -502,7 +502,7 @@ export const LATIN_LEXICON: LatinEntry[] = [
   t1('LeetCode', 'リートコード'),
   t1('AtCoder', 'アットコーダー'),
 
-  // 端末とサービス（続き）
+  // Devices and services (continued)
   t1('ChromeOS', 'クロームオーエス'),
   t1('watchOS', 'ウォッチオーエス'),
   t1('visionOS', 'ビジョンオーエス', 'ヴィジョンオーエス'),

@@ -7,8 +7,8 @@ const entries: MatchEntry[] = [
   { word: '日鷹', readings: [{ text: '日高', confirmed: false }] },
 ];
 
-describe('findDictionaryCandidates（G4-11）', () => {
-  it('ひらがなで聞き取られた語を読みと照合する（長音や促音の違いは無視する）', () => {
+describe('findDictionaryCandidates (G4-11)', () => {
+  it('matches a word heard in hiragana against readings (ignoring long vowels and small tsu)', () => {
     const m = findDictionaryCandidates('ぐらふぁなとでーたどぐを見る', entries);
     expect(m.map((x) => [x.heard, x.word, x.exact])).toEqual([
       ['ぐらふぁな', 'Grafana', true],
@@ -16,12 +16,12 @@ describe('findDictionaryCandidates（G4-11）', () => {
     ]);
   });
 
-  it('4 拍以上の読みは 1 文字違いまで候補にする', () => {
+  it('allows a one-character difference for readings of 4 or more morae', () => {
     const m = findDictionaryCandidates('ぐらふぁにを開く', entries);
     expect(m.map((x) => [x.heard, x.word, x.exact])).toEqual([['ぐらふぁに', 'Grafana', false]]);
   });
 
-  it('英字の語の大文字小文字の違いと、長い語の 1 文字の綴り違いを候補にする', () => {
+  it('makes candidates from case differences in Latin words and one-letter misspellings of long words', () => {
     const list: MatchEntry[] = [
       { word: 'iPhone', readings: [] },
       { word: 'Postgres', readings: [] },
@@ -33,16 +33,16 @@ describe('findDictionaryCandidates（G4-11）', () => {
     ]);
   });
 
-  it('漢字の誤認識の形も候補にするが、確かめた読みとはみなさない', () => {
+  it('makes candidates from misrecognized kanji forms too, but not as confirmed readings', () => {
     const m = findDictionaryCandidates('日高さんに送る', entries);
     expect(m.map((x) => [x.heard, x.word, x.confirmed])).toEqual([['日高', '日鷹', false]]);
   });
 
-  it('すでに正しく書かれている語は候補にしない', () => {
+  it('makes no candidate from a word already written correctly', () => {
     expect(findDictionaryCandidates('Grafana を開く', entries)).toEqual([]);
   });
 
-  it('短い読みは、語の一部には一致させない', () => {
+  it('does not match short readings inside a word', () => {
     const list: MatchEntry[] = [{ word: 'Nim', readings: [{ text: 'ニム', confirmed: true }] }];
     expect(findDictionaryCandidates('ニムロッドの話', list)).toEqual([]);
     expect(findDictionaryCandidates('ニム で書く', list).map((x) => x.word)).toEqual(['Nim']);
@@ -50,7 +50,7 @@ describe('findDictionaryCandidates（G4-11）', () => {
 });
 
 describe('applyConfirmedMatches', () => {
-  it('確かめた読みに完全一致した所だけを置き換える', () => {
+  it('replaces only spots that exactly match a confirmed reading', () => {
     const raw = 'ぐらふぁなとでーたどっぐを見る';
     const m = findDictionaryCandidates(raw, entries);
     expect(applyConfirmedMatches(raw, m)).toEqual({ text: 'Grafanaとでーたどっぐを見る', replaced: 1 });

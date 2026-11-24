@@ -24,6 +24,10 @@ Useful commands:
 | `LONGHAND_DEBUG_SELFTEST=1 npm start` | Start, check the helper, microphone, recognizer and tokenizer, then quit |
 | `LONGHAND_DEBUG_SELFTEST=e2e npm start` | Dictate end to end without a keyboard or microphone, then quit (see below) |
 | `LONGHAND_DEBUG_CAPTURE=<dir> npm start` | Render every screen and notification to PNG files |
+| `LONGHAND_DEBUG_PROFILE=temp npm start` | Run with a fresh temporary profile, leaving your settings, dictionary and history untouched (speech models are read from your profile) |
+| `LONGHAND_DEBUG_UI_LANGUAGE=en npm start` | Show the interface in English (`en`) or Japanese (`ja`) without saving the choice |
+
+To capture both languages without your own data: `LONGHAND_DEBUG_PROFILE=temp LONGHAND_DEBUG_UI_LANGUAGE=en LONGHAND_DEBUG_CAPTURE=<dir> npm start`, then again with `ja`.
 
 Please run `npm run typecheck`, `npm run lint` and `npm test` before opening a pull request.
 
@@ -34,7 +38,7 @@ It opens a small window with a text field, plays synthetic speech from macOS `sa
 It prints one line per scenario, writes a JSON report, and exits with code 0 when every scenario passed.
 
 - No key event is posted to the system and the microphone is never opened, so other apps listening on the same key are not triggered. Matching a physical key to a shortcut is covered by the Swift tests, and `LONGHAND_DEBUG_SELFTEST=1` checks that the microphone delivers audio.
-- It runs in a temporary profile in the system's temporary folder, so your settings, dictionary and history are not touched. The profile is left in place so you can read its logs. Speech models are read from your profile.
+- It runs in a temporary profile in the system's temporary folder (as with `LONGHAND_DEBUG_PROFILE=temp`), so your settings, dictionary and history are not touched. The profile is left in place so you can read its logs. Speech models are read from your profile.
 - It refuses to start while Longhand is running. Accessibility permission for the helper is required, as for normal use.
 - The window takes focus for about half a minute. Every paste is pinned to the test window, so typing elsewhere can make the test fail but cannot put text into another app.
 
@@ -79,7 +83,9 @@ Explain why the change is needed in the body when it is not obvious from the sub
 ## Code style
 
 - TypeScript is formatted with oxfmt (200 columns) and linted with oxlint.
-- Comments and UI strings in the app are written in Japanese, the language of its users. Documentation and commit messages are in English.
+- Code comments, log messages, test names, documentation and commit messages are in English.
+- Text shown in the app is in English and Japanese. It lives in the message catalogs in `src/shared/i18n/messages/`, one file per area with both languages side by side; add both when you add a string (`useT()` in the windows, `t()` from `src/main/i18n.ts` in the main process). The interface follows the macOS language unless a language is chosen in Settings.
+- Prompts sent to the LLM and Japanese language data (lexicons, regular expressions, test sentences) stay in Japanese.
 
 ## Releases
 

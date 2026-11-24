@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ASR ワーカーをまとめてビルドし、asr/build/ に置いて署名する。
+# Builds all the ASR workers, puts them in asr/build/ and signs them.
 #
-#   asr/build.sh              longhand-asr-whisper（既定のエンジン）と longhand-asr-apple（次点）
-#   asr/build.sh --all        上に加えて longhand-asr-parakeet（FluidAudio）
-#   asr/build.sh whisper      個別に指定することもできる（whisper / apple / parakeet / whisper-coreml）
+#   asr/build.sh              longhand-asr-whisper (the default engine) and longhand-asr-apple (the runner-up)
+#   asr/build.sh --all        the above plus longhand-asr-parakeet (FluidAudio)
+#   asr/build.sh whisper      targets can also be named one by one (whisper / apple / parakeet / whisper-coreml)
 #
-# 署名: キーチェーンに "Apple Development" の証明書があればそれで、なければ ad-hoc で署名する。
+# Signing: with the "Apple Development" certificate if the keychain has one, otherwise ad-hoc.
 #       Set LONGHAND_SIGN_IDENTITY (same as helper/build.sh; "-" for ad-hoc) or CODESIGN_IDENTITY to use another identity.
 #       Packaging re-signs the workers with the app's identity and a secure timestamp, so release builds need nothing here.
 set -euo pipefail
@@ -40,13 +40,13 @@ if [ -z "$identity" ]; then
 fi
 if [ -z "$identity" ]; then
   identity="-"
-  echo "署名: Apple Development の証明書がないので ad-hoc で署名する"
+  echo "signing: no Apple Development certificate, signing ad-hoc"
 else
-  echo "署名: $identity"
+  echo "signing: $identity"
 fi
 
 for bin in "${built[@]}"; do
-  # --options runtime: Hardened Runtime（公証に必要）。ワーカーは JIT もライブラリの差し込みも使わないので、追加の entitlements は不要
+  # --options runtime: Hardened Runtime (required for notarization). The workers use neither JIT nor library injection, so no extra entitlements are needed
   codesign --force --sign "$identity" --options runtime --timestamp=none "$bin"
   codesign --verify --strict "$bin"
   echo "signed: $bin"

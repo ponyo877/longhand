@@ -1,12 +1,12 @@
 /**
- * 規則 a: カタカナの製品名や技術用語を、英字の綴りに直す。
+ * Rule a: rewrites katakana product names and technical terms in their Latin spelling.
  *
- * - カタカナの連なり全体が、用語集の読みで埋まるときだけ直す（「グーグルクローム」は Google Chrome）。
- *   部分一致、あいまい一致、ひらがなの一致は使わない。読みは matchForm で正規化して比べる
- * - 段階 1 の語は常に直す。段階 2 の語は、利用者の辞書にその英字の語があるか、入力先のアプリが一致するときだけ直し、
- *   それ以外は LLM への候補にとどめる
- * - 利用者の辞書に同じ語があれば、利用者の綴りを使う（大文字と小文字、空白の違いは同じ語とみなす）
- * - 前後が英数字なら空白を挟む。日本語との間には空白を入れない（整形の規則と同じ）
+ * - Fixes only when the whole katakana run is covered by glossary readings (「グーグルクローム」 is Google Chrome).
+ *   No partial, fuzzy or hiragana matches. Readings are normalized with matchForm before comparing
+ * - Tier 1 words are always fixed. Tier 2 words are fixed only when the user dictionary has that Latin word or the target app matches;
+ *   otherwise they stay as candidates for the LLM
+ * - If the user dictionary has the same word, the user's spelling is used (differences in case and whitespace count as the same word)
+ * - Adds a space next to Latin letters or digits. No space next to Japanese (same as the formatting rules)
  */
 import { matchForm } from '../vocab/kana';
 import { katakanaRuns } from '../vocab/match';
@@ -14,17 +14,17 @@ import type { RuleContext, RuleResult } from './index';
 import { LATIN_LEXICON, type LatinEntry } from './lexicon/latin';
 import type { FixEdit, LexiconCandidate } from './types';
 
-/** 1 つの連なりを分けてよい語の数の上限 */
+/** Maximum number of words one run may be split into */
 const MAX_SEGMENTS = 3;
 
 export interface LexiconIndex {
-  /** 正規化した読み → 語 */
+  /** Normalized reading → word */
   byForm: Map<string, LatinEntry>;
-  /** 正規化した読みの最長の長さ */
+  /** Length of the longest normalized reading */
   maxLen: number;
 }
 
-/** 用語集を読みで引けるようにする。同じ読みが複数の語にあるときは先の語を採る（用語集のテストで重なりがないことを確かめる） */
+/** Indexes the glossary by reading. When several words share a reading, the first one wins (the glossary test checks there are no overlaps) */
 export function buildLexiconIndex(entries: readonly LatinEntry[]): LexiconIndex {
   const byForm = new Map<string, LatinEntry>();
   let maxLen = 0;
@@ -45,12 +45,12 @@ function lexiconIndex(): LexiconIndex {
   return defaultIndex;
 }
 
-/** 用語集の英字の語（近道の判定で、知っている英字の語として扱う） */
+/** Latin words in the glossary (treated as known Latin words when deciding on the fast path) */
 export function lexiconWords(): string[] {
   return LATIN_LEXICON.map((e) => e.word);
 }
 
-/** 正規化した読みを、用語集の読みで埋める分け方のうち、語の数が最も少ないものを返す。埋められなければ null */
+/** Returns the split of a normalized reading into glossary readings that uses the fewest words. null if it cannot be covered */
 export function segmentForm(form: string, index: LexiconIndex): LatinEntry[] | null {
   const n = form.length;
   if (!n) return null;
@@ -73,7 +73,7 @@ export function segmentForm(form: string, index: LexiconIndex): LatinEntry[] | n
 
 const wordKey = (w: string) => w.toLowerCase().replace(/\s+/g, '');
 
-/** 段階 2 の語を直してよいか（利用者の辞書にある、または入力先のアプリが一致する） */
+/** Whether a tier 2 word may be fixed (it is in the user dictionary, or the target app matches) */
 function activated(e: LatinEntry, vocab: Map<string, string>, app: RuleContext['input']['app']): boolean {
   if (e.tier === 1 || vocab.has(wordKey(e.word))) return true;
   const bundle = (app?.bundleId ?? '').toLowerCase();
@@ -81,7 +81,7 @@ function activated(e: LatinEntry, vocab: Map<string, string>, app: RuleContext['
   const name = (app?.name ?? '').toLowerCase();
   return (e.apps ?? []).some((a) => {
     const k = a.toLowerCase();
-    // 「.」を含むものは bundle ID の前方一致かホスト名、含まないものはアプリ名の完全一致
+    // Entries with a "." match a bundle ID prefix or a host name; entries without one match the app name exactly
     if (k.includes('.')) return (!!bundle && bundle.startsWith(k)) || (!!host && (host === k || host.endsWith(`.${k}`)));
     return !!name && name === k;
   });

@@ -2,7 +2,7 @@ import XCTest
 @testable import LonghandCore
 
 final class HotkeyMatcherTests: XCTestCase {
-    /// 既定値に近い設定
+    /// Settings close to the defaults
     func defaultMatcher(extra: [String: [[String]]] = [:]) -> HotkeyMatcher {
         var config: [String: [[String]]] = [
             "activate": [["Fn"], ["ControlLeft", "AltLeft"]],
@@ -28,13 +28,13 @@ final class HotkeyMatcherTests: XCTestCase {
         var m = defaultMatcher()
         _ = m.press("Fn")
         let out = m.press("Space")
-        // 長いほうの down だけ。activate は保持を続け、up も interrupted も出さない
+        // Only the longer one's down. activate stays held and emits neither up nor interrupted
         XCTAssertEqual(out.events, [ev(.lock, .down)])
         XCTAssertTrue(out.swallow)
-        // Space のリピートと解放も飲み込む
+        // Space's repeats and release are swallowed too
         XCTAssertEqual(m.press("Space", isRepeat: true), MatchOutput(events: [], swallow: true))
         XCTAssertEqual(m.release("Space"), MatchOutput(events: [ev(.lock, .up)], swallow: true))
-        // activate の up は Fn を離したときに出る（新たな activate:down は出ない）
+        // activate's up comes when Fn is released (no new activate:down)
         XCTAssertEqual(m.release("Fn"), MatchOutput(events: [ev(.activate, .up)], swallow: false))
     }
 
@@ -43,7 +43,7 @@ final class HotkeyMatcherTests: XCTestCase {
         _ = m.press("Fn")
         XCTAssertEqual(m.press("Space").events, [ev(.lock, .down)])
         XCTAssertEqual(m.release("Space").events, [ev(.lock, .up)])
-        // もう一度 Space → lock down（main 側でトグル）。activate は保持中のまま
+        // Space again → lock down (main toggles). activate is still held
         let again = m.press("Space")
         XCTAssertEqual(again.events, [ev(.lock, .down)])
         XCTAssertTrue(again.swallow)
@@ -55,7 +55,7 @@ final class HotkeyMatcherTests: XCTestCase {
         var m = defaultMatcher()
         _ = m.press("Fn")
         XCTAssertEqual(m.press("Space").events, [ev(.lock, .down)])
-        // どの Binding も成立させないキーなら、保持中の activate に interrupted を 1 回だけ出す
+        // A key that matches no Binding emits interrupted once for the held activate
         XCTAssertEqual(m.press("KeyA"), MatchOutput(events: [ev(.activate, .interrupted)], swallow: false))
         XCTAssertEqual(m.release("KeyA").events, [])
         XCTAssertEqual(m.release("Space").events, [ev(.lock, .up)])
@@ -66,7 +66,7 @@ final class HotkeyMatcherTests: XCTestCase {
         var m = defaultMatcher()
         _ = m.press("Fn")
         _ = m.press("Space")
-        // 両方同時に終わる。新しく成立した lock から先に up を出す
+        // Both end at once. The newer match, lock, emits up first
         XCTAssertEqual(m.release("Fn"), MatchOutput(events: [ev(.lock, .up), ev(.activate, .up)], swallow: false))
         XCTAssertEqual(m.release("Space"), MatchOutput(events: [], swallow: true))
     }
@@ -140,7 +140,7 @@ final class HotkeyMatcherTests: XCTestCase {
 
         m.pttState = .locked
         XCTAssertTrue(m.press("Escape").swallow)
-        // セッションが終わっても、押下を飲み込んだキーの解放は飲み込む
+        // Even after the session ends, the release of a key whose press was swallowed is swallowed
         m.pttState = .inactive
         XCTAssertTrue(m.release("Escape").swallow)
     }
@@ -181,14 +181,14 @@ final class HotkeyMatcherTests: XCTestCase {
     func testRecordingSuppressesHotkeysAndSwallowsKeys() {
         var m = defaultMatcher()
         _ = m.press("Fn")
-        // 記録モードに入ると保持中の Binding は up
+        // Entering recording mode emits up for held Bindings
         XCTAssertEqual(m.setRecording(true).events, [ev(.activate, .up)])
         XCTAssertEqual(m.press("Space"), MatchOutput(events: [], swallow: true))
         XCTAssertEqual(m.release("Space"), MatchOutput(events: [], swallow: true))
         XCTAssertEqual(m.release("Fn"), MatchOutput())
         XCTAssertEqual(m.press("ShiftLeft").swallow, false)
         _ = m.release("ShiftLeft")
-        // 記録中に押したキーは、記録が終わってからの解放も飲み込む
+        // A key pressed while recording has its release swallowed even after recording ends
         _ = m.press("KeyA")
         _ = m.setRecording(false)
         XCTAssertTrue(m.release("KeyA").swallow)
@@ -198,7 +198,7 @@ final class HotkeyMatcherTests: XCTestCase {
     func testMissedReleaseRecovers() {
         var m = defaultMatcher()
         _ = m.press("Fn")
-        // Fn の押下がもう一度来た（解放を取りこぼした）
+        // Another Fn press arrived (the release was missed)
         XCTAssertEqual(m.press("Fn").events, [ev(.activate, .up), ev(.activate, .down)])
         XCTAssertEqual(m.releaseStale(["Fn"]).events, [ev(.activate, .up)])
         XCTAssertTrue(m.down.isEmpty)

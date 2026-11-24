@@ -1,14 +1,14 @@
 /**
- * 音声認識の「聞き違いかもしれない箇所」を、整形の LLM に渡せる形にまとめる。
+ * Collects the places where speech recognition may have misheard, in a form that can be passed to the formatting LLM.
  *
- * 材料は 3 つある。
- * - 条件を変えて聞き直した別の仮説（ワーカーの hypotheses）、または 2 つ目のエンジンの書き起こし
- * - 確信度の低い箇所の別候補（ワーカーの alternatives）
- * どちらも、もとの書き起こしとの食い違いだけを取り出し、語らしい範囲に広げて { heard, alternatives } にする。
- * 句読点、空白、大文字と小文字だけの違いは捨てる（聞き違いの手がかりにならない）。
+ * There are three sources.
+ * - Other hypotheses from listening again under different conditions (the worker's hypotheses), or a second engine's transcript
+ * - Alternative candidates where confidence is low (the worker's alternatives)
+ * In both cases only the differences from the original transcript are taken, widened to a word-like range, and turned into
+ * { heard, alternatives }. Differences only in punctuation, spaces or letter case are dropped (they are no clue to a mishearing).
  *
- * 複数の候補を LLM に渡して直す方法は、日本語でも誤りを減らした報告がある。ただし、候補があると LLM は書き換えたくなるので、
- * 渡す箇所は少なく絞り、整形の規則で「候補にある語にだけ置き換えてよい」と縛る（format/prompts.ts）。
+ * Passing several candidates to the LLM for correction has been reported to reduce errors in Japanese too. But candidates tempt the
+ * LLM to rewrite, so few places are passed, and the formatting rules only allow replacing with a word among the candidates (format/prompts.ts).
  */
 import type { AsrAlternative } from '../../shared/asr-protocol';
 import { normalizeForCompare } from '../format/postprocess';
@@ -17,11 +17,11 @@ import { realign } from '../textfix/align';
 import { expandRunRange } from '../vocab/scriptRuns';
 
 export interface Uncertain {
-  /** 書き起こしの中の語句 */
+  /** The phrase in the transcript */
   heard: string;
-  /** 別の聞き取り方（もとの語句を置き換える形） */
+  /** Other ways it could have been heard (each replaces the original phrase) */
   alternatives: string[];
-  /** 根拠。rehear: 聞き直し、engine2: 2 つ目のエンジン、token: 確信度の低い箇所の別候補 */
+  /** Where it came from. rehear: listening again, engine2: a second engine, token: alternative candidates where confidence is low */
   source: 'rehear' | 'engine2' | 'token';
 }
 
@@ -31,11 +31,11 @@ interface Entry extends Uncertain {
 }
 
 const DEFAULT_LIMIT = 8;
-/** 1 か所あたりの候補の上限 */
+/** Maximum number of candidates per place */
 const MAX_ALTERNATIVES = 3;
-/** これより長い食い違いは、聞き違いではなく別の文なので渡さない */
+/** A difference longer than this is a different sentence rather than a mishearing, so it is not passed */
 const MAX_SPAN = 24;
-/** 仮説として使うのに必要な、もとの書き起こしとの一致の割合（短いほうの長さに対して）。長さが 2 倍を超えて違う仮説も使わない */
+/** Share of the original transcript a hypothesis must match to be used (relative to the shorter length). A hypothesis more than twice as long or short is not used either */
 const MIN_SIMILARITY = 0.5;
 
 function addEntry(map: Map<string, Entry>, e: Entry): void {
@@ -57,8 +57,9 @@ function finish(map: Map<string, Entry>, limit: number): Uncertain[] {
 }
 
 /**
- * もとの書き起こしと、別の仮説（聞き直しや 2 つ目のエンジン）との食い違いを取り出す。
- * 食い違いは、同じ種類の字（英字、カタカナ、漢字）が続く範囲まで広げる。片方が空の食い違いは、前後 1 字を足して場所が分かるようにする。
+ * Takes the differences between the original transcript and other hypotheses (listening again or a second engine).
+ * A difference is widened to the run of characters of the same kind (Latin letters, katakana, kanji). When one side of a difference
+ * is empty, one character on each side is added so that the place can be found.
  */
 export function uncertainFromHypotheses(text: string, hypotheses: readonly string[], source: 'rehear' | 'engine2' = 'rehear', limit = DEFAULT_LIMIT): Uncertain[] {
   const map = new Map<string, Entry>();
@@ -66,7 +67,7 @@ export function uncertainFromHypotheses(text: string, hypotheses: readonly strin
     if (!hyp || hyp === text) continue;
     const ops = charDiff(text, hyp);
     if (!ops) continue;
-    // 全体が大きく違う仮説は、聞き違いではなく別の文（幻聴など）なので使わない
+    // A hypothesis that differs a lot overall is a different sentence (a hallucination, for example) rather than a mishearing, so it is not used
     const same = ops.reduce((n, op) => n + (op.kind === 'eq' ? normalizeForCompare(op.text).length : 0), 0);
     const la = normalizeForCompare(text).length;
     const lb = normalizeForCompare(hyp).length;
@@ -81,14 +82,14 @@ export function uncertainFromHypotheses(text: string, hypotheses: readonly strin
       if (normalizeForCompare(text.slice(aStart, aEnd)) === normalizeForCompare(hyp.slice(bStart, bEnd))) return;
       let [s, e] = expandRunRange(text, aStart, aEnd);
       let [hs, he] = expandRunRange(hyp, bStart, bEnd);
-      // 語の範囲に広げたぶんを、もう一方にも足す（食い違いの外側は同じ文字なので、同じ数だけ広げればそろう）
+      // Widen the other side by as much as this side was widened to the word (outside the difference the characters are the same, so widening by the same count keeps them aligned)
       const left = Math.max(aStart - s, bStart - hs);
       const right = Math.max(e - aEnd, he - bEnd);
       s = Math.max(0, aStart - left);
       hs = Math.max(0, bStart - left);
       e = Math.min(text.length, aEnd + right);
       he = Math.min(hyp.length, bEnd + right);
-      // 片方が空のとき（挿入か削除）は、前後 1 字を足す
+      // When one side is empty (an insertion or a deletion), add one character on each side
       if (s === e || hs === he) {
         if (s > 0 && hs > 0) {
           s--;
@@ -127,8 +128,9 @@ export function uncertainFromHypotheses(text: string, hypotheses: readonly strin
 }
 
 /**
- * 確信度の低い箇所の別候補を、語の形にして取り出す。
- * 候補は 1 つのトークン（1 字前後）なので、その字を含む語の範囲に広げ、その字だけを差し替えた語を候補にする。
+ * Takes the alternative candidates where confidence is low, as words.
+ * A candidate is a single token (about one character), so it is widened to the word containing that character, and the word with
+ * only that character replaced becomes the candidate.
  */
 export function uncertainFromTokens(
   text: string,
@@ -138,7 +140,7 @@ export function uncertainFromTokens(
 ): Uncertain[] {
   if (!tokens?.length || !alternatives?.length || !text) return [];
   const minProb = opts.minProb ?? 0.05;
-  // 書き起こしの文字ごとに、どのトークンから来たかを求める
+  // Find which token each character of the transcript came from
   let joined = '';
   const owner: number[] = [];
   tokens.forEach(([piece], i) => {
@@ -169,7 +171,7 @@ export function uncertainFromTokens(
   return finish(map, opts.limit ?? DEFAULT_LIMIT);
 }
 
-/** 複数の材料をまとめる。同じ語句は 1 つにし、聞き直しや 2 つ目のエンジンの候補を先に並べる */
+/** Merges several sources. The same phrase appears once, and candidates from listening again or a second engine come first */
 export function mergeUncertain(lists: readonly (readonly Uncertain[])[], limit = DEFAULT_LIMIT): Uncertain[] {
   const out: Uncertain[] = [];
   for (const list of lists) {

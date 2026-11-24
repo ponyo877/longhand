@@ -19,16 +19,16 @@ struct TranscribeOut {
     let chunks: Int
 }
 
-/// load.options で変えられる設定
+/// Settings that load.options can change
 struct EngineOptions {
-    /// エンコーダの実行先: "ane"（既定、Neural Engine）| "gpu" | "cpu" | "all"
+    /// Where the encoder runs: "ane" (default, Neural Engine) | "gpu" | "cpu" | "all"
     var computeUnits = "ane"
     var warmup = true
     var vad = VadConfig()
     var plan = SegmentPlanConfig()
-    /// 句読点や記号だけの結果は捨てる
+    /// Drop results that are only punctuation or symbols
     var dropPunctuationOnly = true
-    /// 「ピッ。」「フフッ。」のような、短いカタカナの擬音だけの文を捨てる（通知音や笑い声を拾ったもの）
+    /// Drop sentences that are only a short katakana sound word, such as 「ピッ。」 or 「フフッ。」 (picked up from notification sounds or laughter)
     var dropOnomatopoeia = true
 
     static func parse(_ o: [String: Any]) -> EngineOptions {
@@ -91,7 +91,7 @@ final class ParakeetEngine {
 
         let models: AsrModels
         do {
-            // ダウンロードやリポジトリの解決をせず、このディレクトリだけから読む
+            // Load from this directory only, without downloading or resolving a repository
             models = try AsrModels.loadLocal(
                 from: dir, version: .tdtJa, encoderComputeUnits: encoderUnits)
         } catch {
@@ -104,7 +104,7 @@ final class ParakeetEngine {
         modelDescription = "parakeet-tdt_ctc-0.6b-ja (CoreML, encoder=\(options.computeUnits)) @ \(dir.path)"
 
         if options.warmup {
-            // 1 回推論して、Core ML の初回の準備（ANE のプログラム読み込みなど）を済ませる
+            // Run inference once to get Core ML's first-run preparation (loading the ANE program and so on) out of the way
             var noise = [Float](repeating: 0, count: kSampleRate)
             var seed: UInt32 = 12345
             for i in 0..<noise.count {
@@ -127,7 +127,7 @@ final class ParakeetEngine {
         for c in chunks {
             var piece = Array(samples[c.start..<c.end])
             if piece.count < minSamples {
-                // FluidAudio は 0.3 秒未満を受け付けない。短い発話は無音で 0.5 秒まで伸ばす
+                // FluidAudio does not accept less than 0.3 seconds. Pad short utterances with silence to 0.5 seconds
                 piece += [Float](repeating: 0, count: minSamples - piece.count)
             }
             var state = try TdtDecoderState(decoderLayers: 2)
@@ -158,7 +158,7 @@ final class ParakeetEngine {
         return TranscribeOut(text: joinTexts(texts), segments: segments, chunks: chunks.count)
     }
 
-    /// トークンの時刻を使って、句点などで文ごとの区間に分ける。うまく対応が取れなければ区間 1 つにする。
+    /// Uses the token times to split into one segment per sentence at periods and the like. Falls back to a single segment if they cannot be aligned.
     private func sentenceSegments(result r: ASRResult, text: String, offset: Double, chunkDuration: Double)
         -> [SegmentOut]
     {
@@ -196,13 +196,13 @@ func round3(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
 
 private let onomatopoeiaRegex = try! NSRegularExpression(pattern: "^[\\p{Katakana}ー]{0,3}ッ[。、！？!?.,]*$")
 
-/// 「ピッ。」「ピピッ！」「フフッ。」のような、小さい「ッ」で終わる 4 文字以下のカタカナだけの文か
+/// Whether the sentence is only katakana, 4 characters or fewer, ending in a small 「ッ」, such as 「ピッ。」, 「ピピッ！」 or 「フフッ。」
 func isOnomatopoeiaSentence(_ s: String) -> Bool {
     let t = s.trimmingCharacters(in: .whitespaces)
     return onomatopoeiaRegex.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
 }
 
-/// 文末記号で区切り、擬音だけの文を取り除いてつなぎ直す
+/// Splits at sentence-ending marks, removes sentences that are only sound words, and joins the rest again
 func removeOnomatopoeiaSentences(_ s: String) -> String {
     var out = ""
     var cur = ""
@@ -224,7 +224,7 @@ func isPunctuationOnly(_ s: String) -> Bool {
     }
 }
 
-/// 区間ごとの文字列をつなぐ。両側が英数字のときだけ空白を入れる。
+/// Joins the segment texts. A space goes in only when both sides are alphanumeric.
 func joinTexts(_ parts: [String]) -> String {
     var out = ""
     for p in parts {

@@ -1,31 +1,31 @@
-// 貼り付けの着地の判定（PST-3、PST-4）。OS から切り離した純粋なロジックで、XCTest で検証する。
+// Decides whether a paste landed (PST-3, PST-4). Pure logic kept apart from the OS, verified with XCTest.
 //
-// 手がかりは 2 つある。
-// - 貼り付け先がクリップボードを読んだか（遅延提供のデータ要求で分かる）
-// - AX で読んだ入力欄が貼り付け前から変わったか
-// Electron などでは AX の値の更新が遅れ、貼れていても欄の変化が見えないことがある。
-// そこで「読まれたが変化が見えない」は失敗扱いにせず read とし、unconfirmed は
-// 「読まれず、⌘V を送り直しても変化がない」ときだけにする。
+// There are two clues.
+// - Whether the target read the clipboard (seen through the data request for lazily provided data)
+// - Whether the field read through AX changed since before the paste
+// In Electron and similar apps the AX value can update late, so the field may show no change even when the paste worked.
+// So "read but no visible change" is not treated as a failure but as read, and unconfirmed is used
+// only when "not read, and no change even after sending ⌘V again".
 
 public enum PasteLanding: String, Sendable {
-    /// AX で欄の変化を確かめた
+    /// The field change was confirmed through AX
     case confirmed
-    /// 欄の変化は見えないが、クリップボードは読まれた（貼れている見込みが高い）
+    /// No visible change in the field, but the clipboard was read (the paste most likely worked)
     case read
-    /// 読まれず、送り直しても欄が変わらなかった
+    /// Not read, and the field did not change even after resending
     case unconfirmed
-    /// AX で読めない欄、または確認しなかった
+    /// A field AX cannot read, or not checked
     case unknown
 
-    /// 確認した貼り付けの結果を決める
-    /// - changed: 欄の変化を確かめたか（送り直した後の確認も含む）
-    /// - read: 送り直しの前後を通して、クリップボードが読まれたか
+    /// Decides the result of a checked paste
+    /// - changed: whether the field change was confirmed (including the check after resending)
+    /// - read: whether the clipboard was read at any point before or after resending
     public static func classify(changed: Bool, read: Bool) -> PasteLanding {
         if changed { return .confirmed }
         return read ? .read : .unconfirmed
     }
 
-    /// ⌘V を送り直すべきか。読まれず、欄も変わらないときだけ（読まれていれば二重に貼る恐れがある）
+    /// Whether to send ⌘V again. Only when it was not read and the field did not change (if it was read, it might paste twice)
     public static func shouldResend(changed: Bool, read: Bool) -> Bool {
         !changed && !read
     }

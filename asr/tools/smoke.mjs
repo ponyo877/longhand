@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// ASR ワーカーの動作確認。ワーカーを起動し、モデルを読み込み、音声を 3 本と 1 秒の無音を書き起こして、結果と時間を表示する。
+// Smoke test for an ASR worker. Starts the worker, loads the model, transcribes 3 audio files and 1 second of silence, and prints the results and times.
 //
-//   node asr/tools/smoke.mjs                                   # 既定: longhand-asr-whisper + large-v3-turbo q8_0、評価セットの先頭 3 本
-//   node asr/tools/smoke.mjs --engine apple                    # longhand-asr-apple（modelPath は空）
+//   node asr/tools/smoke.mjs                                   # default: longhand-asr-whisper + large-v3-turbo q8_0, the first 3 files of the evaluation set
+//   node asr/tools/smoke.mjs --engine apple                    # longhand-asr-apple (empty modelPath)
 //   node asr/tools/smoke.mjs --engine parakeet
 //   node asr/tools/smoke.mjs --worker <path> --model <path> --options '{"beamSize":1}' --hints "Slack,Electron" a.wav b.wav
 //
-// 音声を指定しなければ ~/longhand-eval/datasets/user-v1/manifest.jsonl の先頭 3 本を使う（ない場合は音声の指定が必要）。
-// 1 本目は pcm（base64 Float32）、残りは wavPath で送り、両方の経路を確かめる。
+// Without audio arguments, uses the first 3 files of ~/longhand-eval/datasets/user-v1/manifest.jsonl (audio must be given if it does not exist).
+// The first file is sent as pcm (base64 Float32) and the rest as wavPath, to check both paths.
 
 import { spawn } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
@@ -51,7 +51,7 @@ function parseArgs(argv) {
   return a;
 }
 
-// 16 kHz モノラル 16bit の WAV を Float32 に変換する
+// Converts a 16 kHz mono 16-bit WAV to Float32
 function wavToFloat32(path) {
   const buf = readFileSync(path);
   let pos = 12;
@@ -83,7 +83,7 @@ class Worker {
       try {
         msg = JSON.parse(line);
       } catch {
-        console.error(`!! stdout にプロトコル以外の行: ${line.slice(0, 200)}`);
+        console.error(`!! non-protocol line on stdout: ${line.slice(0, 200)}`);
         return;
       }
       const w = this.waiters.shift();
@@ -112,7 +112,7 @@ async function main() {
   let files = a.files;
   if (files.length === 0) {
     const manifest = join(homedir(), 'longhand-eval/datasets/user-v1/manifest.jsonl');
-    if (!existsSync(manifest)) throw new Error('音声ファイルを指定してください（評価セットが見つからない）');
+    if (!existsSync(manifest)) throw new Error('Specify audio files (the evaluation set was not found)');
     files = readFileSync(manifest, 'utf8')
       .trim()
       .split('\n')
@@ -159,7 +159,7 @@ async function main() {
 
   const [sil, silMs] = await w.request('transcribe', { pcm: b64(new Float32Array(16000)), language: a.language });
   const silOk = sil.type === 'result' && sil.payload.text === '';
-  console.log(`[silence 1 s] ${JSON.stringify(sil.payload.text)} (${silMs.toFixed(0)} ms) ${silOk ? 'OK' : 'NG（空であるべき）'}`);
+  console.log(`[silence 1 s] ${JSON.stringify(sil.payload.text)} (${silMs.toFixed(0)} ms) ${silOk ? 'OK' : 'NG (should be empty)'}`);
   const [bad] = await w.request('transcribe', { language: a.language });
   console.log(`[no audio] ${bad.type} ${bad.payload?.code ?? ''}`);
 

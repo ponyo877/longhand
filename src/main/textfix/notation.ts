@@ -1,42 +1,42 @@
 /**
- * 規則 c: 表記をそろえる。補助動詞、形式名詞、一部の副詞を、漢字からかなにする（向きは漢字→かなだけ）。
+ * Rule c: normalizes notation. Turns auxiliary verbs, formal nouns and some adverbs from kanji into kana (kanji → kana only).
  *
- * 基本形と品詞をキーにした表で直すので、同じ字でも本来の意味の語（「水を下さい」「時が経つ」「是非を問う」）は残る。
- * - 補助動詞（下さる、頂く、頂ける、致す）は、品詞の細分類が非自立か、直前が接続助詞の「て」「で」のときだけ
- * - 形式名詞（事、物、時、所、為、訳）は、細分類が非自立のときだけ
- * - 副詞（全て、既に、更に、是非、勿論）は、表の品詞と一致するときだけ
- * 評価の参照文で漢字の書き方のほうが多かった項目は、表に入れていない（docs/evaluation.md を参照）。
+ * The table is keyed by base form and part of speech, so words with the same characters used in their literal sense (「水を下さい」, 「時が経つ」, 「是非を問う」) stay.
+ * - Auxiliary verbs (下さる, 頂く, 頂ける, 致す) only when the subcategory is 非自立 or the token right before is the conjunctive particle 「て」 or 「で」
+ * - Formal nouns (事, 物, 時, 所, 為, 訳) only when the subcategory is 非自立
+ * - Adverbs (全て, 既に, 更に, 是非, 勿論) only when the part of speech matches the table
+ * Items written in kanji more often than in kana in the evaluation references are left out of the table (see docs/evaluation.md).
  */
 import type { RuleContext, RuleResult } from './index';
 import type { FixEdit, Token } from './types';
 
 export interface NotationEntry {
-  /** 基本形 */
+  /** Base form */
   base: string;
   pos: string;
-  /** 品詞の細分類。指定があれば一致するときだけ */
+  /** Part-of-speech subcategory. If set, only when it matches */
   pos1?: string;
-  /** 表層形の先頭の漢字と、置き換えるかな（活用した形も先頭だけを置き換える） */
+  /** Kanji at the start of the surface form and the kana that replaces it (conjugated forms also have only the start replaced) */
   kanji: string;
   kana: string;
-  /** 補助動詞として使われたときだけ（細分類が非自立か、直前が「て」「で」） */
+  /** Only when used as an auxiliary verb (subcategory 非自立, or 「て」 or 「で」 right before) */
   aux?: boolean;
 }
 
 export const NOTATION_TABLE: NotationEntry[] = [
-  // 補助動詞
+  // Auxiliary verbs
   { base: '下さる', pos: '動詞', kanji: '下', kana: 'くだ', aux: true },
   { base: '頂く', pos: '動詞', kanji: '頂', kana: 'いただ', aux: true },
   { base: '頂ける', pos: '動詞', kanji: '頂', kana: 'いただ', aux: true },
   { base: '致す', pos: '動詞', kanji: '致', kana: 'いた', aux: true },
-  // 形式名詞
+  // Formal nouns
   { base: '事', pos: '名詞', pos1: '非自立', kanji: '事', kana: 'こと' },
   { base: '物', pos: '名詞', pos1: '非自立', kanji: '物', kana: 'もの' },
   { base: '時', pos: '名詞', pos1: '非自立', kanji: '時', kana: 'とき' },
   { base: '所', pos: '名詞', pos1: '非自立', kanji: '所', kana: 'ところ' },
   { base: '為', pos: '名詞', pos1: '非自立', kanji: '為', kana: 'ため' },
   { base: '訳', pos: '名詞', pos1: '非自立', kanji: '訳', kana: 'わけ' },
-  // 副詞
+  // Adverbs
   { base: '全て', pos: '名詞', pos1: '副詞可能', kanji: '全て', kana: 'すべて' },
   { base: '既に', pos: '副詞', kanji: '既に', kana: 'すでに' },
   { base: '更に', pos: '副詞', kanji: '更に', kana: 'さらに' },
@@ -46,7 +46,7 @@ export const NOTATION_TABLE: NotationEntry[] = [
 
 const isTeDe = (t: Token | undefined) => !!t && t.pos === '助詞' && t.pos1 === '接続助詞' && (t.surface === 'て' || t.surface === 'で');
 
-/** 表の項目に当たるか */
+/** Whether the token matches a table entry */
 export function notationEntry(tokens: readonly Token[], i: number, table: readonly NotationEntry[] = NOTATION_TABLE): NotationEntry | null {
   const t = tokens[i];
   for (const e of table) {

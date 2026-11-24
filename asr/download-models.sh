@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# ASR のモデルを ~/Library/Application Support/Longhand/models/ に取得し、SHA-256 を確かめる。
+# Downloads the ASR models to ~/Library/Application Support/Longhand/models/ and checks their SHA-256.
 #
-#   asr/download-models.sh              既定: whisper large-v3-turbo q8_0 と Silero VAD（longhand-asr-whisper 用、約 835 MB）
-#   asr/download-models.sh --f16        whisper large-v3-turbo f16 も取得する（約 1.5 GB。メモリに余裕がある場合の選択肢）
-#   asr/download-models.sh --parakeet   Parakeet TDT 0.6B 日本語版の Core ML モデルも取得する（longhand-asr-parakeet 用、約 620 MB）
+#   asr/download-models.sh              default: whisper large-v3-turbo q8_0 and Silero VAD (for longhand-asr-whisper, about 835 MB)
+#   asr/download-models.sh --f16        also downloads whisper large-v3-turbo f16 (about 1.5 GB; an option when memory allows)
+#   asr/download-models.sh --parakeet   also downloads the Core ML model of Parakeet TDT 0.6B Japanese (for longhand-asr-parakeet, about 620 MB)
 #
-# 取得元は Hugging Face のリビジョンを固定した URL。取得済みでハッシュが合うファイルは取り直さない。
-# ミラーを使う場合は LONGHAND_HF_BASE を設定する（既定 https://huggingface.co）。
-# Apple の SpeechTranscriber（longhand-asr-apple）のモデルは OS が Apple のサーバーから取得するので、ここでは扱わない。
+# Files come from Hugging Face URLs pinned to a revision. Files already downloaded with a matching hash are not downloaded again.
+# To use a mirror, set LONGHAND_HF_BASE (default https://huggingface.co).
+# The OS downloads the models for Apple's SpeechTranscriber (longhand-asr-apple) from Apple's servers, so they are not handled here.
 #
-# 取得と検証のあと、エンジンごとに models/<engine>/default.json を書く（<engine> は asr/build/longhand-asr-<engine> の名前）。
-# アプリは設定の asr.modelPath が空のとき、この modelPath（相対ならこのディレクトリから）と options で load する。
+# After downloading and checking, writes models/<engine>/default.json for each engine (<engine> is the name in asr/build/longhand-asr-<engine>).
+# When asr.modelPath in the settings is empty, the app loads with this modelPath (relative to this directory if relative) and options.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,38 +35,38 @@ done
 
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
-# write_default <engine> <modelPath（engine のディレクトリからの相対）> <description>
-# options は空（ワーカーの既定がベンチマークで選んだ設定。docs/evaluation.md）
+# write_default <engine> <modelPath (relative to the engine's directory)> <description>
+# options is empty (the worker's defaults are the settings chosen by benchmark, docs/evaluation.md)
 write_default() {
   local dir="$MODELS/$1"
   mkdir -p "$dir"
   printf '{\n  "modelPath": "%s",\n  "options": {},\n  "description": "%s"\n}\n' "$2" "$3" > "$dir/default.json.part"
   mv -f "$dir/default.json.part" "$dir/default.json"
-  echo "書き込み: $dir/default.json"
+  echo "wrote: $dir/default.json"
 }
 
 # fetch <url> <dest> <sha256>
 fetch() {
   local url="$1" dest="$2" sha="$3"
   if [ -f "$dest" ] && [ "$(sha_of "$dest")" = "$sha" ]; then
-    echo "ok (取得済み): $dest"
+    echo "ok (already downloaded): $dest"
     return
   fi
   mkdir -p "$(dirname "$dest")"
-  echo "取得: $url"
+  echo "downloading: $url"
   curl -fL --retry 3 --progress-bar -o "$dest.part" "$url"
   local got
   got="$(sha_of "$dest.part")"
   if [ "$got" != "$sha" ]; then
     rm -f "$dest.part"
-    echo "SHA-256 が一致しない: $dest（期待 $sha、実際 $got）" >&2
+    echo "SHA-256 mismatch: $dest (expected $sha, got $got)" >&2
     exit 1
   fi
   mv -f "$dest.part" "$dest"
   echo "ok: $dest"
 }
 
-# --- whisper（既定のエンジン） ---
+# --- whisper (the default engine) ---
 W="$MODELS/whisper"
 fetch "$HF/$WHISPER_REPO/resolve/$WHISPER_REV/ggml-large-v3-turbo-q8_0.bin" "$W/ggml-large-v3-turbo-q8_0.bin" \
   317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1
@@ -76,10 +76,10 @@ if [ "$want_f16" = 1 ]; then
   fetch "$HF/$WHISPER_REPO/resolve/$WHISPER_REV/ggml-large-v3-turbo.bin" "$W/ggml-large-v3-turbo.bin" \
     1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69
 fi
-# VAD のモデルは、ワーカーがモデルと同じディレクトリから自動で見つける（options.vadModelPath で変えられる）
+# The worker finds the VAD model in the same directory as the model (options.vadModelPath can change it)
 write_default whisper "ggml-large-v3-turbo-q8_0.bin" "whisper large-v3-turbo q8_0 (Metal) + Silero VAD v6.2.0"
 
-# --- Parakeet（任意） ---
+# --- Parakeet (optional) ---
 if [ "$want_parakeet" = 1 ]; then
   list="$HERE/parakeet/model-files.txt"
   repo="FluidInference/parakeet-0.6b-ja-coreml"
@@ -91,4 +91,4 @@ if [ "$want_parakeet" = 1 ]; then
   write_default parakeet "../parakeet-ja" "Parakeet TDT-CTC 0.6B ja (Core ML, FluidAudio)"
 fi
 
-echo "完了: $MODELS"
+echo "done: $MODELS"

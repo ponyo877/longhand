@@ -1,14 +1,14 @@
 /**
- * 書き起こしの語ごとの補正（textfix）の型。
- * LLM を通さない経路（近道、LLM なし、LLM の失敗）で貼る文を、決まった規則だけで直す。
+ * Types for word-level transcript fixes (textfix).
+ * Fixes text pasted without the LLM (fast path, no LLM, LLM failure) using fixed rules only.
  */
 
-/** 規則の名前。a: カタカナを英字に、b: つなぎの言葉、c: 表記、d: 助詞 */
+/** Rule names. a: katakana to Latin letters, b: fillers, c: notation, d: particles */
 export type FixRule = 'latin' | 'fillers' | 'notation' | 'particles';
 
 export const FIX_RULES: readonly FixRule[] = ['latin', 'fillers', 'notation', 'particles'];
 
-/** 直した 1 か所。位置は入力の文字列（直す前）の添字 */
+/** One fix. Positions are indices into the input string (before fixing) */
 export interface FixEdit {
   rule: FixRule;
   start: number;
@@ -17,66 +17,66 @@ export interface FixEdit {
   after: string;
 }
 
-/** LLM に渡す用語集の候補（直さなかったが、英字の語かもしれない所） */
+/** A glossary candidate for the LLM (not fixed, but possibly a Latin-letter word) */
 export interface LexiconCandidate {
   heard: string;
   word: string;
 }
 
-/** 単語分割の 1 語（IPADIC の品詞） */
+/** One token from the tokenizer (IPADIC parts of speech) */
 export interface Token {
-  /** 表層形 */
+  /** Surface form */
   surface: string;
-  /** 入力の文字列での位置 [start, end) */
+  /** Position in the input string [start, end) */
   start: number;
   end: number;
-  /** 品詞（名詞、動詞、助詞、フィラーなど）と細分類 */
+  /** Part of speech (名詞, 動詞, 助詞, フィラー and so on) and subcategory */
   pos: string;
   pos1: string;
-  /** 基本形。分からなければ表層形 */
+  /** Base form. The surface form if unknown */
   base: string;
-  /** 読み（カタカナ）。分からなければ空 */
+  /** Reading (katakana). Empty if unknown */
   reading: string;
 }
 
-/** 同期で単語に分ける。読み込みが済んでいないときは null を返す */
+/** Tokenizes synchronously. Returns null while still loading */
 export interface Tokenizer {
   tokenize(text: string): Token[] | null;
 }
 
 export interface FixInput {
   text: string;
-  /** 設定の言語。日本語（ja）のときだけ直す */
+  /** Language setting. Fixes only for Japanese (ja) */
   language: string;
-  /** 規則ごとのオンとオフ。書いていない規則はオフ */
+  /** On or off for each rule. Rules not listed are off */
   rules: Partial<Record<FixRule, boolean>>;
-  /** 触らない語句（利用者の辞書の語、置換のきっかけ、辞書照合の候補）。文中のすべての出現を守る */
+  /** Phrases to leave alone (user dictionary words, replacement triggers, dictionary match candidates). Every occurrence in the text is protected */
   protectedPhrases?: readonly string[];
-  /** 利用者の辞書の語（英字の綴りを優先し、段階 2 の語を直す条件にも使う） */
+  /** User dictionary words (their Latin spellings take priority, and they are also a condition for fixing tier 2 words) */
   vocabulary?: readonly string[];
-  /** 入力先のアプリとブラウザのホスト名（段階 2 の語を直す条件に使う） */
+  /** Target app and browser host name (a condition for fixing tier 2 words) */
   app?: { bundleId?: string; name?: string; host?: string };
-  /** 利用者が「今後は直さない」を選んだ箇所（fixKey の形） */
+  /** Spots the user chose not to fix again (in fixKey form) */
   blocked?: readonly string[];
-  /** 単語分割。なければ単語分割を使う規則を飛ばす */
+  /** Tokenizer. Without it, rules that need tokens are skipped */
   tokenizer?: Tokenizer | null;
-  /** 文字ごとの確信度（0〜1、入力の文字列の添字ごと）。分からない文字は null。なければ確信度を使う規則を飛ばす */
+  /** Per-character confidence (0 to 1, per index of the input string). null for unknown characters. Without it, rules that need confidence are skipped */
   confidence?: readonly (number | null)[] | null;
-  /** 規則 d で、Whisper が足した「を」を消すか（未指定なら規則の既定） */
+  /** Whether rule d removes a 「を」 added by Whisper (the rule's default if unset) */
   dropWo?: boolean;
 }
 
 export interface FixOutput {
-  /** 直した文。直す所がなければ入力のまま */
+  /** Fixed text. The input unchanged if there was nothing to fix */
   text: string;
   edits: FixEdit[];
-  /** LLM への候補（段階 2 の語など、直さなかった所） */
+  /** Candidates for the LLM (spots not fixed, such as tier 2 words) */
   candidates: LexiconCandidate[];
-  /** 飛ばした規則と理由（単語分割がない、など） */
+  /** Skipped rules and why (no tokenizer, for example) */
   skipped: string[];
 }
 
-/** 「今後は直さない」の記録に使う形。規則と直す前の文字列で決める */
+/** Key used to record "don't fix again". Determined by the rule and the text before fixing */
 export function fixKey(edit: Pick<FixEdit, 'rule' | 'before'>): string {
   return `${edit.rule}:${edit.before}`;
 }

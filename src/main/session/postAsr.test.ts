@@ -1,6 +1,6 @@
 /**
- * postAsr（書き起こしの後の処理）のテスト。アプリと評価が同じ関数を通るので、ここで決まることを確かめる。
- * 保存先、LLM、単語分割は偽物を渡す。
+ * Tests for postAsr (processing after transcription). The app and the evaluation run through the same function, so this checks what it decides.
+ * The stores, the LLM and the tokenizer are fakes.
  */
 import { describe, expect, it } from 'vitest';
 import type { ContextPayload } from '../../shared/protocol';
@@ -27,7 +27,7 @@ function fakeCustomizations(over: { replace?: [string, string]; candidates?: { h
     vocabulary: () => dictionary,
     prepareFormatting: (raw: string, opts: PrepareOptions) => {
       prepared.push({ raw, opts });
-      // 本物と同じく、LLM を使わないときだけ置き換え、使うときは候補を渡す
+      // Like the real one, replace only when the LLM is not used, and pass candidates when it is
       if (!opts.useLlm && over.replace) return { text: raw.replace(over.replace[0], over.replace[1]), vocabulary: dictionary, candidates: [], replaced: 1 };
       return { text: raw, vocabulary: dictionary, candidates: opts.useLlm ? (over.candidates ?? []) : [], replaced: 0 };
     },
@@ -82,7 +82,7 @@ function input(over: Partial<PostAsrInput> = {}): PostAsrInput {
 }
 
 describe('planPostAsr', () => {
-  it('LLM を使わないときは、読みの照合で置き換えた文を、補正と整形に渡す', () => {
+  it('passes the text replaced by reading matches to the fixes and formatting when the LLM is not used', () => {
     const c = fakeCustomizations({ replace: ['くばねてす', 'Kubernetes'] });
     const plan = planPostAsr(input({ rawText: 'くばねてすを使います', customizations: c }));
     expect(c.prepared).toEqual([{ raw: 'くばねてすを使います', opts: { useLlm: false, context: {}, recent: [] } }]);
@@ -92,7 +92,7 @@ describe('planPostAsr', () => {
     expect(plan.format.dictionaryCandidates).toEqual([]);
   });
 
-  it('LLM を使うときは、文を置き換えずに、照合の候補を整形に渡す', () => {
+  it('passes match candidates to formatting without replacing the text when the LLM is used', () => {
     const provider = fakeProvider(() => '{}');
     const c = fakeCustomizations({ replace: ['くばねてす', 'Kubernetes'], candidates: [{ heard: 'くばねてす', word: 'Kubernetes' }] });
     const plan = planPostAsr(input({ rawText: 'くばねてすを使います', customizations: c, provider }));
@@ -103,14 +103,14 @@ describe('planPostAsr', () => {
     expect(provider.calls).toEqual([]);
   });
 
-  it('得点の文脈（入力先、最近の書き起こし、基準の時刻）を照合にそのまま渡す', () => {
+  it('passes the scoring context (input target, recent transcripts, reference time) to matching as it is', () => {
     const c = fakeCustomizations();
     const recent = [{ text: '前の発話', timestamp: 1000 }];
     planPostAsr(input({ customizations: c, vocab: () => ({ context: { bundleId: 'com.example.notes' }, recent, now: 2000 }) }));
     expect(c.prepared[0].opts).toEqual({ useLlm: false, context: { bundleId: 'com.example.notes' }, recent, now: 2000 });
   });
 
-  it('編集モードでは、照合も補正もしない。選択範囲を整形に渡す', () => {
+  it('skips matching and fixes in edit mode, and passes the selection to formatting', () => {
     const c = fakeCustomizations({ dictionary: ['Longhand'] });
     let vocabCalls = 0;
     const plan = planPostAsr(
@@ -134,7 +134,7 @@ describe('planPostAsr', () => {
     expect(plan.format).toMatchObject({ mode: 'edit', rawText: 'スラックを太字にして', selectedText: '選んだ文', vocabulary: ['Longhand'], textFix: undefined, lowConfidence: undefined });
   });
 
-  it('入力先の文脈は、設定で許したものだけを整形に渡す。パスワード欄の文字は渡さない', () => {
+  it('passes only the input target context the settings allow, and never text from password fields', () => {
     const all = planPostAsr(input({ ctx: context({ before: '前の文。', after: '後ろ' }) }));
     expect(all.format.context).toEqual({ appName: 'メモ', host: 'docs.example.test', field: '本文', beforeCursor: '前の文。', afterCursor: '後ろ' });
     const noApp = planPostAsr(input({ ctx: context(), settings: { ...SETTINGS, sendAppContext: false } }));
@@ -146,21 +146,21 @@ describe('planPostAsr', () => {
     expect(planPostAsr(input()).format.context).toEqual({});
   });
 
-  it('ターミナルなら確実にコード向けにし、ほかは整形の推定に任せる', () => {
+  it('always formats for code in a terminal, and leaves other apps to the formatter’s guess', () => {
     const term = [...TERMINAL_BUNDLES][0];
     expect(planPostAsr(input({ ctx: context({ bundleId: term }) })).format.codeLike).toBe(true);
     expect(planPostAsr(input({ ctx: context() })).format.codeLike).toBeUndefined();
     expect(planPostAsr(input()).format.codeLike).toBeUndefined();
   });
 
-  it('設定の項目（近道、時間切れ、出力の上限、言語）と、置換のきっかけ、指示を整形に渡す', () => {
+  it('passes the settings (fast path, timeout, output limit, language), replacement triggers and instructions to formatting', () => {
     const c = fakeCustomizations({ replacements: ['署名'], instructions: '丁寧に' });
     const plan = planPostAsr(input({ customizations: c, settings: { ...SETTINGS, llmFastPath: false, llm: { timeoutMs: 60000, maxOutputTokens: 512 } } }));
     expect(plan.format).toMatchObject({ fastPath: false, timeoutMs: 60000, maxOutputTokens: 512, language: 'ja', protectedPhrases: ['署名'], customInstructions: '丁寧に' });
     expect(planPostAsr(input({ settings: { ...SETTINGS, language: 'auto' } })).format.language).toBe('auto');
   });
 
-  it('語ごとの補正は、既定の規則（英字の綴り）で直し、直した文と直す前の文の両方を残す', () => {
+  it('fixes words with the default rule (Latin spelling) and keeps both the fixed and the original text', () => {
     const plan = planPostAsr(input({ rawText: 'スラックで送ります' }));
     expect(plan.fix?.text).toBe('Slackで送ります');
     expect(plan.fix?.edits.map((e) => [e.rule, e.before, e.after])).toEqual([['latin', 'スラック', 'Slack']]);
@@ -168,7 +168,7 @@ describe('planPostAsr', () => {
     expect(plan.format.textFix).toBe(plan.fix);
   });
 
-  it('語ごとの補正は、日本語以外、設定がオフ、止めた箇所では動かない', () => {
+  it('does not fix words for other languages, when the setting is off, or at blocked spots', () => {
     expect(planPostAsr(input({ rawText: 'スラックで送ります', settings: { ...SETTINGS, language: 'en' } })).fix).toBeNull();
     expect(planPostAsr(input({ rawText: 'スラックで送ります', settings: { ...SETTINGS, textFix: { ...SETTINGS.textFix, enabled: false } } })).fix).toBeNull();
     const allOff = { ...SETTINGS.textFix, latin: false, particles: false };
@@ -177,7 +177,7 @@ describe('planPostAsr', () => {
     expect(blocked.fix?.edits).toEqual([]);
   });
 
-  it('辞書の語、置換のきっかけ、照合の候補の範囲は、補正で触らない', () => {
+  it('leaves dictionary words, replacement triggers and match candidates alone', () => {
     const byDictionary = planPostAsr(input({ rawText: 'スラックで送ります', customizations: fakeCustomizations({ dictionary: ['スラック'] }) }));
     expect(byDictionary.fix?.edits).toEqual([]);
     const byReplacement = planPostAsr(input({ rawText: 'スラックで送ります', customizations: fakeCustomizations({ replacements: ['スラック'] }) }));
@@ -188,19 +188,19 @@ describe('planPostAsr', () => {
     expect(byCandidate.fix?.edits).toEqual([]);
   });
 
-  it('単語分割が例外を出しても、補正は止まらない', () => {
+  it('keeps fixing words when the tokenizer throws', () => {
     const plan = planPostAsr(
       input({
         rawText: 'スラックで送ります',
         tokenizer: () => {
-          throw new Error('読み込みに失敗');
+          throw new Error('failed to load');
         },
       }),
     );
     expect(plan.fix?.text).toBe('Slackで送ります');
   });
 
-  it('確信度の低い字があれば、近道に入れない印を付ける。確信度が無ければ付けない', () => {
+  it('marks low-confidence utterances to skip the fast path, and leaves utterances without confidence unmarked', () => {
     const raw = '明日の会議は午後からです';
     const conf = (p: number) => Array.from(raw, (_, i) => (i === 6 ? p : 0.95));
     const low = planPostAsr(input({ rawText: raw, confidence: conf(0.1) }));
@@ -216,16 +216,16 @@ describe('planPostAsr', () => {
     expect(none.lowConfidence).toBe(false);
   });
 
-  it('照合で文を置き換えたら、確信度を置き換えた後の文に対応付ける', () => {
+  it('maps confidence onto the text after replacement when matching replaced it', () => {
     const raw = 'くばねてすを使います';
-    const confidence = Array.from(raw, (_, i) => (i === 7 ? 0.2 : 0.9)); // 「い」が低い
+    const confidence = Array.from(raw, (_, i) => (i === 7 ? 0.2 : 0.9)); // 「い」 is low
     const plan = planPostAsr(input({ rawText: raw, confidence, customizations: fakeCustomizations({ replace: ['くばねてす', 'Kubernetes'] }) }));
-    // 置き換えた部分は確信度なし。残りの字の最小値が取れる
+    // The replaced part has no confidence. The minimum comes from the remaining characters
     expect(plan.matchedText).toBe('Kubernetesを使います');
     expect(plan.minConfidence).toBeCloseTo(0.2);
   });
 
-  it('記録するのは数だけで、本文は渡さない', () => {
+  it('logs counts only, never the text', () => {
     const lines: string[] = [];
     const log = { info: (m: string) => lines.push(m), warn: (m: string) => lines.push(m) };
     const raw = 'スラックで送ります';
@@ -237,7 +237,7 @@ describe('planPostAsr', () => {
 });
 
 describe('postAsr', () => {
-  it('整形の前に onPlan を呼び、LLM の結果を返す', async () => {
+  it('calls onPlan before formatting and returns the LLM result', async () => {
     const order: string[] = [];
     const provider = fakeProvider(() => {
       order.push('llm');
@@ -250,7 +250,7 @@ describe('postAsr', () => {
     expect(provider.calls[0].timeoutMs).toBe(8000);
   });
 
-  it('整った短い発話は近道に入り、LLM を呼ばない。近道がオフなら呼ぶ', async () => {
+  it('takes the fast path for a short clean utterance without calling the LLM, and calls it when the fast path is off', async () => {
     const provider = fakeProvider(() => '{"text":"明日の会議は午後からです。"}');
     const fast = await postAsr(input({ rawText: '明日の会議は午後からです。', provider }));
     expect(fast.fmt).toMatchObject({ text: '明日の会議は午後からです。', fastPath: true, formatted: true });
@@ -259,7 +259,7 @@ describe('postAsr', () => {
     expect(provider.calls.length).toBe(1);
   });
 
-  it('確信度の低い字がある発話は、近道に入れずに LLM に回す', async () => {
+  it('sends an utterance with low-confidence characters to the LLM instead of the fast path', async () => {
     const raw = '明日の会議は午後からです。';
     const provider = fakeProvider(() => `{"text":"${raw}"}`);
     const out = await postAsr(input({ rawText: raw, provider, confidence: Array.from(raw, (_, i) => (i === 6 ? 0.1 : 0.95)) }));
@@ -267,16 +267,16 @@ describe('postAsr', () => {
     expect(out.fmt.fastPath).toBeUndefined();
   });
 
-  it('LLM を使わないときは、補正した文を正規化して返す', async () => {
+  it('returns the fixed text normalized when the LLM is not used', async () => {
     const out = await postAsr(input({ rawText: 'スラック で送ります' }));
     expect(out.fmt).toMatchObject({ text: 'Slackで送ります', formatted: false, autoFixed: true });
   });
 
-  it('LLM が失敗したら、例外にせずに、補正した文に落とす', async () => {
-    const provider = fakeProvider(() => new Error('接続できませんでした'));
+  it('falls back to the fixed text without throwing when the LLM fails', async () => {
+    const provider = fakeProvider(() => new Error('could not connect'));
     const out = await postAsr(input({ rawText: 'スラックで送ります', provider }));
     expect(out.fmt).toMatchObject({ text: 'Slackで送ります', formatted: false, errorKind: 'network' });
-    // LLM には直す前の文と、英字に直した語の候補を渡している
+    // The LLM got the text before the fixes and the candidates for words fixed to Latin letters
     const user = JSON.parse(provider.calls[0].user) as { raw_text: string; lexicon_candidates?: unknown };
     expect(user.raw_text).toBe('スラックで送ります');
     expect(user.lexicon_candidates).toEqual([{ heard: 'スラック', word: 'Slack' }]);

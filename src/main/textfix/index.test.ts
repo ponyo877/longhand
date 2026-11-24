@@ -1,6 +1,6 @@
 /**
- * textfix の骨組みのテスト。規則を偽物に差し替えて、守る範囲、止めた箇所、重なり、言語の扱いを確かめる。
- * 文はすべて作った例文である。
+ * Tests for the textfix framework. Replaces rules with fakes to check protected ranges, blocked spots, overlaps and language handling.
+ * All sentences are made-up examples.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { fixKey, fixText, setRuleForTest, type FixEdit, type RuleContext } from './index';
@@ -9,7 +9,7 @@ import { fixLatin } from './latin';
 import { fixNotation } from './notation';
 import { fixParticles } from './particles';
 
-/** 文中の「りんご」をすべて「林檎」にする偽物の規則 */
+/** A fake rule that turns every 「りんご」 in the text into 「林檎」 */
 function apples(ctx: RuleContext): { edits: FixEdit[] } {
   const edits: FixEdit[] = [];
   for (let i = ctx.text.indexOf('りんご'); i >= 0; i = ctx.text.indexOf('りんご', i + 1)) {
@@ -18,7 +18,7 @@ function apples(ctx: RuleContext): { edits: FixEdit[] } {
   return { edits };
 }
 
-describe('fixText の骨組み', () => {
+describe('fixText framework', () => {
   afterEach(() => {
     setRuleForTest('notation', (ctx) => fixNotation(ctx));
     setRuleForTest('fillers', fixFillers);
@@ -26,18 +26,18 @@ describe('fixText の骨組み', () => {
     setRuleForTest('particles', fixParticles);
   });
 
-  it('規則がすべてオフなら、入力をそのまま返す', () => {
+  it('returns the input unchanged when every rule is off', () => {
     setRuleForTest('notation', apples);
     const out = fixText({ text: 'りんごを買う', language: 'ja', rules: {} });
     expect(out).toEqual({ text: 'りんごを買う', edits: [], candidates: [], skipped: [] });
   });
 
-  it('日本語以外では直さない', () => {
+  it('does not fix languages other than Japanese', () => {
     setRuleForTest('notation', apples);
     expect(fixText({ text: 'りんごを買う', language: 'en', rules: { notation: true } }).text).toBe('りんごを買う');
   });
 
-  it('提案をまとめて当て、位置は直す前の文字列で記録する', () => {
+  it('applies proposals together and records positions in the text before fixing', () => {
     setRuleForTest('notation', apples);
     const out = fixText({ text: 'りんごとりんご', language: 'ja', rules: { notation: true } });
     expect(out.text).toBe('林檎と林檎');
@@ -47,14 +47,14 @@ describe('fixText の骨組み', () => {
     ]);
   });
 
-  it('守る語句と重なる箇所、止めた箇所は直さない', () => {
+  it('does not fix spots overlapping protected phrases or blocked spots', () => {
     setRuleForTest('notation', apples);
     expect(fixText({ text: '青りんごとりんご', language: 'ja', rules: { notation: true }, protectedPhrases: ['青りんご'] }).text).toBe('青りんごと林檎');
     const blocked = [fixKey({ rule: 'notation', before: 'りんご' })];
     expect(fixText({ text: 'りんご', language: 'ja', rules: { notation: true }, blocked }).text).toBe('りんご');
   });
 
-  it('重なった提案は、先の規則のものを採る', () => {
+  it("takes the earlier rule's proposal when proposals overlap", () => {
     setRuleForTest('fillers', (ctx) => ({ edits: [{ rule: 'fillers', start: 0, end: 4, before: ctx.text.slice(0, 4), after: '' }] }));
     setRuleForTest('notation', apples);
     const out = fixText({ text: 'りんご、です', language: 'ja', rules: { notation: true, fillers: true } });
@@ -62,7 +62,7 @@ describe('fixText の骨組み', () => {
     expect(out.text).toBe('です');
   });
 
-  it('規則が例外を投げても、ほかの規則は続ける', () => {
+  it('keeps running other rules when a rule throws', () => {
     setRuleForTest('fillers', () => {
       throw new Error('boom');
     });
@@ -72,7 +72,7 @@ describe('fixText の骨組み', () => {
     expect(out.skipped).toContain('fillers: error');
   });
 
-  it('単語分割が例外を投げたら、単語分割はないものとして続ける', () => {
+  it('continues as if there were no tokenizer when the tokenizer throws', () => {
     let seen: unknown = 'unset';
     setRuleForTest('notation', (ctx) => {
       seen = ctx.tokens();

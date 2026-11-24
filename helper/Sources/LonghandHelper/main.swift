@@ -1,7 +1,7 @@
 import AppKit
 
-// LonghandHelper: Electron main の子プロセスとして動き、stdin / stdout の JSON Lines で通信する。
-// メインスレッドで NSApplication（.accessory）の run loop を回し、stdin は別スレッドで読む。
+// LonghandHelper: runs as a child process of the Electron main process and talks JSON Lines over stdin / stdout.
+// The main thread runs the NSApplication (.accessory) run loop, and stdin is read on a separate thread.
 
 Probe.runIfRequested()
 

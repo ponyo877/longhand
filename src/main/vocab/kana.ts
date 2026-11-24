@@ -1,11 +1,11 @@
 /**
- * かなとローマ字の小さな道具。語の「音」を比べるのに使う（学習の判定、辞書の照合）。
- * 正確な読み下しではなく、音声認識の聞き間違いを見つけられる程度の近似である。
+ * Small kana and romaji helpers for comparing how words sound (learning decisions, dictionary matching).
+ * Not an exact transcription, just an approximation good enough to spot recognition mishearings.
  */
 
 const SMALL = new Set(['ァ', 'ィ', 'ゥ', 'ェ', 'ォ', 'ャ', 'ュ', 'ョ', 'ヮ']);
 
-/** ひらがなをカタカナにする */
+/** Converts hiragana to katakana */
 export function hiraToKata(s: string): string {
   return s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
 }
@@ -26,7 +26,7 @@ export function isLatinWord(s: string): boolean {
   return /^[A-Za-z][A-Za-z0-9 .+#&'_-]*$/.test(s) && /[A-Za-z]/.test(s);
 }
 
-/** カタカナの拍の数（小書きの ャュョァィゥェォ は前の文字と合わせて 1 拍） */
+/** Number of katakana morae (small ャュョァィゥェォ form one mora with the preceding character) */
 export function countMorae(s: string): number {
   let n = 0;
   for (const c of hiraToKata(s)) if (!SMALL.has(c) && isKanaChar(c)) n++;
@@ -34,8 +34,8 @@ export function countMorae(s: string): number {
 }
 
 /**
- * 照合用の形。NFKC、カタカナにそろえ、長音、促音、中黒と空白を除き、小書きの母音を並字に、ヴをバ行にする。
- * 「グラファーナ」と「グラファナ」、「ヴィム」と「ビム」が同じ形になる。
+ * Form used for matching. Applies NFKC, converts to katakana, removes long-vowel marks, small tsu, middle dots and whitespace, makes small vowels full-size, and turns ヴ into the バ row.
+ * 「グラファーナ」 and 「グラファナ」, or 「ヴィム」 and 「ビム」, get the same form.
  */
 export function matchForm(s: string): string {
   return hiraToKata(s.normalize('NFKC'))
@@ -50,7 +50,7 @@ export function matchForm(s: string): string {
     .replace(/[ーッ・\s]/g, '');
 }
 
-// 五十音の行ごとに並べてある。整形で 1 項目 1 行に崩さない
+// Arranged by rows of the kana table. Keep the formatter from putting one entry per line
 // prettier-ignore
 const BASE: Record<string, string> = {
   ア: 'a', イ: 'i', ウ: 'u', エ: 'e', オ: 'o',
@@ -71,8 +71,8 @@ const BASE: Record<string, string> = {
   ァ: 'a', ィ: 'i', ゥ: 'u', ェ: 'e', ォ: 'o', ャ: 'ya', ュ: 'yu', ョ: 'yo', ヮ: 'wa', ヵ: 'ka', ヶ: 'ke',
 };
 
-/** 2 文字の組み合わせ（拗音と外来語の音） */
-// 五十音の行ごとに並べてある。整形で 1 項目 1 行に崩さない
+/** Two-character combinations (contracted sounds and sounds from loanwords) */
+// Arranged by rows of the kana table. Keep the formatter from putting one entry per line
 // prettier-ignore
 const PAIR: Record<string, string> = {
   キャ: 'kya', キュ: 'kyu', キョ: 'kyo', ギャ: 'gya', ギュ: 'gyu', ギョ: 'gyo',
@@ -86,7 +86,7 @@ const PAIR: Record<string, string> = {
   ツァ: 'tsa', ツィ: 'tsi', ツェ: 'tse', ツォ: 'tso', スィ: 'si', ズィ: 'zi', クァ: 'kwa', グァ: 'gwa',
 };
 
-/** かなをローマ字にする（ヘボン式に近い）。かな以外の文字は小文字にしてそのまま残す */
+/** Converts kana to romaji (close to Hepburn). Other characters are lowercased and kept */
 export function romanize(s: string): string {
   const chars = Array.from(hiraToKata(s.normalize('NFKC')));
   let out = '';
@@ -122,8 +122,8 @@ export function romanize(s: string): string {
 }
 
 /**
- * 音の比較用の形。かなはローマ字にし、英字は綴りの癖（c と k、l と r、v と b、ph と f など）をそろえ、
- * 同じ子音の重なりと同じ母音の重なりを 1 つにする。
+ * Form used for comparing sounds. Converts kana to romaji, evens out spelling quirks in Latin letters (c and k, l and r, v and b, ph and f and so on),
+ * and collapses repeated consonants and repeated vowels to one.
  */
 export function soundForm(s: string): string {
   let r = romanize(s).toLowerCase();
@@ -146,14 +146,14 @@ export function soundForm(s: string): string {
   return r;
 }
 
-/** 子音の骨組み（先頭の文字と、それ以降の母音以外の文字） */
+/** Consonant skeleton (the first character, then every non-vowel after it) */
 export function consonantSkeleton(s: string): string {
   const f = soundForm(s);
   if (!f) return '';
   return f[0] + f.slice(1).replace(/[aeiou]/g, '');
 }
 
-/** 編集距離（Levenshtein）。配列でも文字列でもよい */
+/** Edit distance (Levenshtein). Works on arrays or strings */
 export function editDistance(a: ArrayLike<string>, b: ArrayLike<string>): number {
   const n = a.length;
   const m = b.length;
@@ -173,8 +173,8 @@ export function editDistance(a: ArrayLike<string>, b: ArrayLike<string>): number
 }
 
 /**
- * from（聞き取った語）と to（直した語）の音が近いか。
- * 漢字を含む語は読みが分からないので false。子音の骨組みと、ローマ字の形の両方で比べる。
+ * Whether from (the heard word) and to (the corrected word) sound alike.
+ * false for words with kanji, since their reading is unknown. Compares both the consonant skeleton and the romaji form.
  */
 export function soundsSimilar(from: string, to: string): boolean {
   if (hasKanji(from) || hasKanji(to)) return false;

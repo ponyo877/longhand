@@ -4,27 +4,27 @@ import CoreGraphics
 import Foundation
 import LonghandCore
 
-/// 能動型の CGEventTap（HID 層）でキーとマウスボタンを監視し、HotkeyMatcher で判定してホットキーを送る。
+/// Watches keys and mouse buttons with an active CGEventTap (HID level), matches them with HotkeyMatcher and sends hotkeys.
 ///
-/// - tap は専用スレッドの CFRunLoop で動かす。コールバックでは判定と送信のキュー投入だけを行い、すぐ返す。
-/// - tap が無効化されたら（タイムアウト、ユーザー操作）すぐ有効化し直し、event_tap で知らせる。
-/// - アクセシビリティの許可がなく tap を作れなければ event_tap {failed} を送り、2 秒ごとに作り直す。
-/// - 自分が合成したイベント（貼り付けの ⌘V など）は eventSourceUserData の印で見分けて無視する。
-/// - 1 秒ごとに、自分より前に能動型の tap（他のアプリ）がいないかを確かめ、いれば tap を作り直して先頭に戻る（HK-4）。
-///   同じ相手に 60 秒で 3 回取り返されたら、event_tap {rival_in_front} で知らせて取り合いをやめる。
+/// - The tap runs on a CFRunLoop on its own thread. The callback only matches and queues the sends, then returns at once.
+/// - When the tap is disabled (timeout, user input), it is re-enabled at once and reported with event_tap.
+/// - Without accessibility permission the tap cannot be created; it sends event_tap {failed} and tries again every 2 seconds.
+/// - Events we synthesized (⌘V for pasting and others) are recognized by the eventSourceUserData marker and ignored.
+/// - Every second it checks whether another active tap (another app) is in front of ours, and if so re-creates the tap at the front (HK-4).
+///   If the same rival takes the front back 3 times in 60 seconds, it reports event_tap {rival_in_front} and stops competing.
 final class HotkeyEngine: @unchecked Sendable {
     static let shared = HotkeyEngine()
 
-    /// 合成イベントに付ける印（"LHND"）
+    /// Marker put on synthesized events ("LHND")
     static let syntheticMarker: Int64 = 0x4C48_4E44
 
     private let lock = NSLock()
     private var matcher = HotkeyMatcher()
     private var recorder = ShortcutRecorder()
-    private var recordingDeadline: Double? // Clock.nowMs() 基準
+    private var recordingDeadline: Double? // On the Clock.nowMs() base
     private var secureInputPid: Int = 0
 
-    // tap スレッドだけが触る
+    // Only the tap thread touches these
     private var tap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var runLoop: CFRunLoop?
@@ -32,10 +32,10 @@ final class HotkeyEngine: @unchecked Sendable {
     private var lastHealthCheck: Double = 0
     private var lastSecureCheck: Double = 0
     private var reportedFailure = false
-    /// 直近の確認で、自分の tap が HID 層の先頭にいたか（前段の tap によるフラグの書き換えを疑わなくてよいか）
+    /// Whether our tap was at the front of the HID level at the last check (so flags need not be suspected of rewriting by an earlier tap)
     private var atFront = true
     private var rivalBackoff = RivalBackoff()
-    /// ⌃⌥⌘⇧ だけの activate が成立したときのクリックとスクロールの回数（tap スレッドだけが触る）
+    /// Click and scroll counts when a ⌃⌥⌘⇧-only activate started (only the tap thread touches this)
     private var mouseBaseline: [UInt32]?
 
     static let recordLeaseMs: Double = 5000
@@ -54,7 +54,7 @@ final class HotkeyEngine: @unchecked Sendable {
         thread.start()
     }
 
-    // MARK: - main からの操作（stdin スレッドから呼ばれる）
+    // MARK: - Requests from main (called from the stdin thread)
 
     func configure(bindings: [Binding]) {
         let out = withLock { matcher.setBindings(bindings) }
@@ -82,12 +82,12 @@ final class HotkeyEngine: @unchecked Sendable {
         emit(out.events, t: Clock.nowMs())
     }
 
-    // MARK: - tap スレッド
+    // MARK: - Tap thread
 
     private func threadMain() {
         runLoop = CFRunLoopGetCurrent()
         createTapIfPossible()
-        // 定期処理: tap の作り直し・健全性確認、記録モードの期限、押しっぱなしのキーの突き合わせ
+        // Periodic work: re-creating and health-checking the tap, the recording mode lease, reconciling held keys
         let timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 0.25, 0.25, 0, 0) { [self] _ in
             periodic()
         }
@@ -113,7 +113,7 @@ final class HotkeyEngine: @unchecked Sendable {
         Output.shared.send("event_tap", EventTapPayload(status: "enabled"))
     }
 
-    /// HID 層の先頭に能動型の tap を作り、この run loop に載せて有効にする
+    /// Creates an active tap at the front of the HID level, adds it to this run loop and enables it
     private func makeTap() -> (CFMachPort, CFRunLoopSource)? {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         guard let port = CGEvent.tapCreate(
@@ -137,8 +137,8 @@ final class HotkeyEngine: @unchecked Sendable {
         return (port, source)
     }
 
-    /// tap を作り直して先頭に戻る。新しい tap を先に作ってから古い tap を外す（その間のキーを取りこぼさないため）。
-    /// 押しっぱなしの状態はそのまま引き継ぐ（Fn を押している最中でも録音を止めない）
+    /// Re-creates the tap at the front. The new tap is created before the old one is removed (so no key in between is missed).
+    /// Held keys carry over as they are (recording does not stop even while Fn is held)
     private func moveToFront() -> Bool {
         guard let (port, source) = makeTap() else { return false }
         if let old = tap {
@@ -151,7 +151,7 @@ final class HotkeyEngine: @unchecked Sendable {
         return true
     }
 
-    /// 自分より前に能動型の tap がいないかを確かめ、いれば先頭に戻る（tap スレッドの 1 秒ごとの確認から呼ぶ）
+    /// Checks for an active tap in front of ours and moves back to the front if there is one (called from the tap thread's check every second)
     private func checkFront(now: Double) {
         guard let entries = Self.tapList() else { return }
         rivalBackoff.retain(onlyPids: Set(entries.map(\.tappingPid)).union(rivalBackoff.trackedPids.filter(Self.isAlive)))
@@ -181,7 +181,7 @@ final class HotkeyEngine: @unchecked Sendable {
         }
     }
 
-    /// CGGetEventTapList の結果（並び順のまま）
+    /// Result of CGGetEventTapList (in its order)
     static func tapList() -> [TapEntry]? {
         var count: UInt32 = 0
         guard CGGetEventTapList(0, nil, &count) == .success, count > 0 else { return nil }
@@ -208,7 +208,7 @@ final class HotkeyEngine: @unchecked Sendable {
     }
 
     private func reportFailure(_ reason: String) {
-        // 失敗は状態が変わったときだけ送る（2 秒ごとの再試行で毎回送らない）
+        // Report a failure only when the state changes (not on every 2-second retry)
         if !reportedFailure {
             reportedFailure = true
             Log.warn("event tap unavailable: \(reason); retrying every 2s")
@@ -224,7 +224,7 @@ final class HotkeyEngine: @unchecked Sendable {
         if let tapSource { CFRunLoopRemoveSource(runLoop, tapSource, .commonModes) }
         tap = nil
         tapSource = nil
-        // 押しっぱなしの状態は信用できないので解放扱いにする
+        // Held keys can no longer be trusted, so treat them as released
         let (out, updates) = withLock { releaseStaleLocked(matcher.down.sorted()) }
         emitShortcutUpdates(updates)
         emit(out.events, t: Clock.nowMs())
@@ -233,7 +233,7 @@ final class HotkeyEngine: @unchecked Sendable {
     private func periodic() {
         let now = Clock.nowMs()
 
-        // 記録モードの期限切れ
+        // Recording mode lease expired
         let leaseOut: MatchOutput? = withLock {
             if let deadline = recordingDeadline, now > deadline {
                 recordingDeadline = nil
@@ -269,13 +269,13 @@ final class HotkeyEngine: @unchecked Sendable {
         reconcile(now: now)
     }
 
-    /// セキュア入力（パスワード欄など）の間は、修飾キー以外のキーイベントが tap に届かない。
-    /// 押しっぱなしのキーの解放も届かないので、セキュア入力が始まったら離されたものとして扱う。
-    /// （修飾キーの flagsChanged とマウスのイベントは届くので対象外）
+    /// During secure input (password fields and the like), key events other than modifiers do not reach the tap.
+    /// Releases of held keys do not arrive either, so held keys are treated as released when secure input starts.
+    /// (Modifier flagsChanged and mouse events still arrive, so they are not affected)
     ///
-    /// 注: CGEventSource.flagsState / keyState(.hidSystemState) によるポーリングは使わない。
-    /// HID 層に能動型の tap があると、合成イベントではこの状態表が更新されないことを確かめたため
-    /// （押している Fn を「離された」と誤判定して録音が止まる恐れがある）。
+    /// Note: polling with CGEventSource.flagsState / keyState(.hidSystemState) is not used.
+    /// We confirmed that with an active tap at the HID level, synthesized events do not update this state table
+    /// (a held Fn could be misjudged as released, stopping the recording).
     private func reconcile(now: Double) {
         let down = withLock { matcher.down }
         let keyboardKeys = down.filter { !KeyTable.isModifier($0) && !KeyTable.isMouse($0) }
@@ -293,7 +293,7 @@ final class HotkeyEngine: @unchecked Sendable {
         emit(out.events, t: now)
     }
 
-    /// 押されていると思っている修飾キーのうち、イベントのフラグ上は離されているものを返す（lock 中に呼ぶ）
+    /// Returns the modifiers we think are held but that the event's flags show as released (call while holding the lock)
     private func staleModifiersLocked(flags: CGEventFlags) -> [String] {
         var stale: [String] = []
         let raw = flags.rawValue
@@ -339,14 +339,14 @@ final class HotkeyEngine: @unchecked Sendable {
         return (dict["kCGSSessionSecureInputPID"] as? Int) ?? 0
     }
 
-    // MARK: - イベント処理（tap のコールバック。速く返すこと）
+    // MARK: - Event handling (tap callback; must return quickly)
 
     private enum Transition {
         case press(String, isRepeat: Bool)
         case release(String)
     }
 
-    // 左右の修飾キーのデバイス依存フラグ（IOKit の NX_DEVICE*KEYMASK）
+    // Device-dependent flags for left and right modifiers (IOKit's NX_DEVICE*KEYMASK)
     private static let deviceBits: [String: UInt64] = [
         "ControlLeft": 0x0000_0001, "ControlRight": 0x0000_2000,
         "ShiftLeft": 0x0000_0002, "ShiftRight": 0x0000_0004,
@@ -382,9 +382,9 @@ final class HotkeyEngine: @unchecked Sendable {
         var staleOut = MatchOutput()
         var staleUpdates: [ShortcutUpdate] = []
         let out: MatchOutput = withLock {
-            // flagsChanged のフラグは、その時点の修飾キーの状態を表す。押しているはずの修飾キーが無ければ
-            // 解放を取りこぼしている（tap の無効化中に離された、など）。
-            // keyDown/keyUp のフラグは前段の tap（他のアプリ）が書き換えることがあるので使わない。
+            // flagsChanged flags show the modifier state at that moment. If a modifier that should be held is missing,
+            // its release was missed (released while the tap was disabled, for example).
+            // keyDown/keyUp flags are not used, because an earlier tap (another app) may rewrite them.
             if type == .flagsChanged {
                 var stale = staleModifiersLocked(flags: event.flags)
                 if case let .release(key) = transition { stale.removeAll { $0 == key } }
@@ -395,8 +395,8 @@ final class HotkeyEngine: @unchecked Sendable {
                 }
             } else if type == .keyDown, atFront, matcher.down.contains("Fn"),
                       !event.flags.contains(.maskSecondaryFn), Self.isHardwareEvent(event) {
-                // 先頭にいるので、keyDown のフラグは前段の tap に書き換えられていない。
-                // Fn を押しているはずなのにフラグが無ければ、Fn の解放を取りこぼしている（HK-4）
+                // We are at the front, so no earlier tap has rewritten the keyDown flags.
+                // If Fn should be held but the flag is missing, the release of Fn was missed (HK-4)
                 Log.info("released stale modifiers on keyDown: Fn")
                 (staleOut, staleUpdates) = releaseStaleLocked(["Fn"])
             }
@@ -424,16 +424,16 @@ final class HotkeyEngine: @unchecked Sendable {
         if out.events.contains(HotkeyEvent(.activate, .down)) {
             mouseBaseline = withLock { matcher.holdsPointerInterruptibleActivate } ? Self.mouseCounters() : nil
         }
-        // 貼り付け後の監視に、利用者のキー入力を知らせる（Return のときは、アプリに届く前に欄を読む）
+        // Tell the post-paste watch about the user's keystroke (on Return, the field is read before the app gets the key)
         if type == .keyDown, !out.swallow, case let .press(key, isRepeat) = transition, !isRepeat {
             FieldWatcher.shared.noteKey(key, flags: event.flags, at: t)
         }
         return out.swallow ? nil : Unmanaged.passUnretained(event)
     }
 
-    /// ⌃⌥⌘⇧ だけのショートカットを押している間にクリックかスクロールがあれば interrupted を出す（HK-1）。
-    /// Fn を含むショートカットは対象外（Fn を押したままクリックして入力位置を決めるのは普通の使い方）。
-    /// 左右クリックとスクロールは tap のマスクに入れず、セッションのイベント数を 250ms ごとに比べて知る
+    /// Emits interrupted on a click or scroll while a ⌃⌥⌘⇧-only shortcut is held (HK-1).
+    /// Shortcuts with Fn are excluded (clicking with Fn held to place the insertion point is normal use).
+    /// Left and right clicks and scrolls are not in the tap mask; they are detected by comparing the session's event counts every 250ms
     private func checkMouseWhileHolding(now: Double) {
         guard let base = mouseBaseline else { return }
         guard withLock({ matcher.holdsPointerInterruptibleActivate }) else {
@@ -453,7 +453,7 @@ final class HotkeyEngine: @unchecked Sendable {
         }
     }
 
-    /// ハードウェアからのイベントか（HID の状態表をソースに持つ）。他のアプリの合成イベントで Fn を外さないため
+    /// Whether the event comes from hardware (its source is the HID state table). So that another app's synthesized event does not release Fn
     private static func isHardwareEvent(_ event: CGEvent) -> Bool {
         event.getIntegerValueField(.eventSourceStateID) == Int64(CGEventSourceStateID.hidSystemState.rawValue)
     }
@@ -474,12 +474,12 @@ final class HotkeyEngine: @unchecked Sendable {
         case .flagsChanged:
             let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
             guard let name = KeyTable.nameByKeyCode[code], let kind = KeyTable.modifierKind(ofPhysical: name) else {
-                return nil // CapsLock など
+                return nil // CapsLock and the like
             }
             let flags = event.flags
             let isDown: Bool
             if kind == .fn {
-                // Fn は keycode 63 の flagsChanged で判定する（SecondaryFn フラグは矢印キーなどにも付くため単独では使わない）
+                // Fn is detected by flagsChanged with keycode 63 (the SecondaryFn flag alone is not used, because arrow keys and others also carry it)
                 isDown = flags.contains(.maskSecondaryFn)
             } else if !flags.contains(Self.flag(for: kind)) {
                 isDown = false
@@ -489,7 +489,7 @@ final class HotkeyEngine: @unchecked Sendable {
                 if raw & sideBits != 0, let mine = Self.deviceBits[name] {
                     isDown = raw & mine != 0
                 } else {
-                    // 左右の情報がないイベント（他のソフトの合成など）は、いまの状態を反転させる
+                    // For events without left/right information (synthesized by other software, for example), flip the current state
                     isDown = !withLock { matcher.down.contains(name) }
                 }
             }
@@ -507,7 +507,7 @@ final class HotkeyEngine: @unchecked Sendable {
         KeyTable.nameByKeyCode[code] ?? "KeyCode\(code)"
     }
 
-    // MARK: - 送信
+    // MARK: - Sending
 
     private func emit(_ events: [HotkeyEvent], t: Double) {
         let rounded = (t * 1000).rounded() / 1000

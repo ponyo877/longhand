@@ -1,22 +1,22 @@
 /**
- * 評価のデータセットと正解の読み込み。
+ * Loading evaluation datasets and references.
  *
- * - データセット: <root>/datasets/<名前>/manifest.jsonl と audio/（scripts/eval-import.ts が作る）
- * - 正解: <root>/truth.jsonl。追記だけで、同じ id は最後の行が有効
- * - 正解がまだ無い発話は、manifest の content（そのアプリが入力した文）を仮の正解として使い、仮であることを残す
- * - 開発用（dev）と確認用（holdout）の分け方: 台本の読み上げは行の split（A が開発用、B が確認用）に従う。
- *   自然な発話は、時刻の順に並べて 3 分以上あいたら別の塊とし、塊を時刻の順に、その時点で件数の少ない側に入れる（同数なら開発用）。
- *   続けて話した発話は内容が似るので、発話ごとに振ると確認用に開発用とほぼ同じ文が混ざる。そのため塊は割らない。
- *   時刻の無い発話（公開データ）は、文の番号（無ければ id）のハッシュで振る。同じ文を別の人が読んだ録音は、同じ側に入る
+ * - Dataset: <root>/datasets/<name>/manifest.jsonl and audio/ (created by scripts/eval-import.ts)
+ * - References: <root>/truth.jsonl. Append-only; for the same id, the last line wins
+ * - An utterance without a reference yet uses the manifest's content (the text that app entered) as a provisional reference, marked as provisional
+ * - Dev and holdout split: scripted readings follow the row's split (A is dev, B is holdout).
+ *   Natural utterances are sorted by time and start a new chunk after a gap of 3 minutes or more. Chunks go, in time order, to whichever side has fewer items at that point (dev on a tie).
+ *   Utterances spoken in a row have similar content, so assigning each utterance on its own would mix near-copies of dev sentences into holdout. That is why chunks are never split.
+ *   Utterances without a time (public data) are assigned by a hash of the sentence number (or the id when there is none). Recordings of the same sentence by different people land on the same side
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { readJsonl, sha256Hex } from './files';
 
-/** manifest.jsonl の 1 行（scripts/eval-import.ts の Row。最初の取り込みには source 以降が無い） */
+/** One line of manifest.jsonl (Row in scripts/eval-import.ts. The first import has no fields from source on) */
 export interface ManifestRow {
   id: string;
-  /** データセットのフォルダからの相対パス */
+  /** Path relative to the dataset folder */
   audio: string;
   durationSec: number;
   timestamp: string;
@@ -26,28 +26,28 @@ export interface ManifestRow {
   source?: string;
   audioSha256?: string;
   sampleRate?: number;
-  /** 台本の読み上げだけ: A は開発用、B は確認用 */
+  /** Scripted readings only: A is dev, B is holdout */
   split?: 'A' | 'B';
   tags?: string[];
-  /** 台本の読み上げだけ: その文に出る用語 */
+  /** Scripted readings only: terms that appear in the sentence */
   terms?: string[];
-  /** 公開データだけ: 読み上げた文の番号（同じ文を複数の人が読んでいる） */
+  /** Public data only: number of the sentence read aloud (several people read the same sentence) */
   sentenceId?: string;
-  /** 台本の読み上げだけ: 文の種類（lexicon、unlisted、number、homophone、particle、short、long、mixed） */
+  /** Scripted readings only: kind of sentence (lexicon, unlisted, number, homophone, particle, short, long, mixed) */
   category?: string;
-  /** キーを離した後に録った長さ（ms）。離した後も録音を続けるようになってからの録音だけ */
+  /** Length recorded after the key was released (ms). Only for recordings made since recording continues after release */
   postRollMs?: number;
 }
 
-/** truth.jsonl の 1 行 */
+/** One line of truth.jsonl */
 export interface TruthRow {
   id: string;
   audioSha256: string;
-  /** 入力されるべき文 */
+  /** The text that should be entered */
   target: string;
-  /** 話したままの文（無ければ target と同じ） */
+  /** The text as spoken (same as target when absent) */
   spoken?: string;
-  /** 表記ゆれの別解 */
+  /** Alternative spellings */
   alt?: string[];
   tags?: string[];
   status: 'ok' | 'excluded';
@@ -57,48 +57,48 @@ export interface TruthRow {
 
 export type Split = 'dev' | 'holdout';
 
-/** 評価する 1 つの発話 */
+/** One utterance to evaluate */
 export interface Utterance {
   id: string;
   dataset: string;
   audioPath: string;
   audioSha256: string;
   durationSec: number;
-  /** 録音した時刻（ms エポック）。分からなければ 0 */
+  /** Time of recording (ms since the epoch). 0 when unknown */
   timestamp: number;
   split: Split;
-  /** 自然な発話の塊の番号（データセットの中で 0 から）。台本と、時刻の無い発話は -1 */
+  /** Number of the natural-utterance chunk (from 0 within the dataset). -1 for scripted readings and for utterances without a time */
   chunk: number;
   target: string;
   spoken: string;
   alt: string[];
   tags: string[];
   terms: string[];
-  /** 台本の文の種類。無いデータセットでは undefined */
+  /** Kind of scripted sentence. undefined for datasets without it */
   category?: string;
-  /** キーを離した後に録った長さ（ms）。分からなければ undefined */
+  /** Length recorded after the key was released (ms). undefined when unknown */
   postRollMs?: number;
-  /** 正解が仮か（人が確かめていない。manifest の content を使った） */
+  /** Whether the reference is provisional (not checked by a person; the manifest's content was used) */
   provisional: boolean;
 }
 
 export interface DatasetCounts {
   rows: number;
   used: number;
-  /** 正解が仮の発話（used のうち） */
+  /** Utterances with a provisional reference (out of used) */
   provisional: number;
-  /** 人が確かめた正解のある発話（used のうち） */
+  /** Utterances with a reference checked by a person (out of used) */
   reviewed: number;
-  /** 正解で除外になっている発話 */
+  /** Utterances excluded by their reference */
   excluded: number;
-  /** 正解も content も無い発話 */
+  /** Utterances with neither a reference nor content */
   noReference: number;
-  /** 正解の音声のハッシュが違う発話（仮の正解に戻した） */
+  /** Utterances whose reference has a different audio hash (fell back to the provisional reference) */
   hashMismatch: number;
   missingAudio: number;
 }
 
-/** 自然な発話を別の塊とみなす間隔 */
+/** Gap after which natural utterances count as a separate chunk */
 export const CHUNK_GAP_MS = 3 * 60 * 1000;
 
 function parseTime(timestamp: string): number {
@@ -107,11 +107,11 @@ function parseTime(timestamp: string): number {
 }
 
 /**
- * 発話を開発用と確認用に分ける。データセットの行をすべて渡す（正解の有無で塊が変わらないように、使わない行も含める）。
+ * Splits utterances into dev and holdout. Pass every row of the dataset (including rows that are not used, so that chunks do not depend on which rows have references).
  *
- * 自然な発話は、時刻の順に塊を作り、塊ごとに、その時点で件数の少ない側に入れる（同数なら開発用）。塊は割らない。
- * 件数に数えるのは、文のある行（content が空でない行）だけ。取り消した録音などの文の無い行は、塊には入るが件数には数えない。
- * 後から行が増えても、時刻が後ろに足されるかぎり、前の行の振り分けは変わらない
+ * Natural utterances form chunks in time order, and each chunk goes to whichever side has fewer items at that point (dev on a tie). Chunks are never split.
+ * Only rows with text (non-empty content) are counted. Rows without text, such as cancelled recordings, belong to a chunk but are not counted.
+ * When rows are added later, the assignment of earlier rows does not change as long as the new times come after them
  */
 export function assignSplits(
   rows: readonly (Pick<ManifestRow, 'id' | 'timestamp' | 'split' | 'sentenceId'> & { content?: string })[],
@@ -123,7 +123,7 @@ export function assignSplits(
     const t = parseTime(r.timestamp);
     if (r.split === 'A' || r.split === 'B') out.set(r.id, { split: r.split === 'A' ? 'dev' : 'holdout', chunk: -1 });
     else if (!t) {
-      // 時刻が無いと塊を作れない。文の番号（無ければ id）のハッシュの偶奇で振る
+      // Chunks cannot be formed without a time. Assign by the parity of a hash of the sentence number (or the id when there is none)
       const even = parseInt(sha256Hex(r.sentenceId || r.id).slice(0, 8), 16) % 2 === 0;
       out.set(r.id, { split: even ? 'dev' : 'holdout', chunk: -1 });
     } else natural.push({ id: r.id, t, counted: r.content === undefined || !!r.content.trim() });
@@ -145,7 +145,7 @@ export function assignSplits(
   return out;
 }
 
-/** 正解を読む。同じ id は最後の行が有効。ファイルが無ければ空 */
+/** Reads the references. For the same id, the last line wins. Empty when the file does not exist */
 export function loadTruth(file: string): Map<string, TruthRow> {
   const out = new Map<string, TruthRow>();
   for (const row of readJsonl<TruthRow>(file)) {
@@ -164,10 +164,10 @@ export interface LoadedDataset {
   counts: DatasetCounts;
 }
 
-/** データセットを読み、正解と突き合わせて、評価する発話の一覧にする（時刻の順） */
+/** Reads a dataset and matches it with the references into a list of utterances to evaluate (in time order) */
 export function loadDataset(root: string, name: string, truth: ReadonlyMap<string, TruthRow>): LoadedDataset {
   const dir = path.join(root, 'datasets', name);
-  if (!fs.existsSync(path.join(dir, 'manifest.jsonl'))) throw new Error(`データセットが見つかりません: ${dir}`);
+  if (!fs.existsSync(path.join(dir, 'manifest.jsonl'))) throw new Error(`Dataset not found: ${dir}`);
   const rows = readManifest(dir);
   const splits = assignSplits(rows);
   const counts: DatasetCounts = { rows: rows.length, used: 0, provisional: 0, reviewed: 0, excluded: 0, noReference: 0, hashMismatch: 0, missingAudio: 0 };
@@ -178,7 +178,7 @@ export function loadDataset(root: string, name: string, truth: ReadonlyMap<strin
       counts.missingAudio++;
       continue;
     }
-    // 最初の取り込みの行にはハッシュが無いので、音声から求める
+    // Rows from the first import have no hash, so compute it from the audio
     const audioSha256 = row.audioSha256 || sha256Hex(fs.readFileSync(audioPath));
     let t = truth.get(row.id);
     if (t?.status === 'excluded') {
@@ -186,7 +186,7 @@ export function loadDataset(root: string, name: string, truth: ReadonlyMap<strin
       continue;
     }
     if (t && t.audioSha256 && t.audioSha256 !== audioSha256) {
-      // 別の音声に付けた正解は使わない
+      // Do not use a reference made for different audio
       counts.hashMismatch++;
       t = undefined;
     }
@@ -223,7 +223,7 @@ export function loadDataset(root: string, name: string, truth: ReadonlyMap<strin
   return { name, utterances, counts };
 }
 
-/** 1 行 1 語のファイルを読む（辞書の語。既存の --vocab と同じ形）。空行と重複は除く */
+/** Reads a file with one word per line (dictionary words, the same format as the existing --vocab). Drops empty lines and duplicates */
 export function readWordList(file: string): string[] {
   return [
     ...new Set(

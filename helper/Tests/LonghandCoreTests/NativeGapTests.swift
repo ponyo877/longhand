@@ -24,7 +24,7 @@ final class RivalTapFinderTests: XCTestCase {
             tap(201, options: 1),
             tap(202, enabled: false),
             tap(203, point: 1),
-            tap(204, mask: 1 << 1), // マウスの左ボタンだけ
+            tap(204, mask: 1 << 1), // Left mouse button only
             tap(me),
         ]
         XCTAssertNil(RivalTapFinder.rivalInFront(list, ownPid: me, ownMask: mask))
@@ -49,7 +49,7 @@ final class RivalBackoffTests: XCTestCase {
         XCTAssertEqual(b.decide(rivalPid: 7, now: 12000), .giveUp)
         XCTAssertEqual(b.decide(rivalPid: 7, now: 16000), .ignore)
         XCTAssertEqual(b.decide(rivalPid: 7, now: 600_000), .ignore)
-        // 別の相手は別に数える
+        // Another rival is counted separately
         XCTAssertEqual(b.decide(rivalPid: 8, now: 16000), .move)
     }
 
@@ -143,7 +143,7 @@ final class FieldWatchTrackerTests: XCTestCase {
         w.keystroke(.edit, at: 1000)
         _ = w.observe("会議は明後日の十時からです", at: 1500)
         w.enter(text: "会議は明後日の十時からです。", at: 2000)
-        guard case let .end(r) = w.observe("", at: 2300) else { return XCTFail("送信を検知しなかった") }
+        guard case let .end(r) = w.observe("", at: 2300) else { return XCTFail("did not detect the send") }
         XCTAssertEqual(r.reason, .enter)
         XCTAssertEqual(r.final, "会議は明後日の十時からです。")
         XCTAssertEqual(r.baseline, inserted)
@@ -157,7 +157,7 @@ final class FieldWatchTrackerTests: XCTestCase {
         w.keystroke(.edit, at: 1400)
         _ = w.observe("会議は明後日の十時からです", at: 1500)
         w.enter(text: "", at: 2000)
-        guard case let .end(r) = w.observe("", at: 2100) else { return XCTFail("送信を検知しなかった") }
+        guard case let .end(r) = w.observe("", at: 2100) else { return XCTFail("did not detect the send") }
         XCTAssertEqual(r.reason, .enter)
         XCTAssertEqual(r.final, "会議は明後日の十時からです")
     }
@@ -166,10 +166,10 @@ final class FieldWatchTrackerTests: XCTestCase {
         var w = make(initial: inserted)
         w.keystroke(.edit, at: 1400)
         _ = w.observe("会議は明後日の十時からです", at: 1500)
-        // 1 回目は確かめ待ち
+        // The first one waits for confirmation
         XCTAssertEqual(w.observe("", at: 6000), .continue)
         XCTAssertTrue(w.wantsQuickRead)
-        guard case let .end(r) = w.observe("", at: 6150) else { return XCTFail("送信を検知しなかった") }
+        guard case let .end(r) = w.observe("", at: 6150) else { return XCTFail("did not detect the send") }
         XCTAssertEqual(r.reason, .sent)
         XCTAssertEqual(r.final, "会議は明後日の十時からです")
         XCTAssertEqual(r.keystrokes, 1)
@@ -177,7 +177,7 @@ final class FieldWatchTrackerTests: XCTestCase {
 
     func testKeystrokeCancelsPendingSent() {
         var w = make(initial: inserted)
-        // 選択して打ち直した最初のキーより先に、変化した読み取りが届いた
+        // The changed read arrived before the first key of the select-and-retype
         XCTAssertEqual(w.observe("会議はm", at: 1000), .continue)
         XCTAssertTrue(w.wantsQuickRead)
         w.keystroke(.edit, at: 995)
@@ -188,7 +188,7 @@ final class FieldWatchTrackerTests: XCTestCase {
     func testInsertedTextVanishingIsSentEvenIfPlaceholderRemains() {
         var w = make(before: "", initial: inserted)
         XCTAssertEqual(w.observe("メッセージを入力", at: 3000), .continue)
-        guard case let .end(r) = w.observe("メッセージを入力", at: 3150) else { return XCTFail("送信を検知しなかった") }
+        guard case let .end(r) = w.observe("メッセージを入力", at: 3150) else { return XCTFail("did not detect the send") }
         XCTAssertEqual(r.reason, .sent)
         XCTAssertEqual(r.final, inserted)
     }
@@ -204,11 +204,11 @@ final class FieldWatchTrackerTests: XCTestCase {
         var w = make(initial: inserted)
         w.keystroke(.deletion, at: 1000)
         XCTAssertEqual(w.observe("", at: 1200), .continue)
-        // 猶予が過ぎてから打ち直した文が消えたら送信
+        // If the retyped sentence disappears after the grace period, it is a send
         w.keystroke(.edit, at: 1900)
         _ = w.observe("会議は十時から", at: 2000)
         XCTAssertEqual(w.observe("", at: 5000), .continue)
-        guard case let .end(r) = w.observe("", at: 5150) else { return XCTFail("送信を検知しなかった") }
+        guard case let .end(r) = w.observe("", at: 5150) else { return XCTFail("did not detect the send") }
         XCTAssertEqual(r.final, "会議は十時から")
     }
 
@@ -237,7 +237,7 @@ final class FieldWatchTrackerTests: XCTestCase {
         let r = w.end(.focusChanged, at: 1500)
         XCTAssertEqual(r.reason, .enter)
         XCTAssertEqual(r.final, inserted)
-        // 送信しただけなら手直しのキー入力は 0
+        // If the user only sent, there are 0 editing keystrokes
         XCTAssertEqual(r.keystrokes, 0)
     }
 

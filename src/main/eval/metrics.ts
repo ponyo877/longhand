@@ -1,15 +1,15 @@
 /**
- * 評価の指標（純粋関数）。src/main/eval/run.ts から使う。
+ * Evaluation metrics (pure functions). Used from src/main/eval/run.ts.
  *
- * - 文字誤り率（中身だけ、句読点込み）と完全一致
- * - 文体の違反数（「！」、和英間の空白、言いさしの「。」、箇条書き、1 行だけの改行、口調の硬化など。F-24）
- * - LLM の整形が、発話を壊したか良くしたか
+ * - Character error rate (content only, and with punctuation) and exact match
+ * - Style violations (「！」, spaces between Japanese and Latin text, 「。」 after a trailing-off clause, bullets, single line breaks, a more formal tone, and so on. F-24)
+ * - Whether the LLM's formatting broke or improved the utterance
  *
- * 誤りの種類の内訳は errorTypes.ts、実行どうしの比較は bootstrap.ts にある。
+ * The breakdown by error type is in errorTypes.ts, and the comparison between runs is in bootstrap.ts.
  */
 
 // ---------------------------------------------------------------------------
-// 文字誤り率
+// Character error rate
 // ---------------------------------------------------------------------------
 
 export function levenshtein(a: readonly string[], b: readonly string[]): number {
@@ -26,7 +26,7 @@ export function levenshtein(a: readonly string[], b: readonly string[]): number 
   return prev[b.length];
 }
 
-/** 中身の一致を見るための正規化。句読点、記号、空白を落とし、全角半角と大文字小文字をそろえる */
+/** Normalization for comparing content. Drops punctuation, symbols and whitespace, and folds full/half width and case */
 export function normContent(s: string): string[] {
   return Array.from(
     s
@@ -36,14 +36,14 @@ export function normContent(s: string): string[] {
   );
 }
 
-/** 体裁まで含めて見るための正規化。空白だけ落とす */
+/** Normalization that includes presentation. Drops only whitespace */
 export function normFull(s: string): string[] {
   return Array.from(s.normalize('NFKC').replace(/\s/g, ''));
 }
 
 export type Normalizer = (s: string) => string[];
 
-/** 文字誤り数と参照の文字数（全体の誤り率は合計どうしで割る） */
+/** Character edits and the reference length in characters (the overall error rate divides total by total) */
 export interface Cer {
   edits: number;
   len: number;
@@ -55,8 +55,8 @@ export function cer(hyp: string, ref: string, norm: Normalizer): Cer {
 }
 
 /**
- * 正解に表記ゆれの別解があるときの誤り数。距離の小さいほうを採る（同じなら先のもの）。
- * ref は採った正解の番号（0 が target）
+ * Edit count when the reference has alternative spellings. Takes the smaller distance (the earlier one on a tie).
+ * ref is the index of the chosen reference (0 is target)
  */
 export function bestCer(hyp: string, refs: readonly string[], norm: Normalizer): Cer & { ref: number } {
   const h = norm(hyp);
@@ -73,7 +73,7 @@ export function addCer(a: Cer, b: Cer): Cer {
   return { edits: a.edits + b.edits, len: a.len + b.len };
 }
 
-/** 誤り率（0〜）。参照が空なら null */
+/** Error rate (0 or more). null if the reference is empty */
 export function rate(c: Cer): number | null {
   return c.len ? c.edits / c.len : null;
 }
@@ -89,14 +89,14 @@ export function quantile(xs: number[], q: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// 完全一致と文体
+// Exact match and style
 // ---------------------------------------------------------------------------
 
-/** かなと漢字 */
+/** Kana and kanji */
 const JA = 'ぁ-ゟ゠-ヿ㐀-䶿一-鿿豈-﫿々〆ヵヶ';
 const JA_OR_PUNCT = `${JA}、。，．？！：；「」『』（）【】`;
 
-/** 比較の前に揃えるのは、前後の空白と Unicode の合成だけ（全角半角や句読点の違いは不一致として数える） */
+/** Only surrounding whitespace and Unicode composition are normalized before comparing (full/half width and punctuation differences count as mismatches) */
 export function exactMatch(hyp: string, ref: string): boolean {
   return hyp.trim().normalize('NFC') === ref.trim().normalize('NFC');
 }
@@ -106,27 +106,27 @@ export function exactMatchRate(pairs: readonly { hyp: string; ref: string }[]): 
   return pairs.filter((p) => exactMatch(p.hyp, p.ref)).length / pairs.length;
 }
 
-/** 正解か別解のどれかと完全に一致するか */
+/** Whether it exactly matches the reference or one of the alternatives */
 export function exactMatchAny(hyp: string, refs: readonly string[]): boolean {
   return refs.some((r) => exactMatch(hyp, r));
 }
 
 export interface StyleViolations {
-  /** 「！」と「!」（指示されない限り使わない） */
+  /** 「！」 and 「!」 (not used unless asked for) */
   exclamation: number;
-  /** 日本語と英数字の間の空白 */
+  /** Spaces between Japanese and Latin letters or digits */
   jaLatinSpace: number;
-  /** 日本語の文字どうしの間の空白 */
+  /** Spaces between Japanese characters */
   jaSpace: number;
-  /** かなや漢字の直後の半角の「? ! , .」 */
+  /** Half-width 「? ! , .」 right after kana or kanji */
   halfWidthPunct: number;
-  /** 「〜けど。」「〜ので。」のように、言いさしの末尾に付いた「。」（行末ごとに数える） */
+  /** 「。」 at the end of a trailing-off clause such as 「〜けど。」 or 「〜ので。」 (counted per line end) */
   periodAfterConjunction: number;
-  /** 箇条書きの行（「- 」「・」「* 」「1. 」で始まる行） */
+  /** Bullet lines (lines starting with 「- 」, 「・」, 「* 」 or 「1. 」) */
   bullets: number;
-  /** 見出しや太字などの記法 */
+  /** Markup such as headings and bold */
   markdown: number;
-  /** 空行でない、1 行だけの改行 */
+  /** A single line break that is not a blank line */
   singleNewline: number;
 }
 
@@ -167,37 +167,37 @@ export function totalViolations(v: StyleViolations): number {
   return Object.values(v).reduce((n, x) => n + x, 0);
 }
 
-/** 改まった言い方。生テキストに無いのに出力に増えていたら、口調を硬くしたとみなす */
+/** Formal phrasing. If the output has more of it than the raw text, the tone was made more formal */
 const FORMAL = /(いたします|いただけますでしょうか|でしょうか|ございます|ですが、|おります)/g;
 
-/** 生テキストに比べて増えた改まった言い方の数（F-03） */
+/** How many more formal phrases the output has than the raw text (F-03) */
 export function toneShift(raw: string, out: string): number {
   return Math.max(0, count(out, FORMAL) - count(raw, FORMAL));
 }
 
-/** 1 行の表示用。0 の項目は省く */
+/** For a one-line display. Omits items that are 0 */
 export function formatViolations(v: StyleViolations): string {
   const labels: Record<keyof StyleViolations, string> = {
-    exclamation: '「！」',
-    jaLatinSpace: '和英間の空白',
-    jaSpace: '和文の空白',
-    halfWidthPunct: '半角の句読点',
-    periodAfterConjunction: '言いさしの「。」',
-    bullets: '箇条書き',
-    markdown: '記法',
-    singleNewline: '1 行の改行',
+    exclamation: 'exclamation',
+    jaLatinSpace: 'Japanese-Latin space',
+    jaSpace: 'space in Japanese',
+    halfWidthPunct: 'half-width punctuation',
+    periodAfterConjunction: 'period after trailing-off clause',
+    bullets: 'bullets',
+    markdown: 'markup',
+    singleNewline: 'single line break',
   };
   const parts = (Object.keys(labels) as (keyof StyleViolations)[]).filter((k) => v[k] > 0).map((k) => `${labels[k]} ${v[k]}`);
-  return parts.length ? parts.join('、') : 'なし';
+  return parts.length ? parts.join(', ') : 'none';
 }
 
 // ---------------------------------------------------------------------------
-// 英字の語
+// Latin words
 // ---------------------------------------------------------------------------
 
 const LATIN_WORD = /[A-Za-z][A-Za-z0-9]+/g;
 
-/** 正解に出る英字の語（2 字以上）のうち、出力にも出た数。辞書がなくても、製品名や技術用語の書け方の目安になる */
+/** How many Latin words (2 or more letters) in the reference also appear in the output. A rough guide to how product names and technical terms are written, even without a dictionary */
 export function latinWordRecall(reference: string, output: string): { hit: number; total: number } {
   const out = normContent(output).join('');
   const words = reference.normalize('NFKC').match(LATIN_WORD) ?? [];
@@ -205,27 +205,27 @@ export function latinWordRecall(reference: string, output: string): { hit: numbe
 }
 
 // ---------------------------------------------------------------------------
-// LLM の整形の効き目
+// Effect of the LLM's formatting
 // ---------------------------------------------------------------------------
 
-/** 発話ごとの、整形の前（LLM なしの最終）と後（LLM ありの最終）の中身の誤り数 */
+/** Content edits per utterance before formatting (final without the LLM) and after (final with the LLM) */
 export interface BeforeAfter {
   before: number;
   after: number;
 }
 
 export interface LlmEffect {
-  /** 整形の前に中身が正しかった発話 */
+  /** Utterances whose content was correct before formatting */
   clean: number;
-  /** そのうち、整形の後に誤りができた発話（壊した） */
+  /** Of those, utterances with errors after formatting (broken) */
   broke: number;
-  /** 整形の前に誤りがあった発話 */
+  /** Utterances with errors before formatting */
   errored: number;
-  /** そのうち、整形の後に誤りが減った発話（良くした） */
+  /** Of those, utterances with fewer errors after formatting (improved) */
   improved: number;
-  /** そのうち、誤りが増えた発話 */
+  /** Of those, utterances with more errors */
   worsened: number;
-  /** そのうち、誤りがなくなった発話 */
+  /** Of those, utterances with no errors left */
   fixed: number;
 }
 

@@ -5,11 +5,11 @@ import CoreGraphics
 import Foundation
 import LonghandCore
 
-/// paste の実装: クリップボードの退避 → 書き込み → ⌘V の合成 → 着地確認 → 復元。
+/// Implements paste: save the clipboard → write → synthesize ⌘V → check the landing → restore.
 ///
-/// 本文は「遅延提供」（NSPasteboardItemDataProvider）で書き込む。こうすると、貼り付け先のアプリが
-/// 実際にクリップボードを読んだ瞬間が分かる。読まれたのを確かめてから復元するので、復元が早すぎて
-/// 元のクリップボードの内容が貼られる事故を減らせる。読まれないまま着地も確認できなければ ⌘V を 1 回だけ送り直す。
+/// The text is written with deferred data (NSPasteboardItemDataProvider). This tells us the moment the target app
+/// actually reads the clipboard. Restoring only after the read is confirmed makes it less likely that a restore comes too early
+/// and the old clipboard content gets pasted. If it is not read and the landing cannot be confirmed either, ⌘V is resent once.
 final class Paster: @unchecked Sendable {
     static let shared = Paster()
 
@@ -28,11 +28,11 @@ final class Paster: @unchecked Sendable {
 
     private func run(_ p: PastePayload, requestId: String?, receivedAt: Double) {
         let sw = Stopwatch()
-        // 新しい貼り付けは、前の監視を終わらせる
+        // A new paste ends the previous watch
         FieldWatcher.shared.cancel()
-        /// 最初の ⌘V を投入した時刻（遅延の計測用。hotkey の t と同じ時計）
+        /// When the first ⌘V was posted (for latency measurement; same clock as hotkey's t)
         var keyPostedAt: Double?
-        /// 貼り付け前の AX の読み取り（対象の確認、編集モードの照合、監視用の全文）にかかった時間
+        /// Time spent on AX reads before pasting (checking the target, matching for edit mode, the full text for watching)
         var preReadMs: Double?
 
         func ack(_ success: Bool, _ reason: String?, landed: String = "unknown", retried: Bool = false) {
@@ -66,7 +66,7 @@ final class Paster: @unchecked Sendable {
         }
 
         if let expected = p.expectSelectedText {
-            // 編集モード: 選択範囲が記録時と同じでなければ貼らない（読めない場合も、対象が変わったとみなす）
+            // Edit mode: do not paste unless the selection matches the one recorded (if it cannot be read, treat the target as changed)
             guard let el, !secure else { return ack(false, "edit_target_changed") }
             let current = AX.string(el, kAXSelectedTextAttribute) ?? {
                 guard let r = AX.range(el, kAXSelectedTextRangeAttribute), r.length > 0 else { return nil }
@@ -83,7 +83,7 @@ final class Paster: @unchecked Sendable {
         let readable = el != nil && !secure
         let verify = (p.verifyLanding ?? false) && readable
         let watchMs = min(max(0, p.watchMs ?? 0), 600_000)
-        // 監視（学習）のために、貼り付け直前の全文と貼り付け位置を読んでおく。読めなければ監視しない
+        // For watching (learning), read the full text and the paste position just before pasting. No watch if it cannot be read
         let beforeSnap = (watchMs > 0 && readable) ? FieldReader.snapshot(el!) : nil
         let inserted = segments.compactMap { seg -> String? in
             if case let .text(t) = seg { return t } else { return nil }
@@ -97,7 +97,7 @@ final class Paster: @unchecked Sendable {
         var verified = false
         var failure: String?
         var anyRead = false
-        // NSPasteboardItem はデータ提供者を強参照しないので、復元が終わるまでここで持っておく
+        // NSPasteboardItem does not hold its data provider strongly, so keep it here until the restore is done
         var keepAlive: [PasteboardProvider] = []
 
         segmentLoop: for seg in segments {
@@ -116,7 +116,7 @@ final class Paster: @unchecked Sendable {
                     var read = provider.waitForRead(timeoutMs: 300)
                     var ok = Self.waitForChange(el!, from: baseline, timeoutMs: read ? 300 : 120)
                     if PasteLanding.shouldResend(changed: ok, read: read) {
-                        // 貼り付け先が読んでいない＝⌘V が落ちた。1 回だけ送り直す
+                        // The target did not read it, so ⌘V was lost. Resend once
                         Log.info("paste \(p.pasteId): pasteboard not read and field unchanged; resending ⌘V")
                         retried = true
                         KeySynth.pressCommandV()
@@ -124,7 +124,7 @@ final class Paster: @unchecked Sendable {
                         ok = Self.waitForChange(el!, from: baseline, timeoutMs: 300)
                     }
                     anyRead = anyRead || read
-                    // 読まれたのに欄の変化が見えないのは、AX の更新が遅いアプリ（Electron など）によくある。失敗扱いにしない
+                    // Read but no visible change in the field is common in apps with slow AX updates (Electron and others). Do not treat it as a failure
                     landed = PasteLanding.classify(changed: ok, read: read).rawValue
                     if landed == PasteLanding.read.rawValue {
                         Log.info("paste \(p.pasteId): pasteboard was read but the field did not change visibly")
@@ -135,7 +135,7 @@ final class Paster: @unchecked Sendable {
                     anyRead = anyRead || read
                     if !read { Log.info("paste \(p.pasteId): pasteboard was not read within 800ms") }
                 }
-                // 読んだ直後に複数の型を読み直すアプリがあるので少し待つ
+                // Some apps reread several types right after reading, so wait a little
                 usleep(40_000)
             case let .key(press):
                 KeySynth.press(press)
@@ -145,7 +145,7 @@ final class Paster: @unchecked Sendable {
             }
         }
 
-        // 復元: 自分が書いた後に誰も書いていなければ戻す
+        // Restore: put it back if nobody else wrote after us
         if ownChangeCount != nil {
             Self.onMain {
                 let pb = NSPasteboard.general
@@ -178,7 +178,7 @@ final class Paster: @unchecked Sendable {
         }
     }
 
-    /// 欄の状態が baseline から変わるのを待つ
+    /// Waits for the field state to change from baseline
     static func waitForChange(_ el: AXUIElement, from baseline: FieldState, timeoutMs: Double) -> Bool {
         let deadline = Clock.nowMs() + timeoutMs
         repeat {
@@ -189,7 +189,7 @@ final class Paster: @unchecked Sendable {
         return false
     }
 
-    // MARK: - クリップボード（メインスレッドで呼ぶ）
+    // MARK: - Clipboard (call on the main thread)
 
     private static func writeText(_ text: String, markers: Bool) -> PasteboardProvider? {
         let pb = NSPasteboard.general
@@ -211,7 +211,7 @@ final class Paster: @unchecked Sendable {
     }
 }
 
-/// 遅延提供のデータ提供者。貼り付け先が読んだら合図する
+/// Deferred data provider. Signals when the target reads it
 final class PasteboardProvider: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
     let text: String
     var changeCount = 0
@@ -231,16 +231,16 @@ final class PasteboardProvider: NSObject, NSPasteboardItemDataProvider, @uncheck
 
     func pasteboardFinishedWithDataProvider(_ pasteboard: NSPasteboard) {}
 
-    /// 読まれたら true。すでに読まれていればすぐ返る
+    /// true once read. Returns at once if it has already been read
     func waitForRead(timeoutMs: Double) -> Bool {
         if readFlag.get() { return true }
         let r = readSignal.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
-        if r == .success { readSignal.signal() } // 次の wait でもすぐ返るように戻す
+        if r == .success { readSignal.signal() } // Put the signal back so the next wait also returns at once
         return r == .success || readFlag.get()
     }
 }
 
-/// クリップボードの全項目・全型の退避と復元
+/// Saves and restores every item and type on the clipboard
 struct PasteboardSnapshot: @unchecked Sendable {
     var items: [[(NSPasteboard.PasteboardType, Data)]] = []
 
@@ -274,13 +274,13 @@ struct PasteboardSnapshot: @unchecked Sendable {
     }
 }
 
-/// キー入力の合成。eventSourceUserData に印を付けて、自分の event tap が無視できるようにする
+/// Synthesizes key input. Marks eventSourceUserData so that our own event tap can ignore it
 ///
-/// セッション層に投入する。HID 層に投入すると、その後ろに並ぶ他のアプリの HID 層の tap（キーの割り当てを
-/// 変えるツールなど）を通り、⌘V が書き換えられることがある。フラグは指定の修飾キーちょうどにする
-/// （押したままの ⌃ などを混ぜない）。
+/// Posts at the session level. Posting at the HID level sends the event through other apps' HID-level taps queued after it
+/// (key remapping tools, for example), which can rewrite ⌘V. The flags are exactly the given modifiers
+/// (a held ⌃ or similar is not mixed in).
 enum KeySynth {
-    /// ⌘V を押す。押下を投入した時刻（Clock.nowMs() の基準）を返す
+    /// Presses ⌘V. Returns when the key down was posted (on the Clock.nowMs() base)
     @discardableResult
     static func pressCommandV() -> Double {
         let code = Self.onMainLayoutKeyCode(for: "v") ?? CGKeyCode(kVK_ANSI_V)
@@ -314,7 +314,7 @@ enum KeySynth {
 
     nonisolated(unsafe) private static var layoutCache: (id: String, map: [Character: CGKeyCode])?
 
-    /// いまのキーボード配列で、⌘ を押しながら打つと文字 c になるキーコード（Dvorak などに対応）
+    /// The key code that types the character c with ⌘ held in the current keyboard layout (handles Dvorak and others)
     static func onMainLayoutKeyCode(for c: Character) -> CGKeyCode? {
         Paster.onMain { layoutKeyCode(for: c) }
     }

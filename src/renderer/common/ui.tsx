@@ -47,7 +47,7 @@ export function Section({ title, description, children, actions }: { title: stri
   );
 }
 
-/** Row の見出しを、その中のスイッチの読み上げ名にする（X1） */
+/** Uses the Row label as the accessible name of the switch inside it (X1) */
 const RowLabel = createContext<string | undefined>(undefined);
 
 export function Row({ label, hint, children, vertical }: { label: ReactNode; hint?: ReactNode; children?: ReactNode; vertical?: boolean }) {
@@ -96,11 +96,11 @@ export function Select<T extends string>({ value, options, onChange, className }
   );
 }
 
-/** 幅を持たない入力欄の見た目。幅は呼び出し側で決める */
+/** Look of a text field without a width. The caller sets the width */
 export const inputBase = 'rounded-md border-0 bg-black/[0.05] px-2.5 py-1.5 text-[13px] outline-none ring-blue-500/50 placeholder:text-neutral-400 focus:ring-2 dark:bg-white/10';
 export const inputClass = `${inputBase} w-full`;
 
-/** 入力が確定したとき（blur か Enter）にだけ保存するテキスト入力 */
+/** Text field that saves only when the input is committed (blur or Enter) */
 export function TextField({
   value,
   onCommit,

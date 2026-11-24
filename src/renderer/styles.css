@@ -13,7 +13,7 @@ body {
   height: 100%;
 }
 
-/* ------------------------------------------------------------------ フローティングバー */
+/* ------------------------------------------------------------------ Floating bar */
 body.floater {
   background: transparent;
   overflow: hidden;
@@ -67,7 +67,7 @@ body.floater {
   }
 }
 
-/* マイクの音が届くまでの控えめな点（F1） */
+/* Subdued dot shown until sound arrives from the microphone (F1) */
 .rec-dot-wait {
   width: 7px;
   height: 7px;
@@ -76,7 +76,7 @@ body.floater {
   opacity: 0.6;
 }
 
-/* 音声認識の準備中の待機バー（N12） */
+/* Waiting bar while speech recognition is getting ready (N12) */
 .preparing {
   animation: preparing 1.6s ease-in-out infinite;
 }
@@ -104,7 +104,7 @@ body.floater {
   }
 }
 
-/* 編集の指示が分からなかったとき（F6） */
+/* When the edit instruction was not understood (F6) */
 .shake {
   animation: shake 0.45s ease-in-out;
 }
@@ -123,12 +123,12 @@ body.floater {
   }
 }
 
-/* 貼り付けの成功（F5） */
+/* Successful paste (F5) */
 .flash-in {
   animation: hud-in 160ms ease-out;
 }
 
-/* 1 行の通知（N1） */
+/* One-line notification (N1) */
 .hud-pill {
   background: rgba(28, 28, 32, 0.92);
   backdrop-filter: blur(20px) saturate(1.5);
@@ -139,7 +139,7 @@ body.floater {
   animation: hud-in 180ms ease-out;
 }
 
-/* 動きを減らす設定（X1） */
+/* Reduce motion setting (X1) */
 @media (prefers-reduced-motion: reduce) {
   .rec-dot,
   .preparing,
@@ -185,7 +185,7 @@ body.floater {
   }
 }
 
-/* ------------------------------------------------------------------ 管理ウィンドウ */
+/* ------------------------------------------------------------------ Management window */
 body.management {
   background: transparent;
   color: #1f2328;

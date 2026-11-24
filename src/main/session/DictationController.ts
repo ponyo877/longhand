@@ -6,6 +6,8 @@ import { isAsrCancelled, type AsrService, type TranscribeOptions } from '../asr/
 import { isNoSpeechByLevel, Segmenter, WHOLE_MAX_SEC } from '../asr/Segmenter';
 import { joinTexts } from '../format/postprocess';
 import type { HelperClient } from '../helper/HelperClient';
+import type { MessageKey } from '../../shared/i18n';
+import { t } from '../i18n';
 import { applyLearning } from '../learn/apply';
 import { learnFromWatchDetailed } from '../learn/Learner';
 import type { LlmProvider } from '../llm/types';
@@ -29,34 +31,34 @@ import { postAsr, TERMINAL_BUNDLES } from './postAsr';
 const log = createLogger('session');
 
 const SR = 16000;
-/** 停止から結果を貼るまでの期限。これを過ぎた結果は履歴だけに残す */
+/** Deadline from stop to pasting the result. Results past it are only kept in the history */
 const STALE_MS = 120_000;
-/** 届いている音声の末尾がこれだけ無音なら、離した後の残りの音声を待たずに進む（先回りの書き起こしを始める無音の長さと同じ） */
+/** If the audio received so far ends with this much silence, go on without waiting for the rest after release (same as the silence that starts speculative transcription) */
 const TAIL_SKIP_QUIET_SEC = 0.3;
-/** 届いている音声の末尾がこれ以上無音なら、キーを離した後の録音（asr.tailMs）を続けない（話し終えている） */
+/** If the audio received so far ends with at least this much silence, do not keep recording after release (asr.tailMs): the user has finished speaking */
 const POST_ROLL_SKIP_QUIET_SEC = 1.0;
-/** 編集モードで扱う選択範囲の上限 */
+/** Maximum selection length handled in edit mode */
 const EDIT_MAX_CHARS = 6000;
-/** 取り消した録音でも、これより長ければ履歴と音声を残す（誤って取り消したときに戻れるように） */
+/** A canceled recording longer than this is still kept in the history with its audio (so an accidental cancel can be recovered) */
 const KEEP_CANCELLED_SAMPLES = 2 * SR;
-/** 投機的な書き起こしをやり直すのは、前回の範囲から音声がこれだけ増えたときだけ（GPU の負荷を抑える） */
+/** Speculative transcription is redone only when the audio has grown this much since the last range (to keep GPU load down) */
 const SPEC_MIN_NEW_SAMPLES = 1 * SR;
-/** 最初の音声が届かなくても、開始音はこの時間で鳴らす */
+/** Play the start sound after this time even if no audio has arrived */
 const START_SOUND_FALLBACK_MS = 600;
-/** 録音開始からこの長さの間、ピークがずっと小さければ「マイクから音が届いていない」と知らせる */
+/** If the peak stays low for this long after recording starts, report that no sound is coming from the microphone */
 const NO_SIGNAL_CHECK_SAMPLES = 2.5 * SR;
 const NO_SIGNAL_PEAK = 0.0005;
-/** 確定するときに ASR が準備中なら、ここまで待つ */
+/** How long to wait when ASR is still getting ready at finalization */
 const ASR_READY_WAIT_MS = 10_000;
-/** 前の録音の結果を貼る前に、新しい録音の文脈（貼り付け先のアプリ）が届くのを待つ時間 */
+/** Before pasting the previous recording's result, how long to wait for the newer recording's context (the target app) */
 const NEWER_CONTEXT_WAIT_MS = 300;
-/** ロックせずにこれだけ押し続けたら、ロックのやり方を案内する */
+/** After holding this long without locking, show how to lock */
 const HOLD_LONG_HINT_SAMPLES = 40 * SR;
-/** 語彙ヒントと辞書の照合の得点に使う、最近の書き起こしの件数 */
+/** Number of recent transcripts used to score vocabulary hints and dictionary matching */
 const RECENT_FOR_VOCAB = 100;
 /**
- * 貼り付けの着地確認をしないアプリ（PST-3）。ターミナルは画面の文字全体が値なので出力が流れると着地と誤認し、
- * リモートデスクトップと仮想マシンは手元から欄が読めないので、確かめても誤報になる
+ * Apps where the paste landing check is skipped (PST-3). In a terminal the whole screen text is the value, so scrolling output looks like a landing;
+ * remote desktops and virtual machines have fields that cannot be read locally, so a check would only give false alarms
  */
 const NO_LANDING_CHECK_BUNDLES = new Set([
   ...TERMINAL_BUNDLES,
@@ -83,8 +85,23 @@ export interface UiPort {
   level(rms: number): void;
   hud(key: NotificationKey, vars?: Record<string, string>, actions?: { id: string; label: string; run: () => void }[]): void;
   sound(name: SoundName): void;
-  /** LLM の接続先へ事前に接続しておく（TLS の握手を録音中に済ませる） */
+  /** Connects to the LLM endpoint in advance (finishing the TLS handshake while recording) */
   preconnect(): void;
+}
+
+/** Why a paste failed, for the PasteFailed notification. A code the helper adds later is shown as it is */
+const PASTE_FAILURE: Record<NonNullable<PasteAckPayload['failureReason']>, MessageKey> = {
+  edit_target_changed: 'engine.paste.editTargetChanged',
+  app_changed: 'engine.paste.appChanged',
+  no_text_target: 'engine.paste.noTextTarget',
+  secure_field: 'engine.paste.secureField',
+  pasteboard_error: 'engine.paste.pasteboardError',
+  not_trusted: 'engine.paste.notTrusted',
+};
+
+function pasteFailureText(reason: PasteAckPayload['failureReason']): string {
+  const key = reason ? PASTE_FAILURE[reason] : undefined;
+  return key ? t(key) : (reason ?? '');
 }
 
 /** The parts of the helper the controller uses. The end-to-end self-test passes its own (selftest/virtualInput.ts) */
@@ -106,9 +123,9 @@ export interface ControllerDeps {
   history: HistoryStore;
   recordings: RecordingStore;
   ui: UiPort;
-  /** 設定から LlmProvider を作る。未設定や skipLlm なら null */
+  /** Creates an LlmProvider from the settings. null when not set up or with skipLlm */
   provider: () => LlmProvider | null;
-  /** textfix の単語分割。読み込み中か使えなければ null（単語分割を使う規則だけを飛ばす） */
+  /** Tokenizer for textfix. null while loading or when unavailable (only the rules that need it are skipped) */
   tokenizer?: () => Tokenizer | null;
 }
 
@@ -118,17 +135,17 @@ interface Segment {
   text: Promise<string>;
 }
 
-/** 話の間で先に書き起こした結果（投機的な書き起こし） */
+/** A result transcribed ahead of time during a pause (speculative transcription) */
 interface Speculation {
-  /** 書き起こした範囲の終わり（サンプル）。範囲は録音の先頭から */
+  /** End of the transcribed range (in samples). The range starts at the beginning of the recording */
   end: number;
   abort: AbortController;
   promise: Promise<AsrResultPayload>;
-  /** 後から何か話したので、この結果は使えない */
+  /** The user said something afterwards, so this result cannot be used */
   invalid: boolean;
 }
 
-/** 区間の計測に使う時刻（ms エポック） */
+/** Times used to measure stages (ms since the epoch) */
 interface Marks {
   stopped?: number;
   asrDone?: number;
@@ -137,7 +154,7 @@ interface Marks {
   keyPosted?: number;
   ack?: number;
   pasteWaitMs?: number;
-  /** ヘルパーが貼り付け前の AX の読み取りにかけた時間（ms） */
+  /** Time the helper spent reading AX before pasting (ms) */
   preReadMs?: number;
 }
 
@@ -150,53 +167,53 @@ interface Session {
   contextPromise: Promise<ContextPayload | null>;
   segmenter: Segmenter;
   segments: Segment[];
-  /** 書き起こさずに飛ばした区切りがあるか（あれば最後に全体を書き起こす） */
+  /** Whether any segment was skipped without transcription (if so, the whole recording is transcribed at the end) */
   segmentSkipped: boolean;
   audio: 'starting' | 'running' | 'failed' | 'stopped';
   device?: { name: string; transport: string };
   abort: AbortController;
   cancelled: boolean;
   stoppedAt?: number;
-  /** 確定処理が終わったら解決する（貼り付けを録音の順に並べるのに使う） */
+  /** Resolves when finalization is done (used to paste in recording order) */
   done: Promise<void>;
   resolveDone: () => void;
-  /** 履歴に残したか */
+  /** Whether it was saved to the history */
   finished: boolean;
-  /** 書き起こしの結果（取り消したときに履歴へ残すため） */
+  /** The transcript (to save it in the history when canceled) */
   rawText?: string;
   spec?: Speculation;
   specResult?: 'hit' | 'miss';
-  /** 最初の音声チャンクが届いた時刻 */
+  /** Time the first audio chunk arrived */
   firstChunkAt?: number;
-  /** まだ鳴らしていない開始音 */
+  /** Start sound not played yet */
   pendingSound: SoundName | null;
   startSoundTimer?: NodeJS.Timeout;
-  /** 録音開始からの最大振幅（マイクから音が届いているかの判定用） */
+  /** Peak amplitude since recording started (to tell whether sound is coming from the microphone) */
   peak: number;
   noSignalChecked: boolean;
-  /** ヘルパーのイベント時刻と main の時計の差の最小値（キーを離してから届くまでの時間の推定に使う） */
+  /** Smallest difference between the helper's event times and main's clock (used to estimate the delay from key release to arrival) */
   clockOffset?: number;
   releaseLagMs?: number;
-  /** キーを離した後も録音を続けた時間（続けたときだけ） */
+  /** How long recording continued after the key was released (only when it did) */
   postRollMs?: number;
-  /** 音声認識が聞き違えたかもしれない箇所（丸ごと書き起こしたときだけ） */
+  /** Spots speech recognition may have misheard (only when transcribed as a whole) */
   uncertain?: Uncertain[];
   marks: Marks;
-  /** 利用者の操作でなく取り消した（エラーなど）。取り消しの通知を出さない */
+  /** Canceled for a reason other than the user (an error, for example). No cancel notification is shown */
   cancelSilent?: boolean;
-  /** ロックの案内を出したか */
+  /** Whether the lock hint was shown */
   holdHintShown?: boolean;
-  /** ASR に渡した語彙ヒントのうち、プロンプトに入った数と渡した数（ワーカーが報告したとき） */
+  /** Of the vocabulary hints passed to ASR, how many made it into the prompt and how many were passed (when the worker reports them) */
   hints?: { used?: number; given: number };
-  /** 書き起こし（rawText）の文字ごとの確信度。丸ごと書き起こしたときだけ（区切って書き起こした長い録音では null） */
+  /** Per-character confidence of the transcript (rawText). Only when transcribed as a whole (null for long recordings transcribed in segments) */
   confidence?: Confidence | null;
-  /** 中身の字の確信度の最小値（ログに出して、LLM に回す基準を見直すときの手がかりにする） */
+  /** Lowest confidence of the content characters (logged, as a clue for revisiting the threshold for sending to the LLM) */
   minConfidence?: number | null;
 }
 
 function decodePcm(b64: string): Float32Array {
   const buf = Buffer.from(b64, 'base64');
-  // Buffer のプールのずれを避けるため、新しい ArrayBuffer にコピーする
+  // Copy into a new ArrayBuffer to avoid the offset of Buffer's pool
   const ab = new ArrayBuffer(buf.byteLength);
   new Uint8Array(ab).set(buf);
   return new Float32Array(ab);
@@ -206,25 +223,25 @@ const delay = (ms: number) => new Promise<null>((r) => setTimeout(() => r(null),
 const nonEmpty = <T>(list: T[]): T[] | undefined => (list.length ? list : undefined);
 
 /**
- * 音声入力の 1 回分を最初から最後まで受け持つ（セッションの状態機械）。
+ * Handles one dictation from start to finish (the session state machine).
  *
- * リース ID は録音のたびに増える。ASR、LLM、貼り付けの結果は開始時のリース ID を持ち回る。
- * 前の録音の確定中に次の録音を始めたら、貼り付けは録音の順に行う（前の結果を先に貼る）。
- * 次の録音が別のアプリ向けか編集モードなら、前の結果は貼らずに履歴だけに残す。
+ * The lease ID goes up with every recording. ASR, LLM and paste results carry the lease ID from the start.
+ * If a new recording starts while the previous one is finalizing, pastes happen in recording order (the previous result first).
+ * If the new recording targets another app or is in edit mode, the previous result is not pasted and is only kept in the history.
  */
 export class DictationController {
   private lease = 0;
-  /** 録音中のセッション（1 つだけ） */
+  /** The session being recorded (only one) */
   private recording: Session | null = null;
-  /** 確定処理中のセッション */
+  /** Sessions being finalized */
   private finalizing = new Set<Session>();
   private readonly interpreter: HotkeyInterpreter;
   private devices: AudioDevice[] = [];
-  /** 貼り付けの後の手直しを待っている貼り付け。rawText は整形の前の書き起こし（整形の書き換えを戻した手直しを見分けるのに使う） */
+  /** Pastes waiting for corrections after pasting. rawText is the transcript before formatting (used to spot corrections that undo formatting changes) */
   private pendingWatches = new Map<string, { inserted: string; rawText: string }>();
   private shownHandsFreeInfo = false;
   private shownBluetoothInfo = false;
-  /** 処理中のホットキーのイベント（ヘルパーの時刻 t と、main が受け取った時刻） */
+  /** The hotkey event being handled (the helper's time t and the time main received it) */
   private currentHotkey: { t: number; at: number } | null = null;
 
   constructor(private readonly d: ControllerDeps) {
@@ -237,11 +254,11 @@ export class DictationController {
     d.helper.on('exit', () => this.onHelperExit());
   }
 
-  /** 録音中にヘルパーが落ちたら、離す操作はもう届かないので、ここで録音を閉じる */
+  /** If the helper crashes while recording, the release will never arrive, so close the recording here */
   private onHelperExit(): void {
     const r = this.recording;
     if (!r) return;
-    log.warn('録音中にヘルパーが終了しました');
+    log.warn('the helper exited while recording');
     r.audio = 'failed';
     if (r.segmenter.length > SR) {
       this.d.ui.hud('HelperCrashed');
@@ -252,7 +269,7 @@ export class DictationController {
   }
 
   // -------------------------------------------------------------------------
-  // 入力
+  // Input
   // -------------------------------------------------------------------------
 
   private onHelperMessage(m: HelperToMain): void {
@@ -284,7 +301,7 @@ export class DictationController {
     }
   }
 
-  /** フローティングバーのボタンやトレイからの操作 */
+  /** Actions from the floating bar's buttons or the tray */
   uiAction(action: 'start' | 'finish' | 'cancel' | 'toggle'): void {
     if (action === 'start') {
       if (!this.recording) this.exec({ kind: 'start', locked: true });
@@ -319,7 +336,7 @@ export class DictationController {
   }
 
   // -------------------------------------------------------------------------
-  // 状態の同期
+  // State sync
   // -------------------------------------------------------------------------
 
   private pttState(): PttState {
@@ -336,7 +353,7 @@ export class DictationController {
       this.d.ui.floater({
         phase: r.ptt === 'locked' ? 'locked' : 'recording',
         mode: r.mode,
-        // 空白を除いた文字数（改行やインデントの多い選択で、実際より多く見えないように）
+        // Characters without whitespace (so a selection with many line breaks or indents does not look longer than it is)
         selectionChars: r.mode === 'edit' ? (r.context?.field?.selectedText?.match(/\S/gu) ?? []).length : 0,
         startedAt: r.startedAt,
         stage: undefined,
@@ -357,7 +374,7 @@ export class DictationController {
   }
 
   // -------------------------------------------------------------------------
-  // 録音
+  // Recording
   // -------------------------------------------------------------------------
 
   private chooseDevice(): string | null {
@@ -366,7 +383,7 @@ export class DictationController {
     const usable = this.devices.filter((x) => !excluded.has(x.id) && !x.isVirtual);
     if (s.microphoneId && usable.some((x) => x.id === s.microphoneId)) return s.microphoneId;
     const def = this.devices.find((x) => x.isDefault);
-    if (!def || (!excluded.has(def.id) && !def.isVirtual)) return null; // システム既定
+    if (!def || (!excluded.has(def.id) && !def.isVirtual)) return null; // system default
     return usable[0]?.id ?? null;
   }
 
@@ -375,12 +392,12 @@ export class DictationController {
       const res = await this.d.helper.request<{ devices: AudioDevice[] }>('list_audio_devices', {}, 3000);
       this.devices = res.devices;
     } catch (e) {
-      log.warn('マイクの一覧を取得できませんでした', e);
+      log.warn('could not get the list of microphones', e);
     }
     return this.devices;
   }
 
-  /** マイクの接続の通知は main が出す（「マイクが見つかりません」の表示中だけ。使わない機器が増えたときには出さない） */
+  /** main shows the microphone-connected notification (only while “No microphone found” is shown; not when an unused device appears) */
   private onDevicesChanged(devices: AudioDevice[]): void {
     this.devices = devices;
   }
@@ -421,7 +438,7 @@ export class DictationController {
     session.segmenter.onPause = (end) => this.maybeSpeculate(session, end);
     this.recording = session;
     this.sync();
-    // 開始音はマイクから最初の音声が届いた時点で鳴らす（届く前に話し始めて頭が切れるのを防ぐ）。届かなくても一定時間で鳴らす
+    // Play the start sound when the first audio arrives from the microphone (so the user does not start speaking early and get cut off). Play it after a set time even if none arrives
     if (s.playSounds) {
       session.pendingSound = locked ? 'lock' : 'start';
       session.startSoundTimer = setTimeout(() => this.playStartSound(session), START_SOUND_FALLBACK_MS);
@@ -429,7 +446,7 @@ export class DictationController {
     if (locked) this.handsFreeInfo();
     this.d.ui.preconnect();
 
-    // 録音の開始
+    // Start recording
     this.d.helper
       .startAudio(lease, this.chooseDevice(), 4000)
       .then((res) => {
@@ -442,7 +459,7 @@ export class DictationController {
         }
       })
       .catch((e) => {
-        log.error('録音を開始できませんでした', e);
+        log.error('could not start recording', e);
         session.audio = 'failed';
         if (this.recording === session) {
           this.d.ui.hud('MicrophoneError', { reason: (e as Error).message });
@@ -450,7 +467,7 @@ export class DictationController {
         }
       });
 
-    // 文脈の取得（編集モードの判定、整形、学習に使う）
+    // Get the context (used to decide edit mode, for formatting and for learning)
     session.contextPromise = this.d.helper
       .request<ContextPayload>('get_context', { includeField: true, includeHost: s.sendAppContext, maxContextChars: 1000 }, 1200)
       .then((ctx) => {
@@ -472,7 +489,7 @@ export class DictationController {
         return ctx;
       })
       .catch((e) => {
-        log.warn('文脈を取得できませんでした', e);
+        log.warn('could not get the context', e);
         return null;
       });
   }
@@ -502,7 +519,7 @@ export class DictationController {
     if (!r || r.ptt === 'locked') return;
     r.ptt = 'locked';
     if (this.d.settings.get().playSounds) {
-      // まだ開始音を鳴らしていなければ、ロックの音だけを鳴らす
+      // If the start sound has not played yet, play only the lock sound
       this.dropStartSound(r);
       this.d.ui.sound('lock');
     }
@@ -517,11 +534,11 @@ export class DictationController {
     const target = r && r.lease === p.sessionId ? r : [...this.finalizing].find((x) => x.lease === p.sessionId && x.audio !== 'stopped');
     if (!target) return;
     if (target.audio === 'starting') target.audio = 'running';
-    // ここで話の間が見つかれば、投機的な書き起こしが始まる（onPause）
+    // A pause found here starts speculative transcription (onPause)
     target.segmenter.push(decodePcm(p.pcm));
     const spec = target.spec;
     if (spec && !spec.invalid && target.segmenter.speechAfter(spec.end)) {
-      // 先に書き起こした範囲の後で話したので、その結果は使えない。処理中なら止めて GPU を空ける
+      // The user spoke after the range transcribed ahead, so that result cannot be used. Stop it if still running to free the GPU
       spec.invalid = true;
       spec.abort.abort();
     }
@@ -539,8 +556,8 @@ export class DictationController {
     r.peak = Math.max(r.peak, p.peak ?? 0);
     if (!r.noSignalChecked && r.segmenter.length >= NO_SIGNAL_CHECK_SAMPLES) {
       r.noSignalChecked = true;
-      // 録音は続ける（ミュートを外せば、そのまま話せる）
-      if (r.peak < NO_SIGNAL_PEAK) this.d.ui.hud('MicNoSignal', { micParen: r.device ? `（${r.device.name}）` : '' });
+      // Keep recording (after unmuting, the user can just go on speaking). main adds the microphone name to the message
+      if (r.peak < NO_SIGNAL_PEAK) this.d.ui.hud('MicNoSignal', { mic: r.device?.name ?? '' });
     }
     if (now - this.lastLevelAt >= 40) {
       this.lastLevelAt = now;
@@ -552,27 +569,27 @@ export class DictationController {
     const r = this.recording;
     if (p.sessionId !== null && r && r.lease !== p.sessionId) return;
     if (!p.fatal && r) {
-      // ヘルパーは既定のマイクに切り替えて録音を続けている
-      log.warn(`録音中にマイクが切り替わりました: ${p.code} ${p.message}`);
+      // The helper has switched to the default microphone and keeps recording
+      log.warn(`microphone switched while recording: ${p.code} ${p.message}`);
       this.d.ui.hud('MicrophoneSwitched', { reason: p.message });
       return;
     }
-    log.error(`録音のエラー: ${p.code} ${p.message}`);
+    log.error(`recording error: ${p.code} ${p.message}`);
     const key: NotificationKey = p.code === 'permission_denied' ? 'MicPermissionDenied' : p.code === 'no_device' ? 'NoMicrophone' : p.code === 'device_lost' ? 'MicrophoneLost' : 'MicrophoneError';
     this.d.ui.hud(key, { reason: p.message });
     if (r && p.fatal) {
       r.audio = 'failed';
-      // 切断や音声の途絶（Bluetooth の不調など）までに録れた分は書き起こす
+      // Transcribe what was recorded before a disconnect or an audio dropout (Bluetooth trouble, for example)
       if ((p.code === 'device_lost' || p.code === 'engine_failed') && r.segmenter.length > SR) void this.stop();
       else this.cancel(true);
     }
   }
 
-  /** 録音中に区切りができたら、先に書き起こしておく */
+  /** When a segment ends during recording, transcribe it ahead of time */
   private onSegment(s: Session, start: number, end: number): void {
     const cfg = this.d.settings.get();
     if (!cfg.asr.incremental || !this.d.asr.ready) {
-      // 区切りの位置は進んでしまうので、最後に録音全体を書き起こす
+      // The segment position has already moved on, so transcribe the whole recording at the end
       s.segmentSkipped = true;
       return;
     }
@@ -583,7 +600,7 @@ export class DictationController {
       if (s.cancelled) return '';
       const hints = this.hintsFor(s.context);
       const context = prompt.slice(-200) || undefined;
-      // 区間ごとの書き起こしでは、プロンプトの組み立てだけを使う（聞き直しと別候補は、丸ごとの書き起こしでだけ使う）
+      // Per-segment transcription uses only the prompt building (re-hearing and alternatives are used only when transcribing as a whole)
       const res = await this.transcribe(
         audio,
         (h) => ({
@@ -603,24 +620,24 @@ export class DictationController {
   }
 
   /**
-   * 語彙ヒントの使い方（設定の asr.hintMode）に従って書き起こす。build は、渡した語をヒントにした指定を作る関数。
-   * selective で、ヒントがあるときは、ヒントなしとヒントありの 2 回書き起こして、ヒントが効いた所だけを取り込む
+   * Transcribes following how vocabulary hints are used (asr.hintMode in the settings). build makes the options with the given words as hints.
+   * With selective and some hints, transcribes twice, without and with hints, and takes only the spots where the hints helped
    */
   private transcribe(samples: Float32Array, build: (hints: string[]) => TranscribeOptions, hints: string[]): Promise<AsrResultPayload> {
     if (this.d.settings.get().asr.hintMode !== 'selective' || !hints.length) return this.d.asr.transcribe(samples, build(hints));
     return transcribeSelective((opts) => this.d.asr.transcribe(samples, opts), build(hints), build([]));
   }
 
-  /** 録音全体を書き起こす（投機と確定で同じ指定を使い、結果を入れ替えられるようにする） */
+  /** Transcribes the whole recording (speculation and finalization use the same options, so their results are interchangeable) */
   private transcribeAll(s: Session, samples: Float32Array, durationMs: number, signal: AbortSignal): Promise<AsrResultPayload> {
     return this.transcribe(samples, (h) => this.wholeOptions(s, durationMs, signal, h), this.hintsFor(s.context));
   }
 
-  /** 録音全体を 1 回で書き起こすときの指定 */
+  /** Options for transcribing the whole recording in one pass */
   private wholeOptions(s: Session, durationMs: number, signal: AbortSignal, hints: string[]): TranscribeOptions {
     const cfg = this.d.settings.get();
     const extras = asrRequestExtras(cfg.asr, hints);
-    // 聞き直しは、1 回につき書き起こし 1 回分の時間がかかる
+    // Each re-hearing pass takes as long as one transcription
     const passes = 1 + (extras.rehear ? (extras.rehear.noHints ? 1 : 0) + (extras.rehear.temperatures?.length ?? 0) : 0);
     return {
       language: cfg.language,
@@ -632,8 +649,8 @@ export class DictationController {
   }
 
   /**
-   * 入力先の画面の文（入力欄のカーソルの前後と、ウィンドウのタイトル）から拾った、名前らしい英字の語。
-   * パスワード欄の文字は使わない。辞書にある語は除く
+   * Latin-letter words that look like names, picked from the text on the target screen (around the cursor in the input field, and the window title).
+   * Text from password fields is not used. Words already in the dictionary are left out
    */
   private contextTerms(ctx: ContextPayload | null): string[] {
     if (!ctx) return [];
@@ -642,8 +659,8 @@ export class DictationController {
   }
 
   /**
-   * その発話で音声認識に渡す語。辞書の語（得点順）を先に、画面の文から拾った語（設定の asr.screenTerms がオンのとき）を後に並べる。
-   * 画面の語は、その発話のあいだだけ使う（辞書には入れない）
+   * Words passed to speech recognition for this utterance. Dictionary words (by score) come first, then words picked from the screen text (when asr.screenTerms is on).
+   * Screen words are used only for this utterance (they are not added to the dictionary)
    */
   private hintsFor(ctx: ContextPayload | null): string[] {
     const hints = this.d.customizations.asrHints(this.vocabContext(ctx));
@@ -653,8 +670,8 @@ export class DictationController {
   }
 
   /**
-   * 語彙ヒントと辞書の照合で、語に得点を付けるための文脈（入力先と最近の書き起こし。G4-09、G4-10）。
-   * 入力欄の文字はパスワード欄でないときだけ使う。文脈がまだ届いていなければ、最近の書き起こしだけで付ける
+   * Context for scoring words in vocabulary hints and dictionary matching (the input target and recent transcripts; G4-09, G4-10).
+   * Input field text is used only outside password fields. If the context has not arrived yet, scoring uses recent transcripts only
    */
   private vocabContext(ctx: ContextPayload | null): { context: HintContext; recent: RecentText[] } {
     const context: HintContext = {};
@@ -671,9 +688,9 @@ export class DictationController {
   }
 
   /**
-   * 話の間（発話の後の 0.3 秒の無音）で、そこまでの録音全体を先に書き起こしておく。
-   * 離すまで何も話さなければ、離した後の書き起こしを待たずにこの結果を使う。
-   * ASR が空いているときだけ始め、前回の範囲から 1 秒以上増えたときだけやり直す。
+   * At a pause (0.3 seconds of silence after speech), transcribes the whole recording so far ahead of time.
+   * If nothing more is said before release, this result is used without waiting for transcription after release.
+   * Starts only when ASR is idle, and redoes it only when at least 1 second has been added since the last range.
    */
   private maybeSpeculate(s: Session, end: number): void {
     if (s !== this.recording || s.cancelled) return;
@@ -690,7 +707,7 @@ export class DictationController {
   }
 
   // -------------------------------------------------------------------------
-  // 停止と確定
+  // Stop and finalize
   // -------------------------------------------------------------------------
 
   private async stop(): Promise<void> {
@@ -701,21 +718,21 @@ export class DictationController {
     s.stoppedAt = Date.now();
     const hk = this.currentHotkey;
     if (hk && s.clockOffset !== undefined) {
-      // ヘルパーの時計（起動からの時間）と main の時計の差は、一番早く届いたイベントで決まるとみなす
+      // Take the difference between the helper's clock (time since boot) and main's clock from the event that arrived fastest
       const offset = hk.at - hk.t;
       s.releaseLagMs = Math.max(0, Math.round(offset - Math.min(s.clockOffset, offset)));
     }
     this.dropStartSound(s);
     this.finalizing.add(s);
     this.sync();
-    // 長い録音では開始時の事前接続が閉じられていることがある。書き起こしの間に接続し直しておく
+    // After a long recording the connection made at the start may have closed. Reconnect during transcription
     this.d.ui.preconnect();
     const cfg = this.d.settings.get();
     if (cfg.playSounds) this.d.ui.sound('stop');
     try {
       await this.runPipeline(s);
     } catch (e) {
-      log.error('音声入力の処理で予期しないエラー', e);
+      log.error('unexpected error while processing dictation', e);
       this.d.ui.hud('AsrFailed', { reason: (e as Error).message });
     } finally {
       if (s.cancelled && this.saveCancelled(s) && !s.cancelSilent) this.d.ui.hud('Cancelled');
@@ -737,11 +754,11 @@ export class DictationController {
       r.audio = 'stopped';
       r.stoppedAt = Date.now();
       this.dropStartSound(r);
-      // 履歴に残したら知らせる（回数の上限と「履歴を開く」は main が付ける）
+      // Notify when saved to the history (main adds the display limit and “Open History”)
       if (this.saveCancelled(r) && !silent) this.d.ui.hud('Cancelled');
       r.resolveDone();
     }
-    // 確定処理中のものも取り消す（Esc は直近の操作を取り消す）。書き起こし中の ASR も止まる
+    // Also cancel sessions being finalized (Esc cancels the latest action). ASR in progress stops too
     if (!r) {
       for (const f of this.finalizing) {
         f.cancelled = true;
@@ -760,7 +777,7 @@ export class DictationController {
     try {
       await this.d.helper.stopAudio(s.lease, 2000);
     } catch (e) {
-      log.warn('録音の停止を確認できませんでした', e);
+      log.warn('could not confirm that recording stopped', e);
     }
     s.audio = 'stopped';
   }
@@ -768,15 +785,15 @@ export class DictationController {
   private async runPipeline(s: Session): Promise<void> {
     const cfg = this.d.settings.get();
     const t0 = s.stoppedAt ?? Date.now();
-    // 話し終えてから離した（届いている音声の末尾が無音）なら、離した瞬間までの残りの音声を待たない。
-    // ヘルパーは残りを集めるのに 0.1 秒ほど待ってから録音を止めるが、その分はどうせ無音である。
-    // 止める要求は送り、返事だけを待たない。後から届く音声は、ここで取り出した samples には入らない
+    // If the user released after finishing speaking (the audio received so far ends in silence), do not wait for the rest of the audio up to the release.
+    // The helper waits about 0.1 seconds to collect the rest before stopping, but that part is silence anyway.
+    // Send the stop request, just do not wait for the reply. Audio that arrives later is not in the samples taken here
     const seg = s.segmenter;
     const quietSec = seg.lastLoudEnd > 0 ? (seg.length - seg.lastLoudEnd) / SR : 0;
     const tailMs = Math.max(0, Math.min(1000, cfg.asr.tailMs ?? 0));
     if (tailMs > 0) {
-      // 話し終わりとほぼ同時にキーを離すと、文末の音が録音に入りきらない。離した後もしばらく録音を続け、
-      // 止めるときはヘルパーに残っている音声も受け取る（文末の小さな音を捨てない）
+      // Releasing the key right as speech ends cuts off the end of the sentence. Keep recording for a while after release,
+      // and take the audio still in the helper when stopping (so quiet sounds at the end are not dropped)
       if (s.audio === 'running' && quietSec < POST_ROLL_SKIP_QUIET_SEC && !s.cancelled) {
         await delay(tailMs);
         s.postRollMs = tailMs;
@@ -790,11 +807,11 @@ export class DictationController {
     const samples = s.segmenter.all();
     const durationMs = (samples.length / SR) * 1000;
     if (durationMs < cfg.minRecordingMs) {
-      log.info(`短すぎる録音を破棄しました（${Math.round(durationMs)}ms）`);
+      log.info(`discarded a recording that was too short (${Math.round(durationMs)}ms)`);
       return;
     }
 
-    // 無音の判定（REC-5）
+    // Silence check (REC-5)
     const stats = s.segmenter.stats();
     if (stats.peak < 0.0005) {
       this.d.ui.hud('AllSilence', { mic: s.device?.name ?? '' });
@@ -808,15 +825,15 @@ export class DictationController {
     const ctx = await Promise.race([s.contextPromise, delay(1000)]);
     if (s.cancelled) return;
 
-    // ASR（起動中や再起動中なら、準備ができるまで少し待つ）
+    // ASR (if it is starting or restarting, wait a little until it is ready)
     if (!this.d.asr.ready) {
       this.stage(s, 'transcribing');
       this.d.ui.hud('AsrWaiting');
       const ok = await this.d.asr.waitReady(ASR_READY_WAIT_MS, s.abort.signal);
       if (s.cancelled) return;
       if (!ok) {
-        this.d.ui.hud('AsrNotReady', { reason: this.d.asr.message || 'ASR を起動しています' });
-        this.saveFailed(s, samples, ctx, '', 'ASR が準備できていません');
+        this.d.ui.hud('AsrNotReady', { reason: this.d.asr.message || t('engine.session.asrStarting') });
+        this.saveFailed(s, samples, ctx, '', t('engine.session.asrNotReady'));
         return;
       }
     }
@@ -825,7 +842,7 @@ export class DictationController {
     let rawText = '';
     try {
       const timeoutMs = 10000 + Math.ceil(durationMs / 60000) * 2000;
-      // whisper の窓（30 秒）に収まる長さなら、区切りを使わずに丸ごと書き起こす。待ち時間は変わらず、文脈が切れない分だけ正確
+      // If it fits in whisper's window (30 seconds), transcribe it whole without the segments. The wait is the same, and it is more accurate because the context is not cut
       if (s.segments.length && !s.segmentSkipped && samples.length > WHOLE_MAX_SEC * SR) {
         s.spec?.abort.abort();
         const done = await Promise.all(s.segments.map((x) => x.text));
@@ -858,9 +875,9 @@ export class DictationController {
       }
     } catch (e) {
       if (s.cancelled) return;
-      log.error('書き起こしに失敗しました', e);
+      log.error('transcription failed', e);
       this.d.ui.hud('AsrFailed', { reason: (e as Error).message });
-      this.saveFailed(s, samples, ctx, '', `書き起こしに失敗: ${(e as Error).message}`);
+      this.saveFailed(s, samples, ctx, '', t('engine.session.transcriptionFailed', { reason: (e as Error).message }));
       return;
     }
     const asrMs = Date.now() - asrStarted;
@@ -872,11 +889,11 @@ export class DictationController {
       return;
     }
 
-    // 整形
+    // Formatting
     this.stage(s, 'formatting');
     const custom = this.d.customizations.get();
     const provider = cfg.skipLlm ? null : this.d.provider();
-    // 辞書の語との照合、語ごとの補正、確信度の対応付け、整形は postAsr にまとめてある（評価と同じ関数を通すため）
+    // Dictionary matching, per-word fixes, confidence mapping and formatting are in postAsr (so that the evaluation runs through the same function)
     const { fmt, fix } = await postAsr({
       mode: s.mode,
       rawText,
@@ -896,7 +913,7 @@ export class DictationController {
     });
     s.marks.llmDone = Date.now();
     if (s.cancelled) return;
-    if (fmt.error) log.warn(`整形の失敗（${fmt.errorKind}）: ${fmt.error}`);
+    if (fmt.error) log.warn(`formatting failed (${fmt.errorKind}): ${fmt.error}`);
 
     const base: HistoryItem = {
       id: randomUUID(),
@@ -915,11 +932,11 @@ export class DictationController {
       paste: 'skipped',
       fastPath: fmt.fastPath || undefined,
       autoFixes: fmt.autoFixed && fix?.edits.length ? fix.edits.map(({ rule, before, after }) => ({ rule, before, after })) : undefined,
-      // 録音を残す設定のときは、画面から拾える語も残す（あとで「画面の語をヒントにしたら直ったか」を同じ録音で確かめるため）
+      // When recordings are kept, keep the words picked from the screen too (to check later, on the same recording, whether screen words as hints would have helped)
       contextTerms: cfg.saveRecordings ? nonEmpty(this.contextTerms(ctx)) : undefined,
     };
 
-    // 編集モードの結果の扱い
+    // Handling the edit mode result
     if (s.mode === 'edit') {
       if (fmt.error) {
         this.d.ui.hud('EditFailed', { reason: fmt.error });
@@ -927,7 +944,7 @@ export class DictationController {
         return;
       }
       if (fmt.unclear) {
-        // 書き換えはしないが、何と言ったかは履歴で見られるように残す（N5）
+        // Do not rewrite, but keep what was said so it can be seen in the history (N5)
         this.d.ui.hud('EditUnclear');
         this.finish(s, samples, { ...base, text: '', selectedText: undefined, paste: 'skipped', editUnclear: true }, t0);
         return;
@@ -941,13 +958,13 @@ export class DictationController {
       this.d.ui.hud('LlmNotConfigured');
     }
 
-    // 貼り付けは録音の順に行う。前の録音がまだ確定中なら、その貼り付けが終わるまで待つ
+    // Paste in recording order. If a previous recording is still finalizing, wait until its paste is done
     const waitFrom = Date.now();
     await Promise.all([...this.finalizing].filter((f) => f.lease < s.lease).map((f) => f.done));
     s.marks.pasteWaitMs = Date.now() - waitFrom;
     if (s.cancelled) return;
 
-    // 古い結果は貼らない（期限切れ、または次の録音が別のアプリ向けか編集モード）
+    // Do not paste a stale result (past the deadline, or the next recording targets another app or is in edit mode)
     const stale = Date.now() - t0 > STALE_MS || !(await this.canPasteBeforeNewer(s, ctx));
     if (s.cancelled) return;
     if (stale) {
@@ -956,7 +973,7 @@ export class DictationController {
       return;
     }
 
-    // 貼り付け
+    // Paste
     this.stage(s, 'pasting');
     const text = composePaste({
       mode: s.mode,
@@ -970,8 +987,8 @@ export class DictationController {
     const learn = cfg.learning.enabled && s.mode === 'dictation' && !!ctx?.field && !ctx.field.isSecure && ctx.field.editable && !TERMINAL_BUNDLES.has(ctx.app.bundleId);
     let ack: PasteAckPayload | null = null;
     if (learn) {
-      // 監視の結果は paste_ack と同じ読み込みで届くことがあるので、要求を送る前に登録しておく。
-      // ヘルパーは監視を始められたときだけ結果を送るので、届かなかった分は監視時間の後に捨てる
+      // The watch result can arrive in the same read as paste_ack, so register it before sending the request.
+      // The helper sends a result only when it could start watching, so entries without one are dropped after the watch time
       this.pendingWatches.set(pasteId, { inserted: text, rawText });
       setTimeout(() => this.pendingWatches.delete(pasteId), cfg.learning.watchSeconds * 1000 + 30_000).unref?.();
     }
@@ -990,7 +1007,7 @@ export class DictationController {
         15000,
       );
     } catch (e) {
-      log.error('貼り付けに失敗しました', e);
+      log.error('paste failed', e);
       this.d.ui.hud('PasteFailed', { reason: (e as Error).message });
     }
     s.marks.ack = Date.now();
@@ -1012,14 +1029,14 @@ export class DictationController {
           this.d.ui.hud('AccessibilityMissing');
           break;
         default:
-          this.d.ui.hud('PasteFailed', { reason: ack.failureReason ?? '' });
+          this.d.ui.hud('PasteFailed', { reason: pasteFailureText(ack.failureReason) });
       }
     }
     this.finish(s, samples, { ...base, paste }, t0);
   }
 
   /**
-   * 録音全体を書き起こす。話の間で先に書き起こした結果があり、その後に何も話していなければ、それを使う。
+   * Transcribes the whole recording. If a result was transcribed ahead during a pause and nothing was said after it, uses that.
    */
   private async transcribeWhole(s: Session, samples: Float32Array, durationMs: number): Promise<AsrResultPayload> {
     const spec = s.spec;
@@ -1031,7 +1048,7 @@ export class DictationController {
         return res;
       } catch (e) {
         if (s.cancelled) throw e;
-        if (!isAsrCancelled(e)) log.warn('先に書き起こした結果を使えませんでした', e);
+        if (!isAsrCancelled(e)) log.warn('could not use the speculative result', e);
       }
     } else {
       spec?.abort.abort();
@@ -1041,8 +1058,8 @@ export class DictationController {
   }
 
   /**
-   * 前の録音の結果を、次の録音より先に貼ってよいか。
-   * 次の録音（録音中か確定中）がなければよい。あれば、どれも同じアプリ向けで、編集モードでないときだけよい。
+   * Whether the previous recording's result may be pasted before the next recording's.
+   * Yes if there is no next recording (recording or finalizing). If there is, only when all of them target the same app and none is in edit mode.
    */
   private async canPasteBeforeNewer(s: Session, ctx: ContextPayload | null): Promise<boolean> {
     const newer = [this.recording, ...this.finalizing].filter((x): x is Session => !!x && x.lease > s.lease && !x.cancelled);
@@ -1055,16 +1072,16 @@ export class DictationController {
     return true;
   }
 
-  /** ヘルパーが ⌘V を送った時刻を報告していれば記録する */
+  /** Records the time the helper sent ⌘V, if it reported one */
   private noteKeyPosted(s: Session, ack: PasteAckPayload | null): void {
     if (!ack) return;
     if (typeof ack.preReadMs === 'number') s.marks.preReadMs = ack.preReadMs;
-    // keyPostedAt は hotkey の t と同じ時計なので、キーの操作で求めた差を足して ms エポックに直す
+    // keyPostedAt is on the same clock as the hotkey's t, so add the difference found from key events to convert it to ms since the epoch
     if (typeof ack.keyPostedAt === 'number' && s.clockOffset !== undefined) s.marks.keyPosted = ack.keyPostedAt + s.clockOffset;
     else if (typeof ack.keyPostedAfterMs === 'number' && s.marks.pasteSent !== undefined) s.marks.keyPosted = s.marks.pasteSent + ack.keyPostedAfterMs;
   }
 
-  /** 区間ごとの時間（離す操作を受けた時刻 t0 からの経過） */
+  /** Time per stage (elapsed since t0, when the release was received) */
   private stageTimings(s: Session, t0: number): Partial<HistoryTimings> {
     const since = (x?: number) => (x === undefined ? undefined : Math.max(0, x - t0));
     const t: Partial<HistoryTimings> = {
@@ -1090,23 +1107,23 @@ export class DictationController {
       try {
         item.audioFile = this.d.recordings.save(samples, s.startedAt);
       } catch (e) {
-        log.warn('録音を保存できませんでした', e);
+        log.warn('could not save the recording', e);
       }
     }
     this.d.history.add(item);
     const tm = item.timings;
     const ms = (v?: number) => (v === undefined ? '-' : `${v}ms`);
     log.info(
-      `完了 mode=${item.mode} paste=${item.paste} formatted=${item.formatted} 音声=${item.durationSec}s ASR=${tm.asrMs}ms LLM=${tm.llmMs}ms 合計=${tm.totalMs}ms` +
-        ` 区間（離してから）: 受信遅れ=${ms(tm.releaseLagMs)} 停止=${ms(tm.stoppedMs)} ASR=${ms(tm.asrDoneMs)} 整形=${ms(tm.llmDoneMs)}` +
-        ` 順番待ち=${ms(tm.pasteWaitMs)} ⌘V=${ms(tm.keyPostedMs)}（読み取り=${ms(s.marks.preReadMs)}） ACK=${ms(tm.ackMs)} 投機=${tm.speculative ?? '-'}` +
-        ` ヒント=${s.hints ? `${s.hints.used ?? '-'}/${s.hints.given}` : '-'} 確信度=${s.minConfidence?.toFixed(2) ?? '-'}${item.fastPath ? ' 近道' : ''}`,
+      `done mode=${item.mode} paste=${item.paste} formatted=${item.formatted} audio=${item.durationSec}s ASR=${tm.asrMs}ms LLM=${tm.llmMs}ms total=${tm.totalMs}ms` +
+        ` stages (since release): releaseLag=${ms(tm.releaseLagMs)} stopped=${ms(tm.stoppedMs)} ASR=${ms(tm.asrDoneMs)} format=${ms(tm.llmDoneMs)}` +
+        ` pasteWait=${ms(tm.pasteWaitMs)} ⌘V=${ms(tm.keyPostedMs)} (preRead=${ms(s.marks.preReadMs)}) ACK=${ms(tm.ackMs)} speculative=${tm.speculative ?? '-'}` +
+        ` hints=${s.hints ? `${s.hints.used ?? '-'}/${s.hints.given}` : '-'} confidence=${s.minConfidence?.toFixed(2) ?? '-'}${item.fastPath ? ' fastPath' : ''}`,
     );
   }
 
   /**
-   * 取り消した録音を履歴に残す（2 秒を超えるものだけ）。書き起こしは貼らず、⌃⌘V の対象にもしない。
-   * 録音を保存しない設定で、書き起こしもまだなければ、残しても使い道がないので残さない。残したら true
+   * Saves a canceled recording to the history (only if longer than 2 seconds). The transcript is not pasted, and ⌃⌘V does not pick it up.
+   * If recordings are not kept and there is no transcript yet, saving it would be useless, so it is not saved. Returns true if saved
    */
   private saveCancelled(s: Session): boolean {
     if (s.finished || s.segmenter.length <= KEEP_CANCELLED_SAMPLES) return false;
@@ -1159,10 +1176,10 @@ export class DictationController {
   }
 
   // -------------------------------------------------------------------------
-  // そのほかの操作
+  // Other actions
   // -------------------------------------------------------------------------
 
-  /** 直前の書き起こしを貼り付ける（HK-7） */
+  /** Pastes the last transcript (HK-7) */
   async pasteLast(): Promise<void> {
     const last = this.d.history.last();
     if (!last?.text) {
@@ -1182,13 +1199,13 @@ export class DictationController {
       );
       if (ack.success) this.d.ui.hud('PastedLast');
       else if (ack.failureReason === 'no_text_target') this.d.ui.hud('NoPaste');
-      else this.d.ui.hud('PasteFailed', { reason: ack.failureReason ?? '' });
+      else this.d.ui.hud('PasteFailed', { reason: pasteFailureText(ack.failureReason) });
     } catch (e) {
       this.d.ui.hud('PasteFailed', { reason: (e as Error).message });
     }
   }
 
-  /** 貼り付け後の手直しから学習する（LRN-1、LRN-2） */
+  /** Learns from corrections after pasting (LRN-1, LRN-2) */
   private async onFieldWatch(p: FieldWatchResultPayload): Promise<void> {
     const pending = this.pendingWatches.get(p.pasteId);
     this.pendingWatches.delete(p.pasteId);
@@ -1211,19 +1228,19 @@ export class DictationController {
         tokenizer,
       });
       if (r.skipped && r.skipped !== 'no_candidates') {
-        log.info(`学習しませんでした（${r.skipped}${r.method ? `、範囲: ${r.method}` : ''}${r.candidates ? `、候補 ${r.candidates} 件` : ''}）`);
+        log.info(`learned nothing (${r.skipped}${r.method ? `, range: ${r.method}` : ''}${r.candidates ? `, candidates=${r.candidates}` : ''})`);
       }
       const applied = applyLearning(cust, r);
       if (!applied.count) return;
-      // 本文は残さず、数だけを記録する
+      // Log counts only, never the text
       log.info(
-        `手直しから学習しました（語 ${applied.words.length}、聞き違えた形 ${applied.forms.length}、取り違えの組 ${applied.corrections.length}、書き換えない語句 ${applied.kept.length}、` +
-          `number styles ${applied.numbers.map((n) => `${n.kind}=${n.value}`).join(',') || 0}）`,
+        `learned from a correction (words ${applied.words.length}, misheard forms ${applied.forms.length}, correction pairs ${applied.corrections.length}, kept phrases ${applied.kept.length}, ` +
+          `number styles ${applied.numbers.map((n) => `${n.kind}=${n.value}`).join(',') || 0})`,
       );
       const undo = [
         {
           id: 'undo',
-          label: '取り消す',
+          label: t('engine.session.undoLearning'),
           run: () => {
             applied.undo();
             this.d.ui.hud('WordsLearnedUndone');
@@ -1236,12 +1253,12 @@ export class DictationController {
         // Only how numbers are written changed: show the corrected form of the first one
         this.d.ui.hud('NumberStyleLearned', { text: applied.numbers[0].example.after }, undo);
       } else {
-        // 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）は、直した後の形を 1 つ見せる
+        // Learning that adds no dictionary word (misheard forms, correction pairs, kept phrases) shows one corrected form
         const shown = applied.forms[0]?.word ?? applied.corrections[0]?.corrected ?? applied.kept[0]?.phrase ?? applied.numbers[0]?.example.after ?? '';
         this.d.ui.hud(applied.count > 1 ? 'CorrectionsLearnedMany' : 'CorrectionLearned', { text: shown, count: String(applied.count) }, undo);
       }
     } catch (e) {
-      log.warn('学習に失敗しました', e);
+      log.warn('learning failed', e);
     }
   }
 

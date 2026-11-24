@@ -1,20 +1,20 @@
 /**
- * 文の一覧を、この Mac の合成音声で読み上げて、評価用のデータセットを作る。
+ * Reads a list of sentences aloud with this Mac's speech synthesis and builds an evaluation dataset from it.
  *
  *   npx tsx scripts/eval-synth.ts --script scripts/review/script-v1.json --name synth-script-v1
  *   npx tsx scripts/eval-synth.ts --script scripts/review/spoken-v1.json --name synth-spoken-v1
- *     --truth-only      音声は作り直さず、正解（と、表記の別解）だけを書き直す
- *     --only A07,B19    その文の音声だけを作り直す（読みを直したとき。ほかの文の音声は変えない）
+ *     --truth-only      do not rebuild the audio; rewrite only the references (and the spelling variants)
+ *     --only A07,B19    rebuild the audio of those sentences only (after fixing a reading; other sentences keep their audio)
  *
- * 人が録音して正解を確かめる代わりに使う。正解は一覧の文そのものなので、確かめる手間が要らない。
- * - 合成音声は macOS の say（端末の中だけで動く。通信しない）。日本語の声 9 種類から、文ごとに 3 種類を順に割り当てる
- * - 英字の語は、日本語の声が読めるように、カタカナの読みに直してから読み上げる（READINGS）
- * - 実際の録音に近づけるため、前に 0.3 秒、後ろに 0.5 秒の、ごく小さな雑音を足す
- * - 表記だけが違う書き方（「あとで」と「後で」など）は、別解として正解に添える（VARIANTS）。
- *   どちらで書いても誤りではないので、誤りに数えない
+ * Used instead of having a person record and check references. The reference is the sentence in the list itself, so no checking is needed.
+ * - Speech synthesis is macOS say (runs on the device only, no network). Each sentence gets 3 of the 9 Japanese voices in turn
+ * - Latin-letter words are rewritten as katakana readings before being read, so that the Japanese voices can read them (READINGS)
+ * - To get closer to real recordings, a very small noise is added: 0.3 s before and 0.5 s after
+ * - Spellings that differ only in notation (「あとで」 and 「後で」, for example) are added to the reference as alternatives (VARIANTS).
+ *   Either spelling is correct, so they do not count as errors
  *
- * 合成音声は、人の声より明瞭で、言いよどみが無い。数値は「人の声での精度」ではなく、
- * 用語、数字、同音異義語、整形の規則を、条件をそろえて比べるために使う。
+ * Synthesized speech is clearer than a human voice and has no disfluencies. The numbers are not "accuracy on human voices"; they are for
+ * comparing terms, numbers, homophones and formatting rules under the same conditions.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -35,15 +35,15 @@ const { values: args } = parseArgs({
   },
 });
 if (!args.script || !args.name) {
-  console.error('使い方: npx tsx scripts/eval-synth.ts --script <一覧の JSON> --name <データセットの名前>');
+  console.error('Usage: npx tsx scripts/eval-synth.ts --script <list JSON> --name <dataset name>');
   process.exit(1);
 }
 
 const VOICES = ['Kyoko', 'Eddy', 'Flo', 'Reed', 'Sandy', 'Shelley', 'Rocko', 'Grandma', 'Grandpa'];
-/** say に渡す声の名前。Kyoko のほかは、言語の付いた名前で指定する */
+/** Voice name passed to say. Voices other than Kyoko are given with the language in the name */
 const voiceArg = (v: string) => (v === 'Kyoko' ? v : `${v} (日本語（日本）)`);
 
-/** 英字の語の読み。長い語を先に当てる */
+/** Readings of Latin-letter words. Longer words are matched first */
 const READINGS: [string, string][] = (
   [
     ['Pull Request', 'プルリクエスト'],
@@ -94,23 +94,23 @@ interface ScriptItem {
   id: string;
   split: 'A' | 'B';
   category: string;
-  /** 入力されるべき文（正解） */
+  /** Text that should be typed (the reference) */
   text: string;
-  /** 話したままの文（言いよどみや言い直しを含む）。無ければ text を読み上げる */
+  /** Text as spoken (with disfluencies and self-corrections). Without it, text is read */
   spoken?: string;
-  /** 読み上げる文。合成音声が読み誤る文で、かなで書いた読みを渡す。無ければ spoken か text を読み上げる */
+  /** Text to read aloud: a reading written in kana, for sentences the synthesizer misreads. Without it, spoken or text is read */
   say?: string;
-  /** 別解。どちらの書き方でも正解とする文（言い直しとも対比とも取れる文など）。表記だけの別解は VARIANTS から自動で作る */
+  /** Alternatives: texts also accepted as correct (for example a sentence that reads as either a self-correction or a contrast). Notation-only alternatives are generated from VARIANTS */
   alt?: string[];
   terms: string[];
   tags?: string[];
 }
 
 /**
- * 表記だけが違う書き方。[正解の中の書き方, 別の書き方…]。どちらで書いても誤りではない。
- * - かなと漢字の書き分け（「あとで」と「後で」）
- * - 一般的な外来語の、英字とカタカナ（整形の規則では、製品名でない外来語はカタカナのままにする）
- * 同じ読みの別の語（「校正」と「構成」）は、誤りなので入れない。
+ * Spellings that differ only in notation: [spelling in the reference, other spellings…]. Either spelling is correct.
+ * - kana versus kanji (「あとで」 and 「後で」)
+ * - Latin letters versus katakana for common loanwords (the formatting rules keep loanwords that are not product names in katakana)
+ * Different words with the same reading (「校正」 and 「構成」) are errors, so they are not listed.
  */
 const VARIANTS: [RegExp, string[]][] = [
   [/あとで/g, ['後で']],
@@ -138,10 +138,10 @@ const VARIANTS: [RegExp, string[]][] = [
   [/flow/g, ['フロー']],
 ];
 
-/** 1 つの文の別解の上限（組み合わせが増えすぎないように） */
+/** Maximum alternatives per sentence (so that the combinations do not explode) */
 const MAX_ALTS = 32;
 
-/** 表記の別解を、当てはまる書き方の組み合わせで作る。元の文は含めない */
+/** Builds notation alternatives from combinations of the matching spellings. The original text is not included */
 function variantsOf(text: string): string[] {
   let out = [text];
   for (const [re, others] of VARIANTS) {
@@ -154,7 +154,7 @@ function variantsOf(text: string): string[] {
   return out.filter((t) => t !== text);
 }
 
-/** その文の別解（一覧に書いたものと、表記の別解）。一覧に書いた別解にも、表記の別解を作る */
+/** Alternatives of the sentence (those in the list and the notation alternatives). Notation alternatives are also built for the listed alternatives */
 function altsOf(it: ScriptItem): string[] {
   const base = [it.text, ...(it.alt ?? [])];
   const all = new Set<string>();
@@ -164,19 +164,19 @@ function altsOf(it: ScriptItem): string[] {
 
 const sha256 = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');
 
-/** 読み上げる文。英字の語を読みに直す。読みの無い英字の語が残ったら、作り手に知らせるために止める */
+/** Text to read aloud, with Latin-letter words replaced by readings. Stops if a Latin-letter word without a reading is left, to tell the author */
 function speakable(text: string): string {
   let s = text;
   for (const [word, reading] of READINGS) s = s.split(word).join(reading);
   const left = s.match(/[A-Za-z]{2,}/g);
-  if (left) throw new Error(`読みの無い英字の語があります: ${left.join(', ')}（scripts/eval-synth.ts の READINGS に足してください）`);
+  if (left) throw new Error(`Latin-letter words without a reading: ${left.join(', ')} (add them to READINGS in scripts/eval-synth.ts)`);
   return s;
 }
 
-// 雑音は、同じ入力から同じ音になるように、決まった乱数で作る
+// The noise uses a fixed random sequence, so the same input gives the same sound
 let seed = 20261123;
 const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
-/** 1 件だけを作り直すときは、乱数をその発話の id から決める（ほかの発話の音声を変えないため） */
+/** When rebuilding a single row, seed the random numbers from the utterance id (so other utterances keep their audio) */
 function seedFor(id: string): void {
   seed = createHash('sha256').update(id).digest().readUInt32BE(0) & 0x7fffffff;
 }
@@ -184,12 +184,12 @@ function seedFor(id: string): void {
 function synthesize(text: string, voice: string, tmp: string): Float32Array {
   execFileSync('say', ['-v', voiceArg(voice), '--file-format=WAVE', '--data-format=LEI16@16000', '-o', tmp, text], { stdio: 'ignore' });
   const { samples, sampleRate } = decodeWav(fs.readFileSync(tmp));
-  if (sampleRate !== 16000) throw new Error(`16 kHz ではありません（${sampleRate}）`);
+  if (sampleRate !== 16000) throw new Error(`Not 16 kHz (${sampleRate})`);
   const lead = Math.round(0.3 * 16000);
   const tail = Math.round(0.5 * 16000);
   const out = new Float32Array(lead + samples.length + tail);
   out.set(samples, lead);
-  // 静かな部屋の雑音に近い、ごく小さな雑音を全体に足す（RMS 約 0.0003）
+  // Add a very small noise throughout, close to a quiet room (RMS about 0.0003)
   for (let i = 0; i < out.length; i++) out[i] += rand() * 0.0005;
   return out;
 }
@@ -198,7 +198,7 @@ function main(): void {
   const doc = JSON.parse(fs.readFileSync(args.script!, 'utf8')) as { items: ScriptItem[] };
   const dir = path.join(args.root!, 'datasets', args.name!);
   const perItem = Math.max(1, Math.min(VOICES.length, Number(args['voices-per-item'])));
-  // 読みの確認を先に済ませる（途中で止まって、半端なデータセットが残らないように）
+  // Check readings first (so that a stop midway does not leave a partial dataset)
   const spokenOf = new Map(doc.items.map((it) => [it.id, speakable(it.say ?? it.spoken ?? it.text)]));
   const now = new Date().toISOString();
   const truthRow = (id: string, hash: string, it: ScriptItem) => {
@@ -227,7 +227,7 @@ function main(): void {
     : null;
 
   if (args['truth-only'] || only) {
-    // 音声は（指定した文のほかは）作り直さない。一覧の文と、いまあるデータセットの行を突き合わせる
+    // Do not rebuild audio (except for the given sentences). Match the sentences in the list against the existing dataset rows
     const rows = fs
       .readFileSync(manifestFile, 'utf8')
       .trim()
@@ -240,7 +240,7 @@ function main(): void {
     let withAlt = 0;
     for (const row of rows) {
       const it = byItem.get(row.sentenceId);
-      if (!it) throw new Error(`一覧に無い文です: ${row.sentenceId}`);
+      if (!it) throw new Error(`Sentence not in the list: ${row.sentenceId}`);
       if (only?.has(it.id.split('-').pop()!)) {
         seedFor(row.id);
         const pcm = encodeWav(synthesize(spokenOf.get(it.id)!, row.voice, tmp));
@@ -257,7 +257,7 @@ function main(): void {
     fs.rmSync(tmp, { force: true });
     fs.writeFileSync(manifestFile, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`, { mode: 0o600 });
     fs.appendFileSync(truthFile, `${truth.join('\n')}\n`, { mode: 0o600 });
-    console.log(`${args.name}: 正解を書き直しました（${rows.length} 件、うち別解あり ${withAlt} 件）、音声を作り直した発話 ${redone} 件`);
+    console.log(`${args.name}: rewrote references (${rows.length} rows, ${withAlt} with alternatives), rebuilt audio for ${redone} utterances`);
     return;
   }
 
@@ -302,9 +302,9 @@ function main(): void {
   });
   fs.rmSync(tmp, { force: true });
   fs.writeFileSync(manifestFile, `${rows.join('\n')}\n`, { mode: 0o600 });
-  // 正解は一覧の文そのもの。同じ id は最後の行が有効なので、作り直しても追記でよい
+  // The reference is the sentence in the list itself. The last line for an id wins, so appending is fine when rebuilding
   fs.appendFileSync(truthFile, `${truth.join('\n')}\n`, { mode: 0o600 });
-  console.log(`${args.name}: ${rows.length} 件（${doc.items.length} 文 × ${perItem} 種類の声）、合計 ${Math.round(seconds)} 秒`);
+  console.log(`${args.name}: ${rows.length} rows (${doc.items.length} sentences × ${perItem} voices), ${Math.round(seconds)} s in total`);
 }
 
 main();

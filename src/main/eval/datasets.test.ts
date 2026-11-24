@@ -9,29 +9,29 @@ import { sha256Hex } from './files';
 const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 9, min)).toISOString();
 
 describe('assignSplits', () => {
-  it('3 分以上あいたら別の塊とし、塊を時刻の順に、件数の少ない側に入れる（同数なら開発用）', () => {
+  it('starts a new chunk after a gap of 3 minutes or more, and puts chunks in time order on the side with fewer items (dev on a tie)', () => {
     const rows = [
       { id: 'a', timestamp: at(0) },
-      { id: 'b', timestamp: at(2) }, // a から 2 分。同じ塊
-      { id: 'c', timestamp: at(4) }, // b から 2 分。同じ塊
-      { id: 'd', timestamp: at(7) }, // c から 3 分。別の塊
+      { id: 'b', timestamp: at(2) }, // 2 minutes after a. Same chunk
+      { id: 'c', timestamp: at(4) }, // 2 minutes after b. Same chunk
+      { id: 'd', timestamp: at(7) }, // 3 minutes after c. New chunk
       { id: 'e', timestamp: at(60) },
       { id: 'f', timestamp: at(61) },
       { id: 'g', timestamp: at(90) },
     ];
     const s = assignSplits(rows);
     expect(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((id) => s.get(id))).toEqual([
-      { split: 'dev', chunk: 0 }, // 0 対 0。同数なので開発用
+      { split: 'dev', chunk: 0 }, // 0 to 0. A tie, so dev
       { split: 'dev', chunk: 0 },
       { split: 'dev', chunk: 0 },
-      { split: 'holdout', chunk: 1 }, // 3 対 0
-      { split: 'holdout', chunk: 2 }, // 3 対 1
+      { split: 'holdout', chunk: 1 }, // 3 to 0
+      { split: 'holdout', chunk: 2 }, // 3 to 1
       { split: 'holdout', chunk: 2 },
-      { split: 'dev', chunk: 3 }, // 3 対 3。同数なので開発用
+      { split: 'dev', chunk: 3 }, // 3 to 3. A tie, so dev
     ]);
   });
 
-  it('大きな塊があっても、塊は割らずに、残りの塊でつり合いを取る', () => {
+  it('keeps a large chunk whole and balances with the remaining chunks', () => {
     const big = Array.from({ length: 10 }, (_, i) => ({ id: `big${i}`, timestamp: at(i) }));
     const small = Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, timestamp: at(100 + i * 10) }));
     const s = assignSplits([...big, ...small]);
@@ -39,20 +39,20 @@ describe('assignSplits', () => {
     expect(small.map((r) => s.get(r.id)?.split)).toEqual(['holdout', 'holdout', 'holdout', 'holdout', 'holdout', 'holdout']);
   });
 
-  it('件数に数えるのは、文のある行だけ。文の無い行は、同じ塊の行と同じ側に入る', () => {
+  it('counts only rows with text. Rows without text go to the same side as the rest of their chunk', () => {
     const rows = [
-      { id: 'a', timestamp: at(0), content: '' }, // 取り消した録音など
+      { id: 'a', timestamp: at(0), content: '' }, // a cancelled recording, for example
       { id: 'b', timestamp: at(1), content: '' },
       { id: 'c', timestamp: at(10), content: '文のある発話です。' },
       { id: 'd', timestamp: at(20), content: '次の発話です。' },
       { id: 'e', timestamp: at(21), content: '  ' },
     ];
     const s = assignSplits(rows);
-    // 最初の塊は 0 件と数えるので、次の塊も開発用に入る
+    // The first chunk counts as 0 items, so the next chunk also goes to dev
     expect(['a', 'b', 'c', 'd', 'e'].map((id) => s.get(id)?.split)).toEqual(['dev', 'dev', 'dev', 'holdout', 'holdout']);
   });
 
-  it('並びが時刻の順でなくても、時刻で塊を作る', () => {
+  it('forms chunks by time even when the rows are not in time order', () => {
     const s = assignSplits([
       { id: 'late', timestamp: at(40) },
       { id: 'early', timestamp: at(0) },
@@ -61,7 +61,7 @@ describe('assignSplits', () => {
     expect(s.get('late')).toEqual({ split: 'holdout', chunk: 1 });
   });
 
-  it('台本の読み上げは、行の split に従う（時刻では分けない）', () => {
+  it('follows the row split for scripted readings (not split by time)', () => {
     const s = assignSplits([
       { id: 's1', timestamp: at(0), split: 'A' as const },
       { id: 's2', timestamp: at(1), split: 'B' as const },
@@ -72,7 +72,7 @@ describe('assignSplits', () => {
     expect(s.get('n1')).toEqual({ split: 'dev', chunk: 0 });
   });
 
-  it('時刻の無い発話（公開データ）は、文の番号のハッシュで振る。同じ文の録音は同じ側に入る', () => {
+  it('assigns utterances without a time (public data) by a hash of the sentence number. Recordings of the same sentence land on the same side', () => {
     const rows = Array.from({ length: 40 }, (_, i) => ({ id: `p${i}`, timestamp: '', sentenceId: String(i % 20) }));
     const s = assignSplits(rows);
     for (let i = 0; i < 20; i++) expect(s.get(`p${i}`)).toEqual(s.get(`p${i + 20}`));
@@ -80,12 +80,12 @@ describe('assignSplits', () => {
     expect(dev).toBeGreaterThan(8);
     expect(dev).toBeLessThan(32);
     expect(s.get('p0')?.chunk).toBe(-1);
-    // 何度振っても同じ。文の番号が無ければ id で振る
+    // The same every time. Without a sentence number, assigns by id
     expect(assignSplits(rows)).toEqual(s);
     expect(assignSplits([{ id: 'x', timestamp: '' }]).get('x')?.chunk).toBe(-1);
   });
 
-  it('後ろに行が増えても、前の行の振り分けは変わらない', () => {
+  it('keeps the assignment of earlier rows when rows are added at the end', () => {
     const rows = [
       { id: 'a', timestamp: at(0) },
       { id: 'b', timestamp: at(30) },
@@ -95,12 +95,12 @@ describe('assignSplits', () => {
     expect(after.get('a')).toEqual(before.get('a'));
     expect(after.get('b')).toEqual(before.get('b'));
     expect(after.get('c')).toEqual({ split: 'holdout', chunk: 1 });
-    // 開発用 1 件、確認用 2 件になったので、次の塊は開発用
+    // Now 1 in dev and 2 in holdout, so the next chunk goes to dev
     expect(after.get('d')).toEqual({ split: 'dev', chunk: 2 });
   });
 });
 
-describe('データセットと正解の読み込み', () => {
+describe('loading datasets and references', () => {
   let root = '';
   const wav = (seed: number) => encodeWav(Float32Array.from({ length: 1600 }, (_, i) => 0.1 * Math.sin((i + seed) / 5)));
 
@@ -144,7 +144,7 @@ describe('データセットと正解の読み込み', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('正解は、同じ id の最後の行が有効', () => {
+  it('takes the last line for the same id in the references', () => {
     const file = path.join(root, 'truth.jsonl');
     fs.writeFileSync(file, [truthRow('u1', 'h', { target: '最初の文' }), truthRow('u2', 'h'), truthRow('u1', 'h', { target: '直した文' })].map((r) => JSON.stringify(r)).join('\n'));
     const t = loadTruth(file);
@@ -153,7 +153,7 @@ describe('データセットと正解の読み込み', () => {
     expect(loadTruth(path.join(root, 'none.jsonl')).size).toBe(0);
   });
 
-  it('正解が無い発話は content を仮の正解にし、正解も content も無い発話は使わない', () => {
+  it('uses content as a provisional reference when there is no reference, and skips utterances with neither', () => {
     writeDataset(
       'd1',
       [
@@ -168,7 +168,7 @@ describe('データセットと正解の読み込み', () => {
     expect(d.counts).toMatchObject({ rows: 2, used: 1, provisional: 1, reviewed: 0, noReference: 1 });
   });
 
-  it('正解があれば使う。話したままの文と別解も読み、除外の発話は外す', () => {
+  it('uses the reference when there is one, reads the spoken text and alternatives, and drops excluded utterances', () => {
     const h = writeDataset(
       'd1',
       [
@@ -190,7 +190,7 @@ describe('データセットと正解の読み込み', () => {
     expect(d.counts).toMatchObject({ used: 2, provisional: 0, reviewed: 2, excluded: 1 });
   });
 
-  it('manifest にハッシュが無ければ音声から求める。別の音声に付けた正解は使わず、仮の正解に戻す', () => {
+  it('computes the hash from the audio when the manifest has none, and falls back to the provisional reference for a reference made for different audio', () => {
     const h = writeDataset('d1', [{ id: 'u1', content: '仮の文です。' }], false);
     const ok = loadDataset(root, 'd1', new Map([['u1', truthRow('u1', h.get('u1')!)]]));
     expect(ok.utterances[0]).toMatchObject({ audioSha256: h.get('u1'), provisional: false, target: '確かめた文です。' });
@@ -199,7 +199,7 @@ describe('データセットと正解の読み込み', () => {
     expect(bad.counts.hashMismatch).toBe(1);
   });
 
-  it('台本の行の split と用語を引き継ぐ。音声が無い行は数えて飛ばす', () => {
+  it('carries over the split and terms of scripted rows, and counts and skips rows without audio', () => {
     writeDataset(
       'script',
       [
@@ -215,16 +215,16 @@ describe('データセットと正解の読み込み', () => {
       ['s1', 'dev', ['用語'], ['number']],
       ['s2', 'holdout', [], []],
     ]);
-    // 文の種類と、離した後に録った長さも引き継ぐ（無ければ undefined）
+    // Also carries over the kind of sentence and the length recorded after release (undefined when absent)
     expect(d.utterances.map((u) => [u.category, u.postRollMs])).toEqual([
       ['number', 300],
       [undefined, undefined],
     ]);
     expect(d.counts.missingAudio).toBe(1);
-    expect(() => loadDataset(root, 'none', new Map())).toThrow(/見つかりません/);
+    expect(() => loadDataset(root, 'none', new Map())).toThrow(/not found/);
   });
 
-  it('語の一覧は、空行と重複を除く', () => {
+  it('drops empty lines and duplicates from the word list', () => {
     const file = path.join(root, 'words.txt');
     fs.writeFileSync(file, 'Longhand\n\n  用語集  \nLonghand\n');
     expect(readWordList(file)).toEqual(['Longhand', '用語集']);

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import type { AudioStartedPayload, AudioStoppedPayload, ConfigurePayload, HelperToMain, PttState } from '../../shared/protocol';
+import { t } from '../i18n';
 import { JsonLinesProcess, type Message } from '../JsonLinesProcess';
 import { createLogger, helperLog } from '../log';
 
@@ -15,9 +16,9 @@ const MAX_RESTARTS = 5;
 const STABLE_MS = 60_000;
 
 /**
- * ヘルパーの起動と死活監視（CORE-3）。
- * 4 秒ごとに ping を送り、3 回続けて応答がなければ再起動する。異常終了したら指数バックオフで再起動し、
- * 短時間に 5 回失敗したらあきらめて failed にする。再起動のたびに configure と state_sync を送り直す。
+ * Starts the helper and checks that it is alive (CORE-3).
+ * Sends a ping every 4 seconds and restarts the helper after 3 missed replies in a row. After a crash it restarts with
+ * exponential backoff, and gives up (failed) after 5 failures in a short time. Every restart sends configure and state_sync again.
  */
 export class HelperClient extends EventEmitter {
   private proc: JsonLinesProcess | null = null;
@@ -28,7 +29,7 @@ export class HelperClient extends EventEmitter {
   private stopping = false;
   private lastConfig: ConfigurePayload | null = null;
   private lastPtt: PttState = 'inactive';
-  /** 予約中の再起動。二重に予約しないよう 1 つだけ持つ */
+  /** The scheduled restart. Only one is kept, so that a restart is never scheduled twice */
   private restartTimer: NodeJS.Timeout | null = null;
   status: HelperStatus = 'starting';
   version = '';
@@ -43,7 +44,7 @@ export class HelperClient extends EventEmitter {
     this.detach();
     if (!fs.existsSync(this.executable)) {
       this.setStatus('failed');
-      throw new Error(`ヘルパーが見つかりません: ${this.executable}（npm run build:helper でビルドしてください）`);
+      throw new Error(`helper not found: ${this.executable} (build it with npm run build:helper)`);
     }
     this.setStatus(this.restarts ? 'restarting' : 'starting');
     const proc = new JsonLinesProcess('helper', this.executable, [], (line) => helperLog(line));
@@ -54,15 +55,15 @@ export class HelperClient extends EventEmitter {
     this.version = String((ready.payload as { version?: string }).version ?? '');
     this.startedAt = Date.now();
     this.missed = 0;
-    log.info(`ヘルパーを起動しました（version=${this.version} pid=${proc.pid}）`);
+    log.info(`helper started (version=${this.version} pid=${proc.pid})`);
     this.setStatus('running');
-    if (this.lastConfig) await this.configure(this.lastConfig).catch((e) => log.warn('configure の再送に失敗', e));
+    if (this.lastConfig) await this.configure(this.lastConfig).catch((e) => log.warn('failed to resend configure', e));
     this.syncState(this.lastPtt);
     this.startHeartbeat();
     this.emit('ready');
   }
 
-  /** 前のプロセスを切り離して止める。古いプロセスのイベントが新しいものと混ざらないようにする */
+  /** Detaches and stops the previous process, so that its events never mix with the new one's */
   private detach(): void {
     const old = this.proc;
     this.proc = null;
@@ -91,7 +92,7 @@ export class HelperClient extends EventEmitter {
         if (Date.now() - this.startedAt > STABLE_MS) this.restarts = 0;
       } catch {
         this.missed++;
-        log.warn(`ヘルパーの heartbeat に応答がありません（${this.missed}/${MAX_MISSED}）`);
+        log.warn(`no reply to the helper heartbeat (${this.missed}/${MAX_MISSED})`);
         if (this.missed >= MAX_MISSED) {
           this.missed = 0;
           this.proc?.kill();
@@ -110,15 +111,15 @@ export class HelperClient extends EventEmitter {
     this.stopHeartbeat();
     this.emit('exit');
     if (this.stopping) return;
-    log.warn(`ヘルパーが終了しました（code=${code} signal=${signal}）`);
+    log.warn(`helper exited (code=${code} signal=${signal})`);
     this.scheduleRestart();
   }
 
   private scheduleRestart(): void {
-    // 起動の失敗では、終了の通知と start() の失敗の両方からここに来る
+    // A failed start gets here twice: from the exit event and from the failed start()
     if (this.restartTimer) return;
     if (this.restarts >= MAX_RESTARTS) {
-      log.error('ヘルパーの再起動を諦めました');
+      log.error('gave up restarting the helper');
       this.setStatus('failed');
       return;
     }
@@ -129,13 +130,13 @@ export class HelperClient extends EventEmitter {
       this.restartTimer = null;
       if (this.stopping) return;
       this.start().catch((e) => {
-        log.error('ヘルパーの再起動に失敗しました', e);
+        log.error('failed to restart the helper', e);
         this.scheduleRestart();
       });
     }, delay);
   }
 
-  /** 失敗した状態から手動で起動し直す */
+  /** Restarts by hand from the failed state */
   async restart(): Promise<void> {
     this.clearRestartTimer();
     this.restarts = 0;
@@ -162,12 +163,19 @@ export class HelperClient extends EventEmitter {
   }
 
   async request<T = unknown>(type: string, payload: unknown = {}, timeoutMs = 5000): Promise<T> {
-    if (!this.proc?.running) throw new Error('ヘルパーが動いていません');
-    const res = await this.proc.request(type, payload, timeoutMs);
+    if (!this.proc?.running) throw new Error(t('engine.helper.notRunning'));
+    const res = await this.proc.request(type, payload, timeoutMs).catch((e: unknown) => {
+      // These reach the user as the reason of a failed paste or microphone start, so they are shown in the interface language
+      const code = (e as { code?: string } | null)?.code;
+      if (code === 'timeout') throw new Error(t('engine.helper.requestTimedOut', { what: type, timeoutMs }));
+      if (code === 'exited') throw new Error(t('engine.helper.exitedWhileWaiting', { what: type }));
+      if (code === 'not_running') throw new Error(t('engine.helper.notRunning'));
+      throw e;
+    });
     return res.payload as T;
   }
 
-  /** 条件に合うメッセージが届くまで待つ。ヘルパーが終了したら失敗にする */
+  /** Waits for a message that matches. Fails if the helper exits */
   waitFor(match: (m: HelperToMain) => boolean, timeoutMs: number, what: string): Promise<HelperToMain> {
     return new Promise((resolve, reject) => {
       const cleanup = () => {
@@ -182,11 +190,11 @@ export class HelperClient extends EventEmitter {
       };
       const onExit = () => {
         cleanup();
-        reject(new Error(`${what} を待つ間にヘルパーが終了しました`));
+        reject(new Error(t('engine.helper.exitedWhileWaiting', { what })));
       };
       const timer = setTimeout(() => {
         cleanup();
-        reject(new Error(`helper の ${what} が ${timeoutMs}ms 以内に届きませんでした`));
+        reject(new Error(t('engine.helper.timedOut', { what, timeoutMs })));
       }, timeoutMs);
       this.on('message', onMessage);
       this.on('exit', onExit);
@@ -194,27 +202,27 @@ export class HelperClient extends EventEmitter {
   }
 
   /**
-   * 録音を始める。結果（audio_started か audio_error）は sessionId で突き合わせる（protocol.ts の冒頭を参照）。
+   * Starts recording. The result (audio_started or audio_error) is matched by sessionId (see the top of protocol.ts).
    */
   async startAudio(sessionId: number, deviceId: string | null, timeoutMs = 4000): Promise<AudioStartedPayload> {
-    if (!this.proc?.running) throw new Error('ヘルパーが動いていません');
+    if (!this.proc?.running) throw new Error(t('engine.helper.notRunning'));
     const wait = this.waitFor(
       (m) =>
         (m.type === 'audio_started' && m.payload.sessionId === sessionId) ||
-        // 開始の失敗（permission_denied、no_device、engine_failed）。device_lost は録音中の切り替えなので除く
+        // A failed start (permission_denied, no_device, engine_failed). device_lost is a switch during recording, so it is left out
         (m.type === 'audio_error' && m.payload.sessionId === sessionId && (m.payload.fatal || m.payload.code !== 'device_lost')),
       timeoutMs,
       'audio_started',
     );
     this.send('audio_start', { sessionId, deviceId });
     const m = await wait;
-    if (m.type === 'audio_error') throw new Error(`${m.payload.message}（${m.payload.code}）`);
+    if (m.type === 'audio_error') throw new Error(t('engine.helper.audioError', { message: m.payload.message, code: m.payload.code }));
     return m.payload as AudioStartedPayload;
   }
 
-  /** 録音を止め、最後のチャンクまで出し切ったことを audio_stopped で確かめる */
+  /** Stops recording, and confirms with audio_stopped that every chunk up to the last has been sent */
   async stopAudio(sessionId: number, timeoutMs = 2000): Promise<AudioStoppedPayload> {
-    if (!this.proc?.running) throw new Error('ヘルパーが動いていません');
+    if (!this.proc?.running) throw new Error(t('engine.helper.notRunning'));
     const wait = this.waitFor((m) => m.type === 'audio_stopped' && m.payload.sessionId === sessionId, timeoutMs, 'audio_stopped');
     this.send('audio_stop', { sessionId });
     return (await wait).payload as AudioStoppedPayload;

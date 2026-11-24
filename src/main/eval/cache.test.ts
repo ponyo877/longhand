@@ -17,13 +17,13 @@ const req = (over: Partial<LlmRequest> = {}): LlmRequest => ({
 });
 
 describe('stableStringify', () => {
-  it('キーの順が違っても同じ文字列になり、undefined の項目は落とす', () => {
+  it('produces the same string whatever the key order, and drops undefined fields', () => {
     expect(stableStringify({ b: 1, a: [2, { d: 3, c: 4 }], e: undefined })).toBe(stableStringify({ a: [2, { c: 4, d: 3 }], b: 1 }));
     expect(stableStringify({ a: null })).toBe('{"a":null}');
   });
 });
 
-describe('音声認識のキー', () => {
+describe('speech recognition key', () => {
   const base: AsrKeyInput = {
     audioSha256: 'aa',
     engine: 'whisper',
@@ -38,19 +38,19 @@ describe('音声認識のキー', () => {
     silenceDetection: true,
   };
 
-  it('末尾の切り落としの長さが違えばキーが変わる。切り落とさなければ、指定の無いときと同じキー', () => {
+  it('changes the key when the length cut from the end differs. Without a cut, the key is the same as when none is given', () => {
     expect(asrCacheKey({ ...base, truncateTailMs: undefined })).toBe(asrCacheKey(base));
     expect(asrCacheKey({ ...base, truncateTailMs: 300 })).not.toBe(asrCacheKey(base));
     expect(asrCacheKey({ ...base, truncateTailMs: 300 })).not.toBe(asrCacheKey({ ...base, truncateTailMs: 250 }));
   });
 
-  it('同じ入力なら同じキー。prompt の未指定と空は同じ扱い', () => {
+  it('gives the same key for the same input. An unset prompt and an empty prompt are treated alike', () => {
     expect(asrCacheKey(base)).toBe(asrCacheKey({ ...base, options: { beam: 5 } }));
     expect(asrCacheKey(base)).toBe(asrCacheKey({ ...base, prompt: '' }));
     expect(asrCacheKey(base)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('音声、エンジン、モデル、ワーカー、オプション、言語、ヒント、prompt のどれが変わってもキーが変わる', () => {
+  it('changes the key when any of audio, engine, model, worker, options, language, hints or prompt changes', () => {
     const variants: Partial<AsrKeyInput>[] = [
       { audioSha256: 'bb' },
       { engine: 'parakeet' },
@@ -73,11 +73,11 @@ describe('音声認識のキー', () => {
   });
 });
 
-describe('LLM のキー', () => {
+describe('LLM key', () => {
   const cfg: LlmSettings = { ...DEFAULT_SETTINGS.llm, model: 'model-a' };
   const id = llmIdentity(cfg);
 
-  it('API キー、ヘッダ、接続先はキーに入らない', () => {
+  it('leaves the API key, headers and endpoint out of the key', () => {
     const other = llmIdentity({ ...cfg, apiKeyEnc: 'ZW5jcnlwdGVk', headers: { authorization: 'Bearer secret-value' }, baseUrl: 'https://proxy.example.test', timeoutMs: 60000 });
     expect(other).toEqual(id);
     expect(llmCacheKey(other, req())).toBe(llmCacheKey(id, req()));
@@ -87,14 +87,14 @@ describe('LLM のキー', () => {
     expect(text).not.toContain('ZW5jcnlwdGVk');
   });
 
-  it('extraBody は中身を持たず、ハッシュだけを持つ', () => {
+  it('holds only a hash of extraBody, not its content', () => {
     const withExtra = llmIdentity({ ...cfg, extraBody: '{"metadata":{"team":"x"}}' });
     expect(JSON.stringify(withExtra)).not.toContain('metadata');
     expect(withExtra.extraBodySha256).not.toBe(id.extraBodySha256);
     expect(llmCacheKey(withExtra, req())).not.toBe(llmCacheKey(id, req()));
   });
 
-  it('種類、モデル、プロンプト、出力の形式、出力の上限、Anthropic の設定、試行番号のどれが変わってもキーが変わる', () => {
+  it('changes the key when any of kind, model, prompt, output format, output limit, Anthropic settings or attempt number changes', () => {
     const keys = [
       llmCacheKey(id, req()),
       llmCacheKey(llmIdentity({ ...cfg, provider: 'openai-compatible' }), req()),
@@ -110,11 +110,11 @@ describe('LLM のキー', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('時間切れと中断の指定は、キーに入らない', () => {
+  it('leaves the timeout and abort settings out of the key', () => {
     expect(llmCacheKey(id, req({ timeoutMs: 60000, signal: new AbortController().signal }))).toBe(llmCacheKey(id, req()));
   });
 
-  it('Anthropic 以外では、Anthropic の設定をキーに入れない', () => {
+  it('leaves the Anthropic settings out of the key for other providers', () => {
     const a = llmIdentity({ ...cfg, provider: 'openai-compatible' });
     const b = llmIdentity({ ...cfg, provider: 'openai-compatible', anthropic: { ...cfg.anthropic, effort: 'high' } });
     expect(a.anthropic).toBeNull();
@@ -127,7 +127,7 @@ describe('CachingProvider', () => {
   const identity = llmIdentity({ ...DEFAULT_SETTINGS.llm, model: 'model-a' });
   const noWait = () => 0;
 
-  /** 呼ばれるたびに、並べた結果を順に返す偽の LLM */
+  /** A fake LLM that returns the given results in order, one per call */
   function fakeInner(results: (string | LlmError)[]): LlmProvider & { calls: number } {
     const p = {
       kind: 'fake',
@@ -149,7 +149,7 @@ describe('CachingProvider', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('1 回目は呼んで保存し、2 回目は保存済みの結果を返して呼ばない', async () => {
+  it('calls and saves the first time, and returns the saved result the second time without calling', async () => {
     const inner = fakeInner(['{"text":"整えた文"}']);
     const p = new CachingProvider(inner, { dir, identity });
     const first = await p.complete(req());
@@ -160,12 +160,12 @@ describe('CachingProvider', () => {
     expect(p.takeLast()).toBeNull();
     expect(inner.calls).toBe(1);
     expect(p.stats).toMatchObject({ hits: 1, misses: 1, calls: 1, stored: 1, failures: 0 });
-    // 別の包みからも読める（次の実行で使い回せる）
+    // Another wrapper can read it too (so the next run can reuse it)
     const again = new CachingProvider(null, { dir, identity });
     expect((await again.complete(req())).text).toBe('{"text":"整えた文"}');
   });
 
-  it('保存するファイルは 0600 で、プロンプトも接続の情報も含まない', async () => {
+  it('saves files with mode 0600 that contain neither the prompt nor the connection details', async () => {
     const p = new CachingProvider(fakeInner(['{"text":"整えた文"}']), { dir, identity });
     await p.complete(req());
     const files = fs.readdirSync(dir);
@@ -179,14 +179,14 @@ describe('CachingProvider', () => {
     expect(Object.keys(JSON.parse(saved)).sort()).toEqual(['attempt', 'createdAt', 'kind', 'model', 'response', 'v']);
   });
 
-  it('試行番号が違えば、別の結果として呼び直す', async () => {
+  it('calls again for a different result when the attempt number differs', async () => {
     const inner = fakeInner(['{"text":"一"}', '{"text":"二"}']);
     expect((await new CachingProvider(inner, { dir, identity, attempt: 0 }).complete(req())).text).toBe('{"text":"一"}');
     expect((await new CachingProvider(inner, { dir, identity, attempt: 1 }).complete(req())).text).toBe('{"text":"二"}');
     expect(inner.calls).toBe(2);
   });
 
-  it('時間切れ、通信の失敗、利用上限、5xx は 2 回までやり直す', async () => {
+  it('retries timeouts, network failures, rate limits and 5xx up to twice', async () => {
     for (const err of [new LlmError('timeout', 't'), new LlmError('network', 'n'), new LlmError('rate_limit', 'r', 429), new LlmError('http', 'h', 503)]) {
       const inner = fakeInner([err, err, '{"text":"三度目"}']);
       const p = new CachingProvider(inner, { dir, identity, attempt: inner.calls + Math.random(), backoffMs: noWait });
@@ -197,7 +197,7 @@ describe('CachingProvider', () => {
     }
   });
 
-  it('やり直しても失敗したら、保存せずに失敗を返す（実行は止めない）', async () => {
+  it('returns a failure without saving when retries also fail (does not stop the run)', async () => {
     const inner = fakeInner([new LlmError('timeout', 't')]);
     const p = new CachingProvider(inner, { dir, identity, backoffMs: noWait });
     await expect(p.complete(req())).rejects.toMatchObject({ kind: 'timeout' });
@@ -208,7 +208,7 @@ describe('CachingProvider', () => {
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
-  it('4xx や拒否はやり直さない', async () => {
+  it('does not retry 4xx or refusals', async () => {
     const inner = fakeInner([new LlmError('http', 'bad request', 400)]);
     const p = new CachingProvider(inner, { dir, identity, backoffMs: noWait });
     await expect(p.complete(req())).rejects.toMatchObject({ kind: 'http' });
@@ -216,26 +216,26 @@ describe('CachingProvider', () => {
     expect(p.fatal).toBeNull();
   });
 
-  it('認証と設定の誤りは、やり直さずに実行を止める印を立てる', async () => {
+  it('sets the flag that stops the run on auth and config errors, without retrying', async () => {
     for (const kind of ['auth', 'config'] as const) {
-      const inner = fakeInner([new LlmError(kind, '認証に失敗しました', 401)]);
+      const inner = fakeInner([new LlmError(kind, 'Authentication failed', 401)]);
       const p = new CachingProvider(inner, { dir, identity, backoffMs: noWait });
       await expect(p.complete(req())).rejects.toMatchObject({ kind });
       expect(inner.calls).toBe(1);
       expect(p.fatal?.kind).toBe(kind);
-      // 印が立った後は、もう呼ばない
+      // Once the flag is set, it does not call anymore
       await expect(p.complete(req({ user: '別の発話' }))).rejects.toBeInstanceOf(LlmError);
       expect(inner.calls).toBe(1);
     }
   });
 
-  it('呼び出しの上限に達したら、それ以上は呼ばずに実行を止める印を立てる', async () => {
+  it('sets the flag that stops the run when the call limit is reached, without calling further', async () => {
     const inner = fakeInner(['{"text":"一"}']);
     const budget = new CallBudget(2);
     const p = new CachingProvider(inner, { dir, identity, budget });
     await p.complete(req({ user: '一つ目' }));
     await p.complete(req({ user: '二つ目' }));
-    await p.complete(req({ user: '一つ目' })); // 保存済みは数えない
+    await p.complete(req({ user: '一つ目' })); // saved results are not counted
     expect(budget.used).toBe(2);
     await expect(p.complete(req({ user: '三つ目' }))).rejects.toBeInstanceOf(LlmError);
     expect(inner.calls).toBe(2);
@@ -243,7 +243,7 @@ describe('CachingProvider', () => {
     expect(p.takeLast()).toMatchObject({ errorKind: 'budget' });
   });
 
-  it('やり直しも上限に数える', async () => {
+  it('counts retries toward the limit', async () => {
     const inner = fakeInner([new LlmError('network', 'n')]);
     const budget = new CallBudget(2);
     const p = new CachingProvider(inner, { dir, identity, budget, backoffMs: noWait });
@@ -252,12 +252,12 @@ describe('CachingProvider', () => {
     expect(p.fatal?.kind).toBe('budget');
   });
 
-  it('通信の入口で数えているときは、自分では数えず、上限に達したかだけを見る', async () => {
+  it('does not count by itself when calls are counted at the network entry point, and only checks whether the limit is reached', async () => {
     const budget = new CallBudget(1);
     const inner: LlmProvider = {
       kind: 'fake',
       async complete() {
-        budget.take(); // 通信の入口（fetch）に当たる
+        budget.take(); // stands in for the network entry point (fetch)
         return { text: '{"text":"一"}', model: 'm', elapsedMs: 1 };
       },
     };
@@ -268,7 +268,7 @@ describe('CachingProvider', () => {
     expect(p.fatal?.kind).toBe('budget');
   });
 
-  it('保存済みの結果だけを使う指定では、無ければ失敗を返して数える（実行は止めない）', async () => {
+  it('returns a failure and counts it when only saved results are allowed and there is none (does not stop the run)', async () => {
     const p = new CachingProvider(null, { dir, identity });
     await expect(p.complete(req())).rejects.toBeInstanceOf(LlmError);
     expect(p.takeLast()).toMatchObject({ errorKind: 'cache-miss', tries: 0 });
@@ -278,7 +278,7 @@ describe('CachingProvider', () => {
 });
 
 describe('JsonCache', () => {
-  it('無いキーと壊れたファイルは null', () => {
+  it('returns null for a missing key and for a broken file', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-json-cache-'));
     try {
       const c = new JsonCache<{ a: number }>(dir);

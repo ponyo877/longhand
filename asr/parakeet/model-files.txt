@@ -1,7 +1,7 @@
 # FluidInference/parakeet-0.6b-ja-coreml @ 2952296ff1da4a6d6a7aec545e226367db80c612
 # URL: https://huggingface.co/FluidInference/parakeet-0.6b-ja-coreml/resolve/<revision>/<path>
-# 保存先: ~/Library/Application Support/Longhand/models/parakeet-ja/<path>
-# 書式: sha256  バイト数  パス（.mlpackage と CtcDecoder は不要なので含めない）
+# Saved to: ~/Library/Application Support/Longhand/models/parakeet-ja/<path>
+# Format: sha256  bytes  path (.mlpackage and CtcDecoder are not needed, so they are not listed)
 86795f3f612cf5bceb5d3ccb62353e7b249ec0d947de2d92f3a493b41c61cfc3  243  Decoderv2.mlmodelc/analytics/coremldata.bin
 aba05a4a882fb8149c0229b0eb36e24269fb9f008e65f302eef37b1f6c982ed3  493  Decoderv2.mlmodelc/coremldata.bin
 345b75575b055563b6adc5a6adb39d3bdd8b5bf06b171fcc8a07229113dfc8c5  3316  Decoderv2.mlmodelc/metadata.json

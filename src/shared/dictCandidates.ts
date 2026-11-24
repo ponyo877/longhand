@@ -1,45 +1,46 @@
 /**
- * 文章から、辞書に入れる語の候補を探す。
+ * Finds candidate words for the dictionary in text.
  *
- * 書き起こしで崩れやすいのは、英字で書く製品名や技術用語である（カタカナになる）。
- * そこで、利用者の履歴や手元の文書から英字の語を拾い、まだ辞書にない語を、出てきた回数の多い順に並べる。
- * 選ぶのは利用者で、ここでは候補を出すだけである。
+ * Product names and technical terms written in Latin letters are the words most easily broken by transcription (they come out in katakana).
+ * So this picks Latin words from the user's history and local documents, and lists those not yet in the dictionary, most frequent first.
+ * The user does the choosing; this only offers candidates.
  *
- * - 英語の文（英字の語が 4 語以上続くところ）からは、名前らしい語（途中に大文字や数字がある語、文頭以外の大文字始まり）だけを拾う。
- *   日本語の文に混ざった英字の語は、ありふれた語（the や and など）を除いてすべて拾う。
- * - 大文字で始まる語が空白 1 つで続くところ（Google Chrome など）は、2 回以上出てきたら、ひとまとまりの候補にする。
- * - 大文字と小文字だけが違う書き方は 1 つにまとめ、いちばん多い書き方を使う。
+ * - From English prose (runs of 4 or more Latin words), only name-like words are picked (words with an uppercase letter or a digit inside,
+ *   words starting with an uppercase letter other than at the start of a sentence). Latin words mixed into Japanese text are all picked,
+ *   except common words (the, and and so on).
+ * - Runs of capitalized words separated by a single space (Google Chrome and so on) become one candidate when they appear twice or more.
+ * - Spellings that differ only in case are merged into one, using the most frequent spelling.
  *
- * 通信もファイルの読み書きもしない純粋な関数で、main からも renderer からも使える。
+ * A pure function with no network or file access, usable from both main and the renderer.
  */
 
 export interface DictCandidate {
-  /** 辞書に入れる表記（いちばん多く出てきた書き方） */
+  /** Spelling to put in the dictionary (the spelling that appeared most often) */
   word: string;
-  /** 出てきた回数 */
+  /** Number of times it appeared */
   count: number;
-  /** 最初に出てきた箇所の前後（選ぶときの手がかり） */
+  /** Text around its first appearance (a hint for choosing) */
   sample: string;
 }
 
 export interface CandidateOptions {
-  /** すでに辞書にある語（候補から外す） */
+  /** Words already in the dictionary (left out of the candidates) */
   existing?: string[];
-  /** 返す候補の上限 */
+  /** Maximum number of candidates returned */
   limit?: number;
-  /** 1 語の長さの上限（字数） */
+  /** Maximum length of one word (in characters) */
   maxLength?: number;
   /**
-   * 名前らしい語だけを拾う（途中に大文字か数字がある語と、大文字で始まる語）。
-   * 画面の文から語を拾うときに使う（小文字だけの語は、コマンドや変数の名前が大量に混ざるので外す）
+   * Picks only name-like words (words with an uppercase letter or a digit inside, and words starting with an uppercase letter).
+   * Used when picking words from the text on screen (lowercase-only words are left out because many command and variable names get mixed in)
    */
   namesOnly?: boolean;
 }
 
-/** 同じ語とみなすための形（全角半角と大文字小文字を区別しない） */
+/** Form used to treat words as the same (ignores full-width / half-width and case) */
 const keyOf = (w: string) => w.normalize('NFKC').trim().toLowerCase();
 
-/** ありふれた英語の語。辞書に入れても書き起こしは変わらないので、候補にしない */
+/** Common English words. Adding them to the dictionary does not change transcription, so they are not candidates */
 const STOPWORDS = new Set(
   (
     'a an the this that these those it its he she we you they me my your our their his her them us i ' +
@@ -57,25 +58,25 @@ const STOPWORDS = new Set(
   ).split(' '),
 );
 
-/** 「10ms」「24GB」「5x」のような、数に単位が付いただけのもの。「3D」「5G」「4K」（数字と大文字 1 字）は語として残す */
+/** A number with only a unit attached, such as 「10ms」「24GB」「5x」. 「3D」「5G」「4K」 (digits and one uppercase letter) stay as words */
 const UNIT = /^\d+(?:\.\d+)?(?:ms|sec|min|hr|kb|mb|gb|tb|px|pt|fps|hz|khz|mhz|ghz|kg|mg|cm|mm|km|ml|kw|st|nd|rd|th)$/i;
 const UNIT_ONE_LETTER = /^\d+(?:\.\d+)?[a-z]$/;
 
 const URL_OR_MAIL = /https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
 
-/** 英字の語。途中の . - _ + # と、末尾の + #（C++ や C#）を含める。「3D」のような数字始まりも拾う */
+/** A Latin word. Includes . - _ + # inside it and + # at the end (C++ or C#). Also picks words starting with a digit, such as 「3D」 */
 const TOKEN = /(?:\d+[A-Za-z]|[A-Za-z])[A-Za-z0-9]*(?:[.\-_+#'][A-Za-z0-9]+)*[+#]{0,2}/g;
 
-/** 英語の文とみなす長さ（英字の語がこの数以上続くところ） */
+/** Length counted as English prose (runs of at least this many Latin words) */
 const PROSE_MIN_TOKENS = 4;
-/** ひとまとまりの候補にする語数の上限 */
+/** Maximum number of words in one phrase candidate */
 const PHRASE_MAX_WORDS = 4;
 
 interface Tok {
   text: string;
   start: number;
   end: number;
-  /** 前の語との間にある字 */
+  /** Characters between this word and the previous one */
   gap: string;
 }
 
@@ -93,7 +94,7 @@ function acceptable(t: string, maxLength: number): boolean {
 
 const WORD_CHAR = /[A-Za-z0-9]/;
 
-/** 語の前後 14 字を取り出す。端が英字の語の途中に当たったら、その語を含めない（「…afana を」のようにしない） */
+/** Takes the 14 characters around a word. If an edge falls in the middle of a Latin word, that word is left out (to avoid 「…afana を」) */
 function sampleOf(text: string, start: number, end: number): string {
   let from = Math.max(0, start - 14);
   while (from > 0 && from < start && WORD_CHAR.test(text[from]) && WORD_CHAR.test(text[from - 1])) from++;
@@ -102,7 +103,7 @@ function sampleOf(text: string, start: number, end: number): string {
   return `${from > 0 ? '…' : ''}${text.slice(from, to).replace(/\s+/g, ' ').trim()}${to < text.length ? '…' : ''}`;
 }
 
-/** 文章を、英字の語が続くかたまりに分ける。語の間に日本語の字や改行があれば、別のかたまりにする */
+/** Splits text into runs of Latin words. Japanese characters or line breaks between words start a new run */
 function spansOf(text: string): Tok[][] {
   const spans: Tok[][] = [];
   let cur: Tok[] = [];
@@ -111,7 +112,7 @@ function spansOf(text: string): Tok[][] {
     const start = m.index;
     const gap = text.slice(prevEnd, start);
     const tok: Tok = { text: m[0], start, end: start + m[0].length, gap };
-    // 間にあるのが空白と記号だけなら、同じかたまり（英語の文の続き）とみなす
+    // If only spaces and symbols are in between, it is the same run (English prose continuing)
     if (cur.length && /^[ ,.;:!?"()\-–/]*$/.test(gap)) cur.push(tok);
     else {
       if (cur.length) spans.push(cur);
@@ -127,17 +128,17 @@ interface Found {
   text: string;
   start: number;
   end: number;
-  /** ひとまとまりの候補のときの、中の語 */
+  /** For a phrase candidate, the words in it */
   parts?: Tok[];
 }
 
-/** 1 つのかたまりから、候補になる語と、ひとまとまりの候補を取り出す */
+/** Takes the candidate words and phrase candidates from one run */
 function pick(span: Tok[], maxLength: number, namesOnly: boolean): Found[] {
   const prose = span.length >= PROSE_MIN_TOKENS;
   const keep = span.map((t, i) => {
     if (!acceptable(t.text, maxLength)) return false;
     if (!prose) return !namesOnly || hasInnerUpperOrDigit(t.text) || isCapitalized(t.text);
-    // 英語の文の中では、名前らしい語だけを拾う
+    // In English prose, only name-like words are picked
     if (hasInnerUpperOrDigit(t.text)) return true;
     const sentenceStart = i === 0 || /[.!?]\s*$/.test(t.gap);
     return isCapitalized(t.text) && !sentenceStart;
@@ -145,7 +146,7 @@ function pick(span: Tok[], maxLength: number, namesOnly: boolean): Found[] {
   const out: Found[] = [];
   for (let i = 0; i < span.length; i++) {
     if (!keep[i]) continue;
-    // 大文字で始まる語が空白 1 つで続くところを、ひとまとまりにする
+    // Runs of capitalized words separated by a single space become one phrase
     let j = i;
     while (j + 1 < span.length && j + 1 - i < PHRASE_MAX_WORDS && keep[j + 1] && span[j + 1].gap === ' ' && isCapitalized(span[j].text) && isCapitalized(span[j + 1].text)) j++;
     if (j > i) {
@@ -163,7 +164,7 @@ export function extractCandidates(texts: string[], opts: CandidateOptions = {}):
   const docs = texts.map((t) => t.normalize('NFKC').replace(URL_OR_MAIL, (m) => ' '.repeat(m.length)));
   const found = docs.map((doc) => spansOf(doc).flatMap((span) => pick(span, maxLength, opts.namesOnly ?? false)));
 
-  // ひとまとまりの候補は、2 回以上出てきたものだけを採る。1 回だけなら、中の語を 1 語ずつ数える
+  // Phrase candidates are taken only when they appear twice or more. If only once, the words in them are counted one by one
   const phraseCount = new Map<string, number>();
   for (const list of found) for (const f of list) if (f.parts) phraseCount.set(keyOf(f.text), (phraseCount.get(keyOf(f.text)) ?? 0) + 1);
 
@@ -189,7 +190,7 @@ export function extractCandidates(texts: string[], opts: CandidateOptions = {}):
   const upperCount = (s: string) => (s.match(/[A-Z]/g) ?? []).length;
   const out: DictCandidate[] = [];
   for (const g of groups.values()) {
-    // いちばん多い書き方を使う。同数なら、大文字の多いほう（GitHub と github なら GitHub）
+    // Use the most frequent spelling. On a tie, the one with more uppercase letters (GitHub over github)
     const word = [...g.forms.entries()].sort((a, b) => b[1] - a[1] || upperCount(b[0]) - upperCount(a[0]))[0][0];
     out.push({ word, count: g.count, sample: g.sample });
   }
@@ -197,7 +198,7 @@ export function extractCandidates(texts: string[], opts: CandidateOptions = {}):
   return out.slice(0, opts.limit ?? 300);
 }
 
-/** 文章らしい文字列か（空白か、日本語の字を含む）。JSON の中の ID、種類の名前、パスを外すために使う */
+/** Whether a string looks like prose (contains whitespace or Japanese characters). Used to leave out IDs, type names and paths in JSON */
 const PROSE_LIKE = /[\s\u3040-\u30ff\u3400-\u9fff]/;
 
 function collectStrings(v: unknown, out: string[]): void {
@@ -211,9 +212,9 @@ function collectStrings(v: unknown, out: string[]): void {
 }
 
 /**
- * 読み込んだファイルの中身から、文章を取り出す。
- * ふつうのテキストはそのまま使う。JSON や JSON Lines（ほかのアプリが書き出した履歴など）は、文章らしい値だけを使う
- * （キーの名前や ID が候補に混ざらないようにする）。
+ * Takes the prose out of the content of a loaded file.
+ * Plain text is used as is. For JSON and JSON Lines (history exported by other apps and so on), only prose-like values are used
+ * (so that key names and IDs do not get mixed into the candidates).
  */
 export function textsFromFile(content: string): string[] {
   const t = content.replace(/^\uFEFF/, '');
@@ -224,13 +225,13 @@ export function textsFromFile(content: string): string[] {
       collectStrings(JSON.parse(t), out);
       return out;
     } catch {
-      // 1 行に 1 つの JSON（JSON Lines）として読んでみる
+      // Try reading it as one JSON value per line (JSON Lines)
     }
     try {
       for (const line of t.split('\n')) if (line.trim()) collectStrings(JSON.parse(line), out);
       return out;
     } catch {
-      // JSON ではないので、テキストとして読む
+      // Not JSON, so read it as text
     }
   }
   return [t];

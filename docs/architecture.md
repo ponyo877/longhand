@@ -31,6 +31,10 @@ The helper and the workers speak newline-delimited JSON over stdin and stdout.
 The message types are defined in `src/shared/protocol.ts` and `src/shared/asr-protocol.ts`.
 If a recognition worker exits, the main process restarts it with backoff and reloads the model.
 
+Text shown in the interface comes from message catalogs in `src/shared/i18n/messages/`, one file per area with English and Japanese side by side.
+The main process resolves the language from the setting and the macOS language order and sends it to the windows with the app snapshot, so menus, notifications and windows switch together.
+Prompts sent to the LLM are always in Japanese, whatever the interface language.
+
 ## The dictation pipeline
 
 1. **Record.** The helper reports key down and streams audio chunks. After key up it keeps recording for a short tail (300 ms by default) so that sentence endings are not cut off.

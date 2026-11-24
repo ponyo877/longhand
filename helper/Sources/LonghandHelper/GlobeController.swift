@@ -2,11 +2,11 @@ import Darwin
 import Foundation
 import LonghandCore
 
-/// 地球儀キー（Fn）を押したときのシステム動作（AppleFnUsageType）を、一時的に「何もしない」（0）にする。
+/// Temporarily sets what the system does when the globe key (Fn) is pressed (AppleFnUsageType) to “Do Nothing” (0).
 ///
-/// 非公開 API（HIToolbox の TISGetFnUsageType / TISUpdateFnUsageType）を dlsym で引く。見つからなければ何もしない。
-/// 元の値はレシートファイル（~/Library/Application Support/Longhand/globe-receipt.json）に書いてから書き換え、
-/// 終了時に戻す。クラッシュしたときは、次回起動時にレシートを見て戻す。
+/// Looks up private APIs (TISGetFnUsageType / TISUpdateFnUsageType in HIToolbox) with dlsym. Does nothing if they are not found.
+/// The original value is written to a receipt file (~/Library/Application Support/Longhand/globe-receipt.json) before changing it,
+/// and restored on exit. After a crash, the next launch reads the receipt and restores it.
 final class GlobeController: @unchecked Sendable {
     static let shared = GlobeController()
 
@@ -16,9 +16,9 @@ final class GlobeController: @unchecked Sendable {
     private let lock = NSLock()
     private var getFn: GetFn?
     private var updateFn: UpdateFn?
-    /// 自分が書き換えて、まだ戻していないときのレシート
+    /// Receipt for a change this process made and has not restored yet
     private var held: GlobeReceipt?
-    /// suppress を求められていて、実際に「何もしない」になっているか
+    /// Whether suppression was requested and the value is actually “Do Nothing”
     private var suppressed = false
 
     static let doNothing: Int32 = 0
@@ -45,7 +45,7 @@ final class GlobeController: @unchecked Sendable {
 
     private func currentValue() -> Int32? {
         if let getFn { return getFn() }
-        // 読むだけなら設定ファイルでも分かる
+        // For reading only, the preferences file is enough
         let v = CFPreferencesCopyAppValue("AppleFnUsageType" as CFString, "com.apple.HIToolbox" as CFString)
         return (v as? NSNumber)?.int32Value
     }
@@ -58,7 +58,7 @@ final class GlobeController: @unchecked Sendable {
         return now == value
     }
 
-    /// 起動時: 前回のプロセスが残したレシートがあれば戻す
+    /// At startup: restores from a receipt left by a previous process, if any
     func recoverStaleReceipt() {
         lock.lock(); defer { lock.unlock() }
         guard let receipt = readReceipt() else { return }
@@ -77,7 +77,7 @@ final class GlobeController: @unchecked Sendable {
         }
     }
 
-    /// suppress の切り替え。結果として「何もしない」になっているかを返す
+    /// Turns suppression on or off. Returns whether the value ends up as “Do Nothing”
     @discardableResult
     func setSuppressed(_ on: Bool) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -88,12 +88,12 @@ final class GlobeController: @unchecked Sendable {
                 return false
             }
             if current == Self.doNothing {
-                // 元から「何もしない」。戻す必要もない（別のヘルパーが持っている場合も含む）
+                // Already “Do Nothing”. Nothing to restore either (including when another helper owns it)
                 suppressed = true
                 return true
             }
             if let other = readReceipt(), Self.isLiveHelper(pid: other.pid), other.pid != getpid() {
-                // 別のヘルパーが書き換え中なのに値が 0 でない＝ユーザーが変えた。触らない
+                // Another helper holds the change but the value is not 0, so the user changed it. Leave it alone
                 Log.warn("another helper (pid \(other.pid)) owns the globe receipt; not touching AppleFnUsageType")
                 suppressed = false
                 return false
@@ -108,7 +108,7 @@ final class GlobeController: @unchecked Sendable {
                 held = receipt
                 suppressed = true
             } else {
-                // 書き換えに失敗した。可能なら元に戻してレシートを消す
+                // The change failed. Restore the original if possible and remove the receipt
                 if currentValue() != current { _ = apply(current) }
                 removeReceipt()
                 suppressed = false
@@ -121,7 +121,7 @@ final class GlobeController: @unchecked Sendable {
         }
     }
 
-    /// 終了時に呼ぶ
+    /// Call on exit
     func restore() {
         lock.lock(); defer { lock.unlock() }
         releaseLocked()
@@ -142,7 +142,7 @@ final class GlobeController: @unchecked Sendable {
         removeReceipt()
     }
 
-    // MARK: - レシート
+    // MARK: - Receipt
 
     private func readReceipt() -> GlobeReceipt? {
         guard let data = try? Data(contentsOf: receiptURL) else { return nil }
@@ -165,7 +165,7 @@ final class GlobeController: @unchecked Sendable {
         try? FileManager.default.removeItem(at: receiptURL)
     }
 
-    /// pid のプロセスが生きていて、LonghandHelper であるか
+    /// Whether the process with pid is alive and is LonghandHelper
     static func isLiveHelper(pid: Int32) -> Bool {
         guard pid > 0, kill(pid, 0) == 0 || errno == EPERM else { return false }
         var buf = [CChar](repeating: 0, count: 256)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# longhand-asr-whisper（Metal 版）をビルドし、asr/build/ に置く。
-#   ./build.sh            Metal 版のみ
-#   ./build.sh --coreml   Core ML エンコーダ版（longhand-asr-whisper-coreml）も作る（任意。ベンチマーク用）
-# 署名は asr/build.sh がまとめて行う。
+# Builds longhand-asr-whisper (Metal version) and puts it in asr/build/.
+#   ./build.sh            Metal version only
+#   ./build.sh --coreml   also builds the Core ML encoder version (longhand-asr-whisper-coreml) (optional, for benchmarks)
+# asr/build.sh does all the signing.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/../build"

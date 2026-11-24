@@ -14,7 +14,7 @@ bool base64_decode(const std::string & in, std::vector<uint8_t> & out) {
         std::fill(std::begin(table), std::end(table), (int8_t) -1);
         const char * chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         for (int i = 0; i < 64; ++i) table[(uint8_t) chars[i]] = (int8_t) i;
-        table[(uint8_t) '-'] = 62;  // base64url も受け付ける
+        table[(uint8_t) '-'] = 62;  // Also accept base64url
         table[(uint8_t) '_'] = 63;
         init = true;
     }
@@ -48,7 +48,7 @@ bool decode_pcm_base64(const std::string & b64, std::vector<float> & out, std::s
         return false;
     }
     out.resize(bytes.size() / 4);
-    if (!out.empty()) std::memcpy(out.data(), bytes.data(), bytes.size());  // Apple Silicon はリトルエンディアン
+    if (!out.empty()) std::memcpy(out.data(), bytes.data(), bytes.size());  // Apple Silicon is little-endian
     for (float & v : out) {
         if (!std::isfinite(v)) v = 0.0f;
     }
@@ -87,7 +87,7 @@ bool read_wav(const std::string & path, std::vector<float> & out, std::string & 
             if (fmt_tag == 0xFFFE && len >= 26 && avail >= 26) fmt_tag = rd_u16(ck + 32);  // WAVE_FORMAT_EXTENSIBLE
         } else if (std::memcmp(ck, "data", 4) == 0) {
             data = buf.data() + body;
-            data_len = std::min<size_t>(len, avail);  // 録音途中のファイル（長さ 0 や過大）にも耐える
+            data_len = std::min<size_t>(len, avail);  // Tolerate files still being recorded (length 0 or too large)
             if (len == 0 || len == 0xFFFFFFFF) data_len = avail;
             break;
         }
@@ -129,7 +129,7 @@ bool read_wav(const std::string & path, std::vector<float> & out, std::string & 
         out = std::move(mono);
         return true;
     }
-    // 線形補間でリサンプリング（アプリは 16 kHz を渡す前提なので、念のための経路）
+    // Resample with linear interpolation (the app is expected to pass 16 kHz, so this is a fallback path)
     const double ratio = (double) rate / kSampleRate;
     const size_t n_out = (size_t) std::floor(frames / ratio);
     out.resize(n_out);

@@ -1,11 +1,11 @@
-// macOS の仮想キーコード（kVK_*）と、プロトコルのキー名（W3C KeyboardEvent.code 準拠）の対応表。
+// Mapping between macOS virtual key codes (kVK_*) and the protocol's key names (following W3C KeyboardEvent.code).
 //
-// KeyboardEvent.code は「キーの物理的な位置」の名前なので、US（ANSI）配列でも JIS 配列でも
-// 同じキーコードは同じ名前になる。JIS 配列にだけあるキー（¥、_、英数、かな、テンキーの ,）は
-// 専用の名前（IntlYen、IntlRo、Lang2、Lang1、NumpadComma）を持つ。
-// 対応は Chromium の dom_code_data.inc（mac 列）に合わせている。
+// KeyboardEvent.code names the physical position of a key, so on both the US (ANSI) and JIS layouts
+// the same key code gets the same name. Keys found only on the JIS layout (¥, _, Eisu, Kana, the keypad ,)
+// have their own names (IntlYen, IntlRo, Lang2, Lang1, NumpadComma).
+// The mapping follows Chromium's dom_code_data.inc (the mac column).
 
-/// 修飾キーの種類（左右を区別しない）
+/// Kind of modifier key (left and right not distinguished)
 public enum ModifierKind: String, CaseIterable, Sendable {
     case fn = "Fn"
     case control = "Control"
@@ -13,7 +13,7 @@ public enum ModifierKind: String, CaseIterable, Sendable {
     case shift = "Shift"
     case meta = "Meta"
 
-    /// この種類に属する物理キーの名前
+    /// Names of the physical keys of this kind
     public var physicalNames: [String] {
         switch self {
         case .fn: return ["Fn"]
@@ -24,7 +24,7 @@ public enum ModifierKind: String, CaseIterable, Sendable {
         }
     }
 
-    /// 表示や並べ替えの順序
+    /// Order for display and sorting
     public var order: Int {
         switch self {
         case .fn: return 0
@@ -36,7 +36,7 @@ public enum ModifierKind: String, CaseIterable, Sendable {
     }
 }
 
-/// キーボードの物理配列
+/// Physical keyboard layout
 public enum KeyboardLayoutKind: String, Sendable {
     case ansi = "ANSI"
     case iso = "ISO"
@@ -44,10 +44,10 @@ public enum KeyboardLayoutKind: String, Sendable {
 }
 
 public enum KeyTable {
-    /// キーコード → キー名（物理キー。左右の区別あり）
+    /// Key code → key name (physical keys, left and right distinguished)
     public static let nameByKeyCode: [UInt16: String] = {
         var m: [UInt16: String] = [
-            // 文字キー（US 配列の刻印で命名。JIS でも位置は同じ）
+            // Character keys (named after the US layout legends; same positions on JIS)
             0x00: "KeyA", 0x01: "KeyS", 0x02: "KeyD", 0x03: "KeyF", 0x04: "KeyH", 0x05: "KeyG",
             0x06: "KeyZ", 0x07: "KeyX", 0x08: "KeyC", 0x09: "KeyV", 0x0A: "IntlBackslash", 0x0B: "KeyB",
             0x0C: "KeyQ", 0x0D: "KeyW", 0x0E: "KeyE", 0x0F: "KeyR", 0x10: "KeyY", 0x11: "KeyT",
@@ -57,33 +57,33 @@ public enum KeyTable {
             0x24: "Enter", 0x25: "KeyL", 0x26: "KeyJ", 0x27: "Quote", 0x28: "KeyK", 0x29: "Semicolon",
             0x2A: "Backslash", 0x2B: "Comma", 0x2C: "Slash", 0x2D: "KeyN", 0x2E: "KeyM", 0x2F: "Period",
             0x30: "Tab", 0x31: "Space", 0x32: "Backquote", 0x33: "Backspace", 0x35: "Escape",
-            // 修飾キー
+            // Modifier keys
             0x36: "MetaRight", 0x37: "MetaLeft", 0x38: "ShiftLeft", 0x39: "CapsLock", 0x3A: "AltLeft",
             0x3B: "ControlLeft", 0x3C: "ShiftRight", 0x3D: "AltRight", 0x3E: "ControlRight", 0x3F: "Fn",
-            // テンキー
+            // Numeric keypad
             0x41: "NumpadDecimal", 0x43: "NumpadMultiply", 0x45: "NumpadAdd", 0x47: "NumLock",
             0x4B: "NumpadDivide", 0x4C: "NumpadEnter", 0x4E: "NumpadSubtract", 0x51: "NumpadEqual",
             0x52: "Numpad0", 0x53: "Numpad1", 0x54: "Numpad2", 0x55: "Numpad3", 0x56: "Numpad4",
             0x57: "Numpad5", 0x58: "Numpad6", 0x59: "Numpad7", 0x5B: "Numpad8", 0x5C: "Numpad9",
-            // 音量
+            // Volume
             0x48: "AudioVolumeUp", 0x49: "AudioVolumeDown", 0x4A: "AudioVolumeMute",
-            // JIS 配列だけのキー
+            // Keys only on the JIS layout
             0x5D: "IntlYen", 0x5E: "IntlRo", 0x5F: "NumpadComma", 0x66: "Lang2", 0x68: "Lang1",
-            // ファンクションキー
+            // Function keys
             0x7A: "F1", 0x78: "F2", 0x63: "F3", 0x76: "F4", 0x60: "F5", 0x61: "F6", 0x62: "F7",
             0x64: "F8", 0x65: "F9", 0x6D: "F10", 0x67: "F11", 0x6F: "F12", 0x69: "F13", 0x6B: "F14",
             0x71: "F15", 0x6A: "F16", 0x40: "F17", 0x4F: "F18", 0x50: "F19", 0x5A: "F20",
-            // 編集・移動
+            // Editing and navigation
             0x6E: "ContextMenu", 0x72: "Insert", 0x73: "Home", 0x74: "PageUp", 0x75: "Delete",
             0x77: "End", 0x79: "PageDown", 0x7B: "ArrowLeft", 0x7C: "ArrowRight", 0x7D: "ArrowDown",
             0x7E: "ArrowUp",
         ]
-        // 新しい Mac の地球儀キーは 0xB3 を報告することがある。Fn と同じ扱いにする（逆引きは 0x3F）。
+        // The Globe key on newer Macs can report 0xB3. Treat it the same as Fn (the reverse lookup gives 0x3F).
         m[0xB3] = "Fn"
         return m
     }()
 
-    /// キー名 → キーコード（逆引き）
+    /// Key name → key code (reverse lookup)
     public static let keyCodeByName: [String: UInt16] = {
         var m: [String: UInt16] = [:]
         for (code, name) in nameByKeyCode where m[name] == nil || code < m[name]! {
@@ -92,14 +92,14 @@ public enum KeyTable {
         return m
     }()
 
-    /// マウスボタン名（CGEvent の buttonNumber → 名前）。0=左、1=右は扱わない
+    /// Mouse button names (CGEvent buttonNumber → name). 0 = left and 1 = right are not handled
     public static let mouseNameByButton: [Int64: String] = [2: "Mouse3", 3: "Mouse4", 4: "Mouse5"]
     public static let mouseButtonByName: [String: Int64] = ["Mouse3": 2, "Mouse4": 3, "Mouse5": 4]
 
-    /// JIS 配列にだけ存在するキー
+    /// Keys that exist only on the JIS layout
     public static let jisOnlyNames: Set<String> = ["IntlYen", "IntlRo", "NumpadComma", "Lang2", "Lang1"]
 
-    /// 物理キー名から修飾キーの種類を得る（修飾キーでなければ nil）。CapsLock は修飾キーとして扱わない
+    /// Gets the modifier kind from a physical key name (nil if it is not a modifier). CapsLock is not treated as a modifier
     public static func modifierKind(ofPhysical name: String) -> ModifierKind? {
         switch name {
         case "Fn": return .fn
@@ -119,20 +119,20 @@ public enum KeyTable {
         mouseButtonByName[name] != nil
     }
 
-    /// プロトコル上有効なキー名か（左右を区別しない修飾キー名も含む）
+    /// Whether the key name is valid in the protocol (including modifier names that do not distinguish left and right)
     public static func isValidName(_ name: String) -> Bool {
         if ModifierKind(rawValue: name) != nil { return true }
         if keyCodeByName[name] != nil { return name != "CapsLock" }
         return isMouse(name)
     }
 
-    /// キー名を物理キー名の集合に展開する（"Control" → ControlLeft/ControlRight）
+    /// Expands a key name into a set of physical key names ("Control" → ControlLeft/ControlRight)
     public static func physicalNames(for name: String) -> [String] {
         if let kind = ModifierKind(rawValue: name) { return kind.physicalNames }
         return [name]
     }
 
-    /// 並べ替えの順序（修飾キー → それ以外）
+    /// Sort order (modifier keys → everything else)
     public static func sortKey(_ name: String) -> (Int, Int, String) {
         if let kind = modifierKind(ofPhysical: name) ?? ModifierKind(rawValue: name) {
             let sideOrder = name.hasSuffix("Right") ? 1 : 0
@@ -142,8 +142,8 @@ public enum KeyTable {
         return (1, 0, name)
     }
 
-    /// キーボードの物理配列の判定（Carbon の KBGetLayoutType の戻り値から）
-    /// 戻り値は OSType の 4 文字コード: kKeyboardJIS = 'JIS ', kKeyboardANSI = 'ANSI', kKeyboardISO = 'ISO '
+    /// Determines the physical keyboard layout (from the return value of Carbon's KBGetLayoutType)
+    /// The return value is a four-character OSType code: kKeyboardJIS = 'JIS ', kKeyboardANSI = 'ANSI', kKeyboardISO = 'ISO '
     public static func layoutKind(fromKBLayoutType value: UInt32) -> KeyboardLayoutKind {
         switch value {
         case 0x4A49_5320: return .jis // 'JIS '

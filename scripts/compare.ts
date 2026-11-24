@@ -1,14 +1,14 @@
 /**
- * 2 つの評価の実行を比べる。発話を単位にした対のブートストラップで、誤り数の差と 95% 区間を出す。
+ * Compares two evaluation runs. A paired bootstrap over utterances gives the difference in error count and its 95% interval.
  *
- *   npx tsx scripts/compare.ts <実行 A> <実行 B> [--stage final] [--metric content]
- *     実行は、~/longhand-eval/runs/ の下のフォルダ名か、フォルダのパス。実行の名前だけを渡すと、その名前の最も新しい実行を使う
- *     --stage <asr|match|noLlm|final>  比べる段階（既定は final。LLM なしの実行どうしなら noLlm）
- *     --metric <content|full>          中身だけか、句読点込みか（既定は content）
- *     --iterations <n>                 取り直しの回数（既定 10000）
- *     --seed <n>                       乱数の種（既定 1）
+ *   npx tsx scripts/compare.ts <run A> <run B> [--stage final] [--metric content]
+ *     A run is a folder name under ~/longhand-eval/runs/ or a folder path. Given only a run name, the newest run with that name is used
+ *     --stage <asr|match|noLlm|final>  stage to compare (default final; noLlm when comparing runs without the LLM)
+ *     --metric <content|full>          content only, or including punctuation (default content)
+ *     --iterations <n>                 number of resamples (default 10000)
+ *     --seed <n>                       random seed (default 1)
  *
- * 差は B − A。負なら B のほうが誤りが少ない。出力は数だけ。
+ * The difference is B − A. Negative means B has fewer errors. Prints numbers only.
  */
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -30,23 +30,23 @@ const { values: args, positionals } = parseArgs({
 const resolveRun = (spec: string) => resolveRunDir(spec, path.join(evalRoot(), 'runs'));
 
 function main(): void {
-  if (positionals.length !== 2) throw new Error('使い方: npx tsx scripts/compare.ts <実行 A> <実行 B> [--stage final] [--metric content]');
+  if (positionals.length !== 2) throw new Error('Usage: npx tsx scripts/compare.ts <run A> <run B> [--stage final] [--metric content]');
   const stage = args.stage as StageName;
   const metric = args.metric as CompareMetric;
-  if (!STAGES.includes(stage)) throw new Error(`--stage は ${STAGES.join('、')} のどれかにしてください`);
-  if (metric !== 'content' && metric !== 'full') throw new Error('--metric は content か full にしてください');
+  if (!STAGES.includes(stage)) throw new Error(`--stage must be one of ${STAGES.join(', ')}`);
+  if (metric !== 'content' && metric !== 'full') throw new Error('--metric must be content or full');
   const [dirA, dirB] = positionals.map(resolveRun);
   const a = readJsonl<RowRecord>(path.join(dirA, 'rows.jsonl'));
   const b = readJsonl<RowRecord>(path.join(dirB, 'rows.jsonl'));
   const r = compareRuns(a, b, { stage, metric, iterations: Number(args.iterations), seed: Number(args.seed) });
-  console.log(`A: ${path.basename(dirA)}（${a.length} 件）`);
-  console.log(`B: ${path.basename(dirB)}（${b.length} 件）`);
-  console.log(`比べる段階: ${stage}、${metric === 'content' ? '中身の誤り' : '句読点込みの誤り'}。差は B − A（負なら B が良い）`);
-  if (r.onlyA || r.onlyB || r.truthChanged) console.log(`除いた発話: A にだけある ${r.onlyA} 件、B にだけある ${r.onlyB} 件、正解が変わった ${r.truthChanged} 件`);
-  if (r.provisional) console.log(`注意: 比べた発話のうち ${r.provisional} 件は正解が仮です`);
-  console.log(formatComparison('全体', r.all));
+  console.log(`A: ${path.basename(dirA)} (${a.length} utterances)`);
+  console.log(`B: ${path.basename(dirB)} (${b.length} utterances)`);
+  console.log(`Stage: ${stage}, ${metric === 'content' ? 'content errors' : 'errors including punctuation'}. Difference is B − A (negative means B is better)`);
+  if (r.onlyA || r.onlyB || r.truthChanged) console.log(`Excluded utterances: ${r.onlyA} only in A, ${r.onlyB} only in B, ${r.truthChanged} with a changed reference`);
+  if (r.provisional) console.log(`Note: ${r.provisional} of the compared utterances have a provisional reference`);
+  console.log(formatComparison('All', r.all));
   for (const [name, x] of Object.entries(r.byDataset)) console.log(formatComparison(name, x));
-  for (const [name, x] of Object.entries(r.bySplit)) console.log(formatComparison(name === 'dev' ? '開発用' : '確認用', x));
+  for (const [name, x] of Object.entries(r.bySplit)) console.log(formatComparison(name === 'dev' ? 'Dev set' : 'Holdout set', x));
 }
 
 try {

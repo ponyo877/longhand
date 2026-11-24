@@ -1,9 +1,9 @@
 /**
- * 辞書の語についての評価の補助（G4-19）。評価（src/main/eval）から使う。
- * - termRecall: 参照文に出る辞書の語のうち、出力に同じ表記で出た割合（再現率）
- * - falseInsertions: 参照文より多く出力に出た辞書の語の数（誤挿入）
- * - inventedTerms: 大きな辞書をまねるための、実在しない語
- * - orderHintsForEval: 評価用のヒントの並べ方（今の新しい順か、得点順か）
+ * Evaluation helpers for dictionary words (G4-19). Used by evaluation (src/main/eval).
+ * - termRecall: share of dictionary words in the reference that appear in the output with the same spelling (recall)
+ * - falseInsertions: number of dictionary words that appear in the output more often than in the reference (false insertions)
+ * - inventedTerms: made-up words for simulating a large dictionary
+ * - orderHintsForEval: hint order for evaluation (the current newest-first order, or by score)
  */
 import { countTerm, rankVocabulary, type VocabEntry } from './hints';
 
@@ -17,7 +17,7 @@ export interface TermCount {
   output: number;
 }
 
-/** 語ごとの出現回数（NFKC と大文字小文字を無視。英字の語は前後が英数字でない位置だけ） */
+/** Occurrences of each term (ignoring NFKC differences and case. Latin terms only where not surrounded by letters or digits) */
 export function termCounts(reference: string, output: string, terms: string[]): TermCount[] {
   const r = norm(reference);
   const o = norm(output);
@@ -27,7 +27,7 @@ export function termCounts(reference: string, output: string, terms: string[]): 
     .map((term) => ({ term, reference: countTerm(r, norm(term)), output: countTerm(o, norm(term)) }));
 }
 
-/** 再現率の分子と分母。分子は語ごとに min(出力の回数, 参照の回数) を足したもの */
+/** Numerator and denominator of recall. The numerator sums min(output count, reference count) over the terms */
 export function termRecall(reference: string, output: string, terms: string[]): { hit: number; total: number } {
   let hit = 0;
   let total = 0;
@@ -38,12 +38,12 @@ export function termRecall(reference: string, output: string, terms: string[]): 
   return { hit, total };
 }
 
-/** 誤挿入の数。語ごとに max(0, 出力の回数 - 参照の回数) を足したもの */
+/** Number of false insertions. Sums max(0, output count - reference count) over the terms */
 export function falseInsertions(reference: string, output: string, terms: string[]): number {
   return termCounts(reference, output, terms).reduce((n, c) => n + Math.max(0, c.output - c.reference), 0);
 }
 
-/** 再現できなかった語と、誤って出た語の一覧（結果のファイルに残す用） */
+/** Lists of missed terms and wrongly inserted terms (kept in the results file) */
 export function termDetails(reference: string, output: string, terms: string[]): { missed: string[]; inserted: string[] } {
   const cs = termCounts(reference, output, terms);
   return {
@@ -57,8 +57,8 @@ const VOWELS = ['a', 'e', 'i', 'o', 'u', 'ae', 'io', 'y'];
 const CODAS = ['', '', 'n', 'r', 'x', 'l', 'm', 'k', 'th', 'sk'];
 
 /**
- * 実在しない語を n 個作る（seed が同じなら同じ語）。英字の製品名のような 2〜3 音節の語。
- * 評価の「大きな辞書」をまねるために、本物の辞書の語の後ろ（新しい語）に足す。
+ * Makes n made-up words (the same seed gives the same words). Two- or three-syllable words that look like Latin product names.
+ * Added after the real dictionary words (as the newest words) to simulate a large dictionary in evaluation.
  */
 export function inventedTerms(n: number, seed = 1): string[] {
   let x = seed >>> 0 || 1;
@@ -83,10 +83,10 @@ export function inventedTerms(n: number, seed = 1): string[] {
 }
 
 /**
- * 評価用にヒントを並べる。
- * - recent: 今の方法をまねる（登録順の新しい語から）。terms は古い順に並んでいるものとする
- * - score: 得点順。評価データには入力欄の文脈がないので、ほかの発話の参照文を「最近の書き起こし」として数える
- *   （その発話自身は含めないこと。呼び出し側で除いて渡す）
+ * Orders hints for evaluation.
+ * - recent: imitates the current method (newest added words first). terms are assumed to be oldest first
+ * - score: by score. Evaluation data has no field context, so the references of the other utterances count as recent transcripts
+ *   (do not include the utterance itself; the caller removes it)
  */
 export function orderHintsForEval(terms: string[], otherReferences: string[], order: 'recent' | 'score', limit = 64): string[] {
   if (order === 'recent') return [...terms].reverse().slice(0, limit);

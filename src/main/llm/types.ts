@@ -1,7 +1,9 @@
+import { t } from '../i18n';
+
 export interface LlmRequest {
   system: string;
   user: string;
-  /** 構造化出力に対応したプロバイダなら使う（JSON Schema） */
+  /** Used by providers that support structured output (JSON Schema) */
   jsonSchema?: Record<string, unknown>;
   maxOutputTokens: number;
   timeoutMs: number;
@@ -20,13 +22,13 @@ export interface LlmProvider {
 }
 
 export type LlmErrorKind =
-  | 'config' // 設定が足りない
+  | 'config' // settings are missing
   | 'timeout'
   | 'aborted'
   | 'network'
   | 'auth' // 401 / 403
   | 'rate_limit' // 429
-  | 'http' // そのほかの HTTP エラー
+  | 'http' // any other HTTP error
   | 'refusal'
   | 'truncated'
   | 'parse';
@@ -42,10 +44,10 @@ export class LlmError extends Error {
   }
 }
 
-/** タイムアウトのエラー文。通知の本文にそのまま出るので秒で書く */
+/** Error text for a timeout. It is shown as is in the notification body, so it is written in seconds */
 export function timeoutMessage(timeoutMs: number): string {
-  return `LLM が ${Math.max(1, Math.round(timeoutMs / 1000))} 秒以内に応答しませんでした`;
+  return t('engine.llm.timeout', { seconds: Math.max(1, Math.round(timeoutMs / 1000)) });
 }
 
-/** Electron の net.fetch か、テストではグローバルの fetch */
+/** Electron's net.fetch, or the global fetch in tests */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;

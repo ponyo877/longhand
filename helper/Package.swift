@@ -8,7 +8,7 @@ let package = Package(
         .executable(name: "LonghandHelper", targets: ["LonghandHelper"]),
     ],
     targets: [
-        // OS に依存しない純粋なロジック（キー名の表、ホットキー判定、トークン解析など）。XCTest でテストする。
+        // Pure logic with no OS dependency (the key name table, hotkey matching, token parsing and so on). Tested with XCTest.
         .target(name: "LonghandCore"),
         .executableTarget(
             name: "LonghandHelper",

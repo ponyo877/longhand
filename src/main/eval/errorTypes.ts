@@ -1,21 +1,21 @@
 /**
- * 誤りの種類の内訳。正解と出力を 1 字ずつ突き合わせ、連続した誤りをまとめて、種類に分ける。
+ * Breakdown of error types. Aligns the reference and the output character by character, groups consecutive errors and sorts them into types.
  *
- * 突き合わせ（editOps）とまとめ方（errorGroups）は 以前の採点スクリプトから移したもの。
- * 位置を持たせてあるので、まとめた誤りが文のどこにあるかが分かる。
+ * The alignment (editOps) and the grouping (errorGroups) were moved from the earlier scoring script.
+ * They carry positions, so it is known where in the sentence each grouped error is.
  *
- * 種類（上から順に当てはめる）:
- * - number         数字が絡む（算用数字、漢数字どうし）
- * - filler         つなぎ言葉（えー、あの、など）が足された、または落ちた
- * - particle       助詞が足された、落ちた、入れ替わった
- * - notation       表記だけの違い（読みが同じで、かなと漢字の使い分けや送りがなが違う）
- * - homophone      同音異義語（読みが同じで、漢字が違う）。単語分割があるときだけ分かる
- * - latinKatakana  英字かカタカナの語が絡む（製品名や技術用語の聞き違い、綴りの違い）
- * - deletion       そのほかの脱落（正解にある字が出力にない）
- * - insertion      そのほかの挿入（正解にない字が出力にある）
- * - other          そのほかの置き換え
+ * Types (applied from the top):
+ * - number         involves numbers (Arabic numerals, or kanji numerals on both sides)
+ * - filler         a filler word (えー, あの and so on) was added or dropped
+ * - particle       a particle was added, dropped or swapped
+ * - notation       a difference in writing only (same reading, but a different choice of kana and kanji or different okurigana)
+ * - homophone      a homophone (same reading, different kanji). Detected only with word segmentation
+ * - latinKatakana  involves a word in Latin letters or katakana (a misheard product name or technical term, a spelling difference)
+ * - deletion       any other deletion (a character in the reference is missing from the output)
+ * - insertion      any other insertion (a character not in the reference is in the output)
+ * - other          any other substitution
  *
- * 読みは単語分割（lindera、IPADIC）で調べる。単語分割がなければ、ひらがなとカタカナの違いだけを表記の違いとして扱う。
+ * Readings come from word segmentation (lindera, IPADIC). Without word segmentation, only differences between hiragana and katakana count as notation.
  */
 import type { Token, Tokenizer } from '../textfix/types';
 import { normContent } from './metrics';
@@ -24,16 +24,16 @@ export type Op = '=' | 'S' | 'D' | 'I';
 
 export interface EditOp {
   op: Op;
-  /** 正解の字（I なら空） */
+  /** Reference character (empty for I) */
   ref: string;
-  /** 出力の字（D なら空） */
+  /** Output character (empty for D) */
   hyp: string;
-  /** この操作の前の位置（正解の添字、出力の添字） */
+  /** Position before this operation (index into the reference, index into the output) */
   i: number;
   j: number;
 }
 
-/** レーベンシュタイン距離の突き合わせ。= は一致、S は置き換え、D は脱落、I は挿入 */
+/** Levenshtein alignment. = is a match, S a substitution, D a deletion, I an insertion */
 export function editOps(ref: readonly string[], hyp: readonly string[]): EditOp[] {
   const n = ref.length;
   const m = hyp.length;
@@ -66,7 +66,7 @@ export function editOps(ref: readonly string[], hyp: readonly string[]): EditOp[
   return ops.reverse();
 }
 
-/** 連続した誤りをまとめたもの。位置は正規化した文字の並びの添字 [start, end) */
+/** Consecutive errors grouped together. Positions are indexes [start, end) into the normalized character sequence */
 export interface ErrorGroup {
   ref: string;
   hyp: string;
@@ -74,7 +74,7 @@ export interface ErrorGroup {
   refEnd: number;
   hypStart: number;
   hypEnd: number;
-  /** この誤りの編集の数（距離への寄与） */
+  /** Number of edits in this error (its contribution to the distance) */
   edits: number;
 }
 
@@ -103,15 +103,15 @@ export type ErrorKind = 'number' | 'filler' | 'particle' | 'notation' | 'homopho
 export const ERROR_KINDS: readonly ErrorKind[] = ['latinKatakana', 'number', 'particle', 'filler', 'notation', 'homophone', 'deletion', 'insertion', 'other'];
 
 export const ERROR_KIND_LABELS: Record<ErrorKind, string> = {
-  latinKatakana: '英字とカタカナ',
-  number: '数字',
-  particle: '助詞',
-  filler: 'つなぎ言葉',
-  notation: '表記だけ',
-  homophone: '同音異義語',
-  deletion: '脱落',
-  insertion: '挿入',
-  other: 'その他',
+  latinKatakana: 'Latin letters and katakana',
+  number: 'numbers',
+  particle: 'particles',
+  filler: 'fillers',
+  notation: 'notation only',
+  homophone: 'homophones',
+  deletion: 'deletions',
+  insertion: 'insertions',
+  other: 'other',
 };
 
 export type ErrorBreakdown = Record<ErrorKind, { groups: number; edits: number }>;
@@ -132,17 +132,17 @@ const KANJI_NUMERALS = /^[〇一二三四五六七八九十百千万億兆]+$/;
 const KANJI = /[㐀-䶿一-鿿豈-﫿々]/;
 const KATAKANA = /[ァ-ヺ]/;
 
-/** ひらがなをカタカナにする */
+/** Converts hiragana to katakana */
 function toKatakana(s: string): string {
   return s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
 }
 
 type Range = [number, number];
 
-/** 片方の文（正規化した字の並び）と、その単語分割 */
+/** One side's sentence (normalized character sequence) and its word segmentation */
 interface Side {
   chars: readonly string[];
-  /** 単語の範囲（字の並びの添字）と読み。単語分割がなければ null */
+  /** Word ranges (indexes into the character sequence) and readings. null without word segmentation */
   tokens: { start: number; end: number; token: Token }[] | null;
 }
 
@@ -156,7 +156,7 @@ function makeSide(chars: readonly string[], tokenizer: Tokenizer | null | undefi
     raw = null;
   }
   if (!raw) return { chars, tokens: null };
-  // 単語分割の位置は文字列の添字（UTF-16）なので、字の並びの添字に直す
+  // Word segmentation positions are string indexes (UTF-16), so convert them to indexes into the character sequence
   const toChar = new Int32Array(text.length + 1);
   let unit = 0;
   chars.forEach((c, k) => {
@@ -167,13 +167,13 @@ function makeSide(chars: readonly string[], tokenizer: Tokenizer | null | undefi
   return { chars, tokens: raw.map((token) => ({ start: toChar[token.start], end: toChar[token.end], token })) };
 }
 
-/** 範囲に重なる単語。長さ 0 の範囲は、その位置をまたぐ単語だけ */
+/** Words that overlap the range. For an empty range, only words that span that position */
 function overlapping(side: Side, [s, e]: Range) {
   if (!side.tokens) return [];
   return side.tokens.filter((t) => (s === e ? t.start < s && t.end > s : t.start < e && t.end > s));
 }
 
-/** 範囲を単語の切れ目まで広げる */
+/** Widens the range to word boundaries */
 function expand(side: Side, r: Range): Range {
   const over = overlapping(side, r);
   if (!over.length) return r;
@@ -184,7 +184,7 @@ function union(a: Range, b: Range): Range {
   return b[0] > b[1] ? a : [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
 }
 
-/** 突き合わせの経路から、片方の切れ目に対応する、もう片方の切れ目の範囲（最小と最大）を作る */
+/** From the alignment path, builds the range (min and max) of boundaries on one side that correspond to each boundary on the other side */
 function boundaryMaps(ops: readonly EditOp[], n: number, m: number) {
   const hypMin = new Int32Array(n + 1).fill(-1);
   const hypMax = new Int32Array(n + 1).fill(-1);
@@ -207,7 +207,7 @@ function boundaryMaps(ops: readonly EditOp[], n: number, m: number) {
   return { hypMin, hypMax, refMin, refMax };
 }
 
-/** 範囲の読み（カタカナ）。読みの分からない単語は表層形を使う */
+/** Reading of the range (katakana). Uses the surface form for words without a known reading */
 function readingOf(side: Side, r: Range): string {
   if (r[0] >= r[1]) return '';
   return overlapping(side, r)
@@ -215,12 +215,12 @@ function readingOf(side: Side, r: Range): string {
     .join('');
 }
 
-/** 読みを比べるために広げる範囲の上限（字）。表記の違いは語の中で起きるので、広がりすぎたら比べない */
+/** Maximum width (characters) a range may be widened to compare readings. Notation differences happen within a word, so a range that grows too wide is not compared */
 const MAX_EXPANDED = 16;
 
 /**
- * まとめた誤りの前後を単語の切れ目まで広げ、正解の側と出力の側の読みを比べる。
- * 読みが同じなら、かなと漢字の使い分けか（notation）、同音異義語か（homophone）を返す。違えば null
+ * Widens a grouped error on both sides to word boundaries, and compares the readings on the reference side and the output side.
+ * When the readings match, returns whether it is a choice of kana and kanji (notation) or a homophone (homophone). Otherwise null
  */
 function sameReading(g: ErrorGroup, ref: Side, hyp: Side, maps: ReturnType<typeof boundaryMaps>): 'notation' | 'homophone' | null {
   if (!ref.tokens || !hyp.tokens) return null;
@@ -242,12 +242,12 @@ function sameReading(g: ErrorGroup, ref: Side, hyp: Side, maps: ReturnType<typeo
   const kanji = (side: Side, [s, e]: Range) => side.chars.slice(s, e).filter((c) => KANJI.test(c));
   const ka = kanji(ref, r);
   const kb = kanji(hyp, h);
-  // どちらかがかなだけ、または漢字が同じ（送りがなの違い）なら、表記の違い。漢字が違えば同音異義語
+  // Notation if either side is kana only or the kanji are the same (an okurigana difference). Homophone if the kanji differ
   if (!ka.length || !kb.length || ka.join('') === kb.join('')) return 'notation';
   return 'homophone';
 }
 
-/** 範囲が助詞の単語だけでできているか。単語分割がなければ、一覧にあるかだけで決める */
+/** Whether the range consists only of particle words. Without word segmentation, decided only by the list */
 function isParticle(side: Side, text: string, r: Range): boolean {
   if (!PARTICLES.has(text)) return false;
   if (!side.tokens) return true;
@@ -257,7 +257,7 @@ function isParticle(side: Side, text: string, r: Range): boolean {
 
 function hasKatakana(side: Side, text: string, start: number): boolean {
   if (KATAKANA.test(text)) return true;
-  // 長音だけの違いは、カタカナの語の中にあるときだけ数える（「えー」の長音は数えない）
+  // A difference in long vowel marks alone counts only inside a katakana word (the long vowel in 「えー」 does not count)
   return /^ー+$/.test(text) && start > 0 && KATAKANA.test(side.chars[start - 1]);
 }
 
@@ -277,7 +277,7 @@ function classify(g: ErrorGroup, ref: Side, hyp: Side, maps: ReturnType<typeof b
   return 'other';
 }
 
-/** 正規化した字の並びどうしの誤りを、種類に分ける */
+/** Sorts errors between normalized character sequences into types */
 export function classifyErrors(ref: readonly string[], hyp: readonly string[], tokenizer?: Tokenizer | null): { group: ErrorGroup; kind: ErrorKind }[] {
   const ops = editOps(ref, hyp);
   const groups = errorGroups(ops);
@@ -288,7 +288,7 @@ export function classifyErrors(ref: readonly string[], hyp: readonly string[], t
   return groups.map((group) => ({ group, kind: classify(group, refSide, hypSide, maps) }));
 }
 
-/** 正解と出力の文から、誤りの種類ごとの件数と編集の数を出す（中身だけを比べる。句読点と空白は見ない） */
+/** Counts groups and edits per error type from the reference and output sentences (compares content only; ignores punctuation and spaces) */
 export function errorBreakdown(reference: string, output: string, tokenizer?: Tokenizer | null): ErrorBreakdown {
   const out = emptyBreakdown();
   for (const { group, kind } of classifyErrors(normContent(reference), normContent(output), tokenizer)) {

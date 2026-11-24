@@ -1,11 +1,11 @@
 /**
- * 辞書の語に、今の音声入力との関係の深さで得点を付ける（G4-09、G4-10）。
- * whisper のプロンプトに入る語は 120 トークン分（数十語）しかないので、新しい順ではなく得点順に渡す。
- * 整形の LLM に渡す語も、辞書が大きいときは得点の高いものに絞る。
+ * Scores dictionary words by how relevant they are to the current dictation (G4-09, G4-10).
+ * The Whisper prompt only fits 120 tokens of words (a few dozen), so words are passed by score rather than newest first.
+ * Words passed to the formatting LLM are also narrowed to the highest scores when the dictionary is large.
  */
 import { matchForm } from './kana';
 
-/** 入力先の文脈。入力欄はパスワード欄でないときだけ入れる */
+/** Context of the target. The field is included only when it is not a password field */
 export interface HintContext {
   beforeCursor?: string;
   afterCursor?: string;
@@ -14,7 +14,7 @@ export interface HintContext {
   bundleId?: string;
 }
 
-/** 最近の書き起こし（HistoryItem をそのまま渡せる） */
+/** A recent transcript (a HistoryItem can be passed as is) */
 export interface RecentText {
   text: string;
   rawText?: string;
@@ -24,11 +24,11 @@ export interface RecentText {
 
 export interface VocabEntry {
   word: string;
-  /** 学習した語なら学習した時刻 */
+  /** Time it was learned, for a learned word */
   learnedAt?: number;
-  /** 辞書に登録した順の新しさ（0 が最も古く、1 が最も新しい） */
+  /** How recently it was added to the dictionary (0 is the oldest, 1 the newest) */
   recency: number;
-  /** 照合用の読み（カタカナ、ひらがな、誤認識の形）。最近の生テキストに出ていれば使われているとみなす */
+  /** Readings for matching (katakana, hiragana, misrecognized forms). If one appears in recent raw text, the word counts as used */
   readings?: string[];
 }
 
@@ -40,11 +40,11 @@ export interface HintOptions {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
-/** 最近の書き起こしとして見る範囲 */
+/** How far back recent transcripts go */
 const RECENT_DAYS = 14;
 const RECENT_MAX = 100;
 
-/** 得点の重み。合計の大小だけに意味がある */
+/** Score weights. Only the relative size of the total matters */
 const W = {
   field: 3,
   titleOrHost: 2,
@@ -53,7 +53,7 @@ const W = {
   learnedWeek: 1.5,
   learnedMonth: 0.5,
   recency: 0.5,
-  /** 学習の記録がないのに、最近の生テキストにそのまま何度も出ている語（ヒントがなくても書ける可能性が高い） */
+  /** A word with no learning record that appears as is in recent raw text many times (likely written correctly even without a hint) */
   easyPenalty: -0.5,
 };
 
@@ -61,7 +61,7 @@ function isLatinTerm(term: string): boolean {
   return /^[\x20-\x7e]+$/.test(term);
 }
 
-/** text（小文字にしたもの）に term が出てくる回数。英字の語は前後が英数字でない位置だけを数える */
+/** Number of times term appears in text (lowercased). Latin terms count only where not surrounded by letters or digits */
 export function countTerm(textLower: string, term: string): number {
   const t = term.toLowerCase();
   if (!t) return 0;
@@ -83,7 +83,7 @@ export interface ScoredWord {
   score: number;
 }
 
-/** 語ごとの得点を付けて、高い順に並べる。同点なら新しい語を先にする */
+/** Scores each word and sorts by score, highest first. Ties go to the newer word */
 export function rankVocabulary(entries: VocabEntry[], opts: HintOptions = {}): ScoredWord[] {
   const now = opts.now ?? Date.now();
   const ctx = opts.context ?? {};

@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { bindingLabel } from '../../shared/keys';
+import type { Locale, MessageKey } from '../../shared/i18n';
 import type { AppSnapshot, FloaterState, HudMessage } from '../../shared/types';
+import { I18nProvider, intlLocale, useLocale, useT } from '../common/i18n';
 import { createMouseRouter } from './mouseRouting';
 import { playSound } from './sounds';
 
 const BARS = 16;
 
 /**
- * マウスの操作を受け取るか、下のアプリに通すかを決める（mouseRouting.ts）。
- * 操作できる要素（バーと通知）には pointer-events-auto を付けてある。透明な部分は pointer-events-none なので、
- * elementFromPoint は操作できる要素の上でだけ、その要素を返す
+ * Decides whether to take mouse input or pass it through to the app below (mouseRouting.ts).
+ * Interactive elements (the bar and notifications) have pointer-events-auto. Transparent parts have pointer-events-none, so
+ * elementFromPoint returns an element only when the point is over an interactive element
  */
 const mouseRouter = createMouseRouter({
   isInteractiveAt: (x, y) => !!document.elementFromPoint(x, y)?.closest('.pointer-events-auto'),
   send: (interactive) => window.longhand.setMouseInteractive(interactive),
 });
 
-/** ウィンドウ全体でポインタを追い、画面の中身が変わったときと一定の間隔で、いまの位置を調べ直す */
+/** Tracks the pointer over the whole window, and checks the current position again when the content changes and at a fixed interval */
 function useMouseRouting(): void {
   useEffect(() => {
     const move = (e: globalThis.MouseEvent) => mouseRouter.move(e.clientX, e.clientY);
@@ -24,7 +26,7 @@ function useMouseRouting(): void {
     window.addEventListener('mousemove', move, { passive: true });
     document.documentElement.addEventListener('mouseleave', leave);
     window.addEventListener('blur', leave);
-    // 通知が消えた、バーが切り替わった、というときは、ポインタが動かなくても調べ直す
+    // When a notification disappears or the bar changes, check again even if the pointer has not moved
     let frame = 0;
     const observer = new MutationObserver(() => {
       cancelAnimationFrame(frame);
@@ -32,7 +34,7 @@ function useMouseRouting(): void {
     });
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
     const timer = setInterval(() => mouseRouter.recheck(), 300);
-    // 読み込み直した直後は、必ず通す状態から始める
+    // Right after a reload, always start by passing input through
     window.longhand.setMouseInteractive(false);
     return () => {
       window.removeEventListener('mousemove', move);
@@ -46,7 +48,7 @@ function useMouseRouting(): void {
   }, []);
 }
 
-/** 要素にポインタが出入りしたときにも、すぐ調べ直す（見た目の切り替えと同時に、操作を受け取れるように） */
+/** Also checks again right away when the pointer enters or leaves an element (so that input is taken as soon as the look changes) */
 function useInteractive() {
   return {
     onMouseEnter: (e: MouseEvent) => mouseRouter.move(e.clientX, e.clientY),
@@ -55,9 +57,9 @@ function useInteractive() {
 }
 
 /**
- * 音量を 0〜1 にする（F2）。
- * 直近 5 秒の静かな部分（250ms ごとの最小値の最小）を雑音の床とし、そこから 6dB 上を 0、さらに 36dB 上を 1 にする。
- * 空調やファンのような一定の雑音では棒が動かず、声が入ったときだけ伸びる。
+ * Scales the volume to 0–1 (F2).
+ * The quiet part of the last 5 seconds (the lowest of the 250 ms minimums) is the noise floor; 6 dB above it is 0 and a further 36 dB above is 1.
+ * Steady noise such as air conditioning or a fan does not move the bars; they grow only when a voice comes in.
  */
 function useLevelNormalizer() {
   const st = useRef({ buckets: [] as number[], cur: Infinity, curStart: 0 });
@@ -123,19 +125,21 @@ function IconButton({ title, onClick, children, tone }: { title: string; onClick
   );
 }
 
-const STAGE_LABEL: Record<NonNullable<FloaterState['stage']>, string> = {
-  transcribing: '書き起こし中',
-  formatting: '整形中',
-  pasting: '入力中',
+const STAGE_LABEL: Record<NonNullable<FloaterState['stage']>, MessageKey> = {
+  transcribing: 'floater.stage.transcribing',
+  formatting: 'floater.stage.formatting',
+  pasting: 'floater.stage.pasting',
 };
 
 interface BarInfo {
-  /** 起動キーの表示（例: fn） */
+  /** Label of the activation key (for example fn) */
   activate: string;
   asr: AppSnapshot['status']['asr'];
 }
 
 function Bar({ state, levels, info, unclear }: { state: FloaterState; levels: number[]; info: BarInfo; unclear: boolean }) {
+  const t = useT();
+  const locale = useLocale();
   const hover = useInteractive();
   const [hovered, setHovered] = useState(false);
   const edit = state.mode === 'edit';
@@ -146,19 +150,19 @@ function Bar({ state, levels, info, unclear }: { state: FloaterState; levels: nu
   };
 
   if (state.phase === 'idle') {
-    // 編集の指示が分からなかったときは、通知ではなくバーの中で短く知らせる（F6）
+    // When the edit instruction was not understood, say so briefly in the bar instead of a notification (F6)
     if (unclear) {
       return (
         <div className="pill shake flex h-9 items-center px-4" {...hover} onContextMenu={menu}>
-          <span className="text-[12px] font-medium text-rose-300">言い直してください</span>
+          <span className="text-[12px] font-medium text-rose-300">{t('floater.sayAgain')}</span>
         </div>
       );
     }
     if (!state.visible) return null;
-    // 貼り付けの成功（F5）
+    // Successful paste (F5)
     if (state.flash === 'pasted') {
       return (
-        <div className="pill flash-in flex h-5 w-[120px] items-center justify-center" aria-label="入力しました">
+        <div className="pill flash-in flex h-5 w-[120px] items-center justify-center" aria-label={t('floater.pasted')}>
           <svg width="12" height="12" viewBox="0 0 14 14" className="text-emerald-300">
             <path d="M2.5 7.5l3 3 6-7" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -167,7 +171,7 @@ function Bar({ state, levels, info, unclear }: { state: FloaterState; levels: nu
     }
     const preparing = info.asr === 'starting' || info.asr === 'loading';
     const broken = info.asr === 'failed' || info.asr === 'missing';
-    const label = preparing ? '音声認識を準備しています…' : broken ? '音声認識が使えません。右クリックで設定を開けます' : `クリックで録音、${info.activate} を押しながら話す`;
+    const label = preparing ? t('floater.idle.preparing') : broken ? t('floater.idle.unavailable') : t('floater.idle.hint', { activate: info.activate });
     return (
       <div
         {...hover}
@@ -202,20 +206,24 @@ function Bar({ state, levels, info, unclear }: { state: FloaterState; levels: nu
           <i />
           <i />
         </span>
-        <span className="text-[12px] text-white/75">{edit ? '書き換え中' : STAGE_LABEL[state.stage ?? 'transcribing']}</span>
+        <span className="text-[12px] text-white/75">{t(edit ? 'floater.stage.rewriting' : STAGE_LABEL[state.stage ?? 'transcribing'])}</span>
       </div>
     );
   }
 
   const locked = state.phase === 'locked';
-  // マイクの音が届くまでは控えめに出す（F1）。届いたら赤い点と波形を出す
+  // Stay subdued until sound arrives from the microphone (F1). Once it arrives, show the red dot and the waveform
   const ready = state.micReady !== false;
   return (
     <div className="flex flex-col items-center gap-1.5">
-      {edit && <div className="rounded-full bg-violet-500/90 px-2.5 py-0.5 text-[11px] font-medium text-white shadow">編集モード · {state.selectionChars.toLocaleString()} 文字を選択中</div>}
-      <div className={'pill flex h-9 items-center gap-2 ' + (locked ? 'pl-1 pr-1' : 'px-3.5')} {...hover} onContextMenu={menu} aria-label={ready ? '録音中' : 'マイクを準備しています'}>
+      {edit && (
+        <div className="rounded-full bg-violet-500/90 px-2.5 py-0.5 text-[11px] font-medium text-white shadow">
+          {t('floater.editMode', { count: state.selectionChars.toLocaleString(intlLocale(locale)) })}
+        </div>
+      )}
+      <div className={'pill flex h-9 items-center gap-2 ' + (locked ? 'pl-1 pr-1' : 'px-3.5')} {...hover} onContextMenu={menu} aria-label={t(ready ? 'floater.recording' : 'floater.micPreparing')}>
         {locked && (
-          <IconButton title="取り消す" tone="neutral" onClick={() => window.longhand.floaterAction('cancel')}>
+          <IconButton title={t('floater.cancel')} tone="neutral" onClick={() => window.longhand.floaterAction('cancel')}>
             <svg width="12" height="12" viewBox="0 0 12 12">
               <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
@@ -225,7 +233,7 @@ function Bar({ state, levels, info, unclear }: { state: FloaterState; levels: nu
         <Waveform levels={levels} accent={accent} dim={!ready} />
         {locked && <Elapsed since={state.startedAt} />}
         {locked && (
-          <IconButton title="確定して入力" tone="primary" onClick={() => window.longhand.floaterAction('finish')}>
+          <IconButton title={t('floater.finish')} tone="primary" onClick={() => window.longhand.floaterAction('finish')}>
             <svg width="13" height="13" viewBox="0 0 14 14">
               <path d="M2.5 7.5l3 3 6-7" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -246,7 +254,7 @@ const KIND_STYLE: Record<HudMessage['kind'], { icon: string; color: string }> = 
 const PRIORITY: Record<HudMessage['kind'], number> = { error: 3, warning: 2, success: 1, info: 1 };
 
 /**
- * 自動で閉じるタイマー。ホバー中は止め、離したら残り時間（最低 2 秒）から再開する
+ * Timer that closes automatically. It pauses while hovered and resumes from the remaining time (at least 2 seconds) when the pointer leaves
  */
 function useAutoClose(ms: number, onClose: () => void) {
   const remaining = useRef(ms);
@@ -271,6 +279,7 @@ function runAction(m: HudMessage, actionId: string, onClose: () => void) {
 }
 
 function Hud({ m, onClose }: { m: HudMessage; onClose: () => void }) {
+  const t = useT();
   const hover = useInteractive();
   const timer = useAutoClose(m.durationMs, onClose);
   const [hovered, setHovered] = useState(false);
@@ -306,11 +315,11 @@ function Hud({ m, onClose }: { m: HudMessage; onClose: () => void }) {
         ))}
         {m.mutable && hovered && (
           <button className="shrink-0 px-1 text-[11px] text-white/45 hover:text-white/80" onClick={mute}>
-            今後表示しない
+            {t('floater.hud.mute')}
           </button>
         )}
         {hovered && (
-          <button aria-label="閉じる" className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[12px] text-white/50 hover:text-white/90" onClick={onClose}>
+          <button aria-label={t('floater.hud.close')} className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[12px] text-white/50 hover:text-white/90" onClick={onClose}>
             ×
           </button>
         )}
@@ -333,13 +342,13 @@ function Hud({ m, onClose }: { m: HudMessage; onClose: () => void }) {
             ))}
             {m.mutable && (
               <button className="rounded-md px-2 py-0.5 text-[11px] text-white/45 hover:text-white/75" onClick={mute}>
-                今後表示しない
+                {t('floater.hud.mute')}
               </button>
             )}
           </div>
         )}
       </div>
-      <button aria-label="閉じる" className="h-4 w-4 shrink-0 text-[13px] leading-none text-white/40 hover:text-white/80" onClick={onClose}>
+      <button aria-label={t('floater.hud.close')} className="h-4 w-4 shrink-0 text-[13px] leading-none text-white/40 hover:text-white/80" onClick={onClose}>
         ×
       </button>
     </div>
@@ -351,7 +360,7 @@ interface Queued {
   at: number;
 }
 
-/** 表示する 1 件を選ぶ（N1）。優先度の高いもの、同じなら新しいもの */
+/** Picks the one notification to show (N1): the highest priority, and the newest among equals */
 function pick(queue: Queued[]): Queued | undefined {
   let best: Queued | undefined;
   for (const q of queue) {
@@ -360,7 +369,7 @@ function pick(queue: Queued[]): Queued | undefined {
   return best;
 }
 
-/** 表示されないまま期限を過ぎた通知を捨てる（消えない通知は残す） */
+/** Drops notifications that expired without being shown (keeps notifications that never expire) */
 function prune(queue: Queued[], now: number): Queued[] {
   return queue.filter((q) => q.m.durationMs === 0 || now - q.at < q.m.durationMs);
 }
@@ -371,12 +380,16 @@ export function App() {
   const [queue, setQueue] = useState<Queued[]>([]);
   const [unclear, setUnclear] = useState(false);
   const [info, setInfo] = useState<BarInfo>({ activate: 'fn', asr: 'ready' });
+  const [locale, setLocale] = useState<Locale>('en');
   const normalizer = useLevelNormalizer();
   const phase = useRef(state.phase);
 
   useEffect(() => {
     let unclearTimer: ReturnType<typeof setTimeout> | null = null;
-    const applySnap = (s: AppSnapshot) => setInfo({ activate: bindingLabel(s.settings.hotkeys.activate[0]) || 'fn', asr: s.status.asr });
+    const applySnap = (s: AppSnapshot) => {
+      setInfo({ activate: bindingLabel(s.settings.hotkeys.activate[0], s.locale) || 'fn', asr: s.status.asr });
+      setLocale(s.locale);
+    };
     void window.longhand.getSnapshot().then(applySnap);
     const offs = [
       window.longhand.onSnapshot(applySnap),
@@ -396,7 +409,7 @@ export function App() {
           return;
         }
         const now = Date.now();
-        // 同じ種類の通知は置き換える
+        // A notification of the same kind replaces the earlier one
         setQueue((prev) => [...prune(prev, now).filter((x) => x.m.key !== m.key), { m, at: now }].slice(-6));
       }),
       window.longhand.onHudDismiss((id) => setQueue((prev) => prev.filter((x) => x.m.id !== id))),
@@ -419,13 +432,15 @@ export function App() {
     );
 
   return (
-    <div className="pointer-events-none flex h-screen w-screen flex-col items-center justify-end gap-2 px-3 pb-2">
-      <div className={'flex w-full flex-col items-center ' + (current?.m.style === 'pill' ? 'max-w-[376px]' : 'max-w-[340px]')}>
-        {current && <Hud key={current.m.id} m={current.m} onClose={() => close(current.m.id)} />}
+    <I18nProvider locale={locale}>
+      <div className="pointer-events-none flex h-screen w-screen flex-col items-center justify-end gap-2 px-3 pb-2">
+        <div className={'flex w-full flex-col items-center ' + (current?.m.style === 'pill' ? 'max-w-[376px]' : 'max-w-[340px]')}>
+          {current && <Hud key={current.m.id} m={current.m} onClose={() => close(current.m.id)} />}
+        </div>
+        <div className="pointer-events-auto">
+          <Bar state={state} levels={levels} info={info} unclear={unclear} />
+        </div>
       </div>
-      <div className="pointer-events-auto">
-        <Bar state={state} levels={levels} info={info} unclear={unclear} />
-      </div>
-    </div>
+    </I18nProvider>
   );
 }

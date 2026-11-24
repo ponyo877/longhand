@@ -10,7 +10,7 @@ function row(id: string, edits: number, over: Partial<Row> = {}): Row {
 }
 
 describe('compareRuns', () => {
-  it('発話を id で突き合わせ、誤り数の差と区間を出す', () => {
+  it('matches utterances by id and gives the difference in edit counts and its interval', () => {
     const a = Array.from({ length: 12 }, (_, i) => row(`u${i}`, 4));
     const b = Array.from({ length: 12 }, (_, i) => row(`u${i}`, 1));
     const r = compareRuns(a, b, { stage: 'final', metric: 'content', iterations: 500 });
@@ -21,12 +21,12 @@ describe('compareRuns', () => {
     expect(r).toMatchObject({ onlyA: 0, onlyB: 0, truthChanged: 0, provisional: 0 });
   });
 
-  it('句読点込みの誤りでも比べられる', () => {
+  it('compares edits that include punctuation too', () => {
     const r = compareRuns([row('u1', 4)], [row('u1', 1)], { stage: 'noLlm', metric: 'full', iterations: 100 });
     expect(r.all).toMatchObject({ editsA: 5, editsB: 2 });
   });
 
-  it('片方にしかない発話と、正解が変わった発話は除く', () => {
+  it('leaves out utterances in only one run and utterances whose reference changed', () => {
     const a = [row('u1', 3), row('u2', 3), row('u3', 3, { provisional: true }), row('u4', 3)];
     const b = [row('u1', 2), row('u2', 2, { target: '直した正解の文です。' }), row('u3', 2, { provisional: true }), row('u4', 2, { alt: ['別解です。'] }), row('u9', 0)];
     const r = compareRuns(a, b, { stage: 'final', metric: 'content', iterations: 100 });
@@ -34,7 +34,7 @@ describe('compareRuns', () => {
     expect(r).toMatchObject({ onlyA: 0, onlyB: 1, truthChanged: 2, provisional: 1 });
   });
 
-  it('データセットと、開発用か確認用かで分けて出す', () => {
+  it('splits the results by dataset and by dev or holdout', () => {
     const a = [row('u1', 3), row('u2', 3, { dataset: 'd2', split: 'holdout' })];
     const b = [row('u1', 3), row('u2', 1, { dataset: 'd2', split: 'holdout' })];
     const r = compareRuns(a, b, { stage: 'final', metric: 'content', iterations: 100 });
@@ -44,16 +44,16 @@ describe('compareRuns', () => {
     expect(r.bySplit.dev.diff).toBe(0);
   });
 
-  it('表示は数だけで、区間が 0 をまたぐかで判定を書く', () => {
+  it('prints numbers only and gives a verdict from whether the interval crosses 0', () => {
     const better = compareRuns(
       Array.from({ length: 10 }, (_, i) => row(`u${i}`, 4)),
       Array.from({ length: 10 }, (_, i) => row(`u${i}`, 1)),
       { stage: 'final', metric: 'content', iterations: 200 },
     );
-    expect(formatComparison('全体', better.all)).toContain('B が良い');
+    expect(formatComparison('All', better.all)).toContain('B is better');
     const same = compareRuns([row('u1', 2)], [row('u1', 2)], { stage: 'final', metric: 'content', iterations: 50 });
-    const line = formatComparison('全体', same.all);
-    expect(line).toContain('差があるとは言えない');
+    const line = formatComparison('All', same.all);
+    expect(line).toContain('no clear difference');
     expect(line).not.toContain('同じ正解の文');
   });
 });

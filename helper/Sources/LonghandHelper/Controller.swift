@@ -4,7 +4,7 @@ import ApplicationServices
 import Foundation
 import LonghandCore
 
-/// stdin から受けたメッセージを各モジュールへ振り分ける。終了処理も受け持つ。
+/// Dispatches messages received on stdin to each module. Also handles shutdown.
 final class Controller: @unchecked Sendable {
     static let shared = Controller()
 
@@ -12,7 +12,7 @@ final class Controller: @unchecked Sendable {
     private let miscQueue = DispatchQueue(label: "longhand.misc", qos: .utility)
     private let shuttingDown = LockedValue(false)
 
-    // MARK: - 起動
+    // MARK: - Startup
 
     @MainActor
     func start() {
@@ -28,7 +28,7 @@ final class Controller: @unchecked Sendable {
 
         Log.info("LonghandHelper \(helperVersion) started (pid \(getpid()), trusted=\(AX.isTrusted()), debug=\(Log.debugEnabled))")
         Output.shared.send("ready", ReadyPayload(version: helperVersion, protocol: protocolVersion, pid: getpid()))
-        // event_tap などの通知は ready の後に出す
+        // Notifications such as event_tap go out after ready
         HotkeyEngine.shared.start()
         AppObserver.shared.start()
         startStdinReader()
@@ -60,7 +60,7 @@ final class Controller: @unchecked Sendable {
         }
     }
 
-    // MARK: - 振り分け
+    // MARK: - Dispatch
 
     func handle(line: String) {
         let data = Data(line.utf8)
@@ -80,7 +80,7 @@ final class Controller: @unchecked Sendable {
 
             case "configure":
                 let p = try decodePayload(ConfigurePayload.self, from: data)
-                // 後続のメッセージ（record_shortcut など）との順序を保つため、終わるまで待つ
+                // Wait until it finishes, to keep the order with the messages that follow (record_shortcut and others)
                 DispatchQueue.main.sync { MainActor.assumeIsolated { self.configure(p, id: id) } }
 
             case "state_sync":
@@ -140,7 +140,7 @@ final class Controller: @unchecked Sendable {
         let parsed = BindingParser.parse(p.hotkeys ?? [:])
         AppObserver.enhancedUIAllowed.set(p.chromiumEnhancedUI ?? true)
         HotkeyEngine.shared.configure(bindings: parsed.bindings)
-        // 地球儀キーの動作を止めるのは、設定がオンで、かつ Fn だけのショートカットがあるときだけ（HK-6）
+        // Turn off the globe key's action only when the setting is on and there is a Fn-only shortcut (HK-6)
         let wantGlobeOff = (p.suppressGlobe ?? false) && parsed.bindings.contains { $0.isBareFn }
         if (p.suppressGlobe ?? false) && !wantGlobeOff { Log.info("configure: no Fn-only shortcut; globe key is left as is") }
         let globe = GlobeController.shared.setSuppressed(wantGlobeOff)
@@ -173,14 +173,14 @@ final class Controller: @unchecked Sendable {
         }
     }
 
-    // MARK: - 終了
+    // MARK: - Shutdown
 
-    /// 後始末（地球儀キー設定の復元、録音の停止）をして終了する。どのスレッドから呼んでもよい
+    /// Cleans up (restores the globe key setting, stops recording) and exits. May be called from any thread
     func shutdown(reason: String) {
         let already = shuttingDown.update { v -> Bool in defer { v = true }; return v }
         if already { return }
         Log.info("shutting down: \(reason)")
-        // メインスレッドが詰まっていても 3 秒で必ず終わる
+        // Always exits within 3 seconds, even if the main thread is stuck
         Thread.detachNewThread {
             Thread.sleep(forTimeInterval: 3)
             Log.warn("forced exit after timeout")

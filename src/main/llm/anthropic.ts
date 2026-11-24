@@ -1,16 +1,17 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { LlmSettings } from '../../shared/settings';
+import { t } from '../i18n';
 import { parseExtraBody } from './http';
 import { LlmError, timeoutMessage, type FetchLike, type LlmProvider, type LlmRequest, type LlmResponse } from './types';
 
 type ThinkingParam = Anthropic.Messages.ThinkingConfigParam;
 
 /**
- * 「思考を止める」指定をモデルごとに選ぶ。モデルによって受け付ける値が違うため。
- * - Claude Sonnet 5.5: {type: "disabled"} は 400。{type: "between_tools"} で止める
- * - Claude Opus 5.5 / Fable / Mythos: 止められない。送らずに effort で浅くする
- * - それ以外の Claude（Haiku 5.5、Sonnet 5、Opus 5、4.x）: {type: "disabled"}
- * - プロキシの別名など判断できないもの: 送らない
+ * Picks the "turn thinking off" setting per model, because models accept different values.
+ * - Claude Sonnet 5.5: {type: "disabled"} returns 400. Turn it off with {type: "between_tools"}
+ * - Claude Opus 5.5 / Fable / Mythos: cannot be turned off. Send nothing and keep it shallow with effort
+ * - Other Claude models (Haiku 5.5, Sonnet 5, Opus 5, 4.x): {type: "disabled"}
+ * - Anything we cannot tell, such as a proxy alias: send nothing
  */
 export function thinkingForOff(model: string): ThinkingParam | undefined {
   const m = model.toLowerCase();
@@ -21,11 +22,11 @@ export function thinkingForOff(model: string): ThinkingParam | undefined {
 }
 
 /**
- * Anthropic の Messages API。公式 SDK を使い、通信は Electron の net.fetch に通す
- * （システムのプロキシ設定とキーチェーンに入れた独自の CA がそのまま効く）。
+ * Anthropic's Messages API. Uses the official SDK and sends requests through Electron's net.fetch
+ * (the system proxy settings and custom CAs in the keychain apply as they are).
  *
- * サンプリングのパラメータ（temperature など）は送らない。新しいモデルは拒否するため。
- * effort / thinking / 構造化出力が 400 で拒否されたら、その項目を外して 1 回だけ再試行し、以後も外す。
+ * Sampling parameters (temperature and so on) are not sent, because newer models reject them.
+ * If effort / thinking / structured output is rejected with 400, the request is retried once without it, and it stays off.
  */
 export class AnthropicProvider implements LlmProvider {
   readonly kind = 'anthropic';
@@ -33,7 +34,7 @@ export class AnthropicProvider implements LlmProvider {
   private useEffort = true;
   private useThinking = true;
   private useFormat = true;
-  /** プロンプトのキャッシュを 1 時間保つ指定を送るか。拒否されたら外して、既定（5 分）に戻す */
+  /** Whether to ask for a 1-hour prompt cache. If rejected, drop it and fall back to the default (5 minutes) */
   private useLongCache = true;
 
   constructor(
@@ -42,7 +43,7 @@ export class AnthropicProvider implements LlmProvider {
     fetchImpl: FetchLike,
   ) {
     if (!apiKey && !cfg.headers['authorization'] && !cfg.headers['Authorization']) {
-      throw new LlmError('config', 'API キーが設定されていません');
+      throw new LlmError('config', t('engine.llm.noApiKey'));
     }
     this.client = new Anthropic({
       apiKey: apiKey || null,
@@ -56,7 +57,7 @@ export class AnthropicProvider implements LlmProvider {
 
   private buildParams(req: LlmRequest): Anthropic.Messages.MessageCreateParamsNonStreaming {
     const { anthropic } = this.cfg;
-    if (!this.cfg.model) throw new LlmError('config', 'モデル名が設定されていません');
+    if (!this.cfg.model) throw new LlmError('config', t('engine.llm.noModel'));
     const params: Anthropic.Messages.MessageCreateParamsNonStreaming = {
       model: this.cfg.model,
       max_tokens: req.maxOutputTokens,
@@ -64,7 +65,7 @@ export class AnthropicProvider implements LlmProvider {
         {
           type: 'text',
           text: req.system,
-          // 音声入力は間が空くので、キャッシュを 1 時間保つ。5 分のままだと、間が空くたびに読み直しになって最初の応答が遅くなる
+          // Dictation has long gaps, so keep the cache for 1 hour. With 5 minutes, every gap means a re-read and a slower first response
           ...(anthropic.promptCaching ? { cache_control: this.useLongCache ? { type: 'ephemeral' as const, ttl: '1h' as const } : { type: 'ephemeral' as const } } : {}),
         },
       ],
@@ -94,23 +95,23 @@ export class AnthropicProvider implements LlmProvider {
       if (remaining <= 0) throw new LlmError('timeout', timeoutMessage(req.timeoutMs));
       try {
         const msg = await this.client.messages.create(params, { timeout: remaining, signal: req.signal });
-        if (msg.stop_reason === 'refusal') throw new LlmError('refusal', 'モデルが応答を拒否しました');
+        if (msg.stop_reason === 'refusal') throw new LlmError('refusal', t('engine.llm.refusal'));
         const text = msg.content
           .filter((b): b is Anthropic.Messages.TextBlock => b.type === 'text')
           .map((b) => b.text)
           .join('');
-        if (msg.stop_reason === 'max_tokens' && !text) throw new LlmError('truncated', '出力が上限で切れました');
+        if (msg.stop_reason === 'max_tokens' && !text) throw new LlmError('truncated', t('engine.llm.truncated'));
         return { text, model: msg.model, elapsedMs: Date.now() - started };
       } catch (e) {
         if (e instanceof LlmError) throw e;
         if (e instanceof Anthropic.APIUserAbortError) {
-          throw new LlmError('aborted', '中断しました');
+          throw new LlmError('aborted', t('engine.llm.aborted'));
         }
         if (e instanceof Anthropic.APIConnectionTimeoutError) {
           throw new LlmError('timeout', timeoutMessage(req.timeoutMs));
         }
         if (e instanceof Anthropic.APIConnectionError) {
-          throw new LlmError('network', `接続できませんでした: ${e.message}`);
+          throw new LlmError('network', t('engine.llm.network', { reason: e.message }));
         }
         if (e instanceof Anthropic.APIError) {
           const status = e.status ?? 0;
@@ -133,13 +134,13 @@ export class AnthropicProvider implements LlmProvider {
               continue;
             }
           }
-          if (status === 401 || status === 403) throw new LlmError('auth', `認証に失敗しました（${status}）: ${e.message}`, status);
-          if (status === 429) throw new LlmError('rate_limit', `利用上限に達しました（429）: ${e.message}`, status);
+          if (status === 401 || status === 403) throw new LlmError('auth', t('engine.llm.auth', { status, reason: e.message }), status);
+          if (status === 429) throw new LlmError('rate_limit', t('engine.llm.rateLimit', { reason: e.message }), status);
           throw new LlmError('http', `HTTP ${status}: ${e.message}`, status);
         }
         throw new LlmError('network', (e as Error).message);
       }
     }
-    throw new LlmError('http', 'LLM の呼び出しに失敗しました（再試行の上限）');
+    throw new LlmError('http', t('engine.llm.retriesExhausted'));
   }
 }

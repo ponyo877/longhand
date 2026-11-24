@@ -1,15 +1,15 @@
 /**
- * 入力先の画面の文から、その場で使われている用語（英字の製品名や技術用語）を拾う。
+ * Picks up terms in use on the target screen (Latin product names and technical terms) from its text.
  *
- * 利用者の辞書が空でも、いま開いている文書やチャットに出ている語は、次に話す語である可能性が高い。
- * 拾った語は、その発話のあいだだけ、音声認識のヒントと整形の語彙に足す（辞書には入れない）。
- * 画面の文そのものは、語を拾ったら捨てる（保存しない、外に送らない）。
+ * Even with an empty user dictionary, words in the open document or chat are likely to be spoken next.
+ * The terms are added to the recognition hints and the formatting vocabulary for that utterance only (not to the dictionary).
+ * The screen text itself is discarded once the terms are picked (not saved, not sent anywhere).
  *
- * 考え方は、MIT ライセンスの音声入力アプリ Hex（anomalyco/hex）の、画面からの語彙の抽出を参考にした（コードは写していない）。
+ * The idea comes from the screen vocabulary extraction in Hex (anomalyco/hex), an MIT-licensed dictation app (no code was copied).
  */
 import { extractCandidates } from '../../shared/dictCandidates';
 
-/** 画面でよく見る、メニューやボタンの英語。用語ではないので外す */
+/** English words common in menus and buttons. They are not terms, so they are left out */
 const UI_WORDS = new Set(
   (
     'file edit view window help tools format insert table history bookmarks profiles tab tabs page pages ' +
@@ -24,15 +24,15 @@ const UI_WORDS = new Set(
 );
 
 export interface ScreenTermOptions {
-  /** すでに辞書にある語（重ねて拾わない） */
+  /** Words already in the dictionary (not picked up again) */
   existing?: readonly string[];
-  /** 返す語の上限 */
+  /** Maximum number of words to return */
   limit?: number;
 }
 
 /**
- * 文から、名前らしい英字の語を、出てきた回数の多い順に返す。
- * texts には、入力欄のカーソルの前後、ウィンドウのタイトル、画面の文などを渡す。
+ * Returns name-like Latin words from the text, most frequent first.
+ * Pass texts such as the field text around the cursor, the window title and the screen text.
  */
 export function extractScreenTerms(texts: readonly (string | undefined)[], opts: ScreenTermOptions = {}): string[] {
   const docs = texts.filter((t): t is string => !!t && t.trim().length > 0);

@@ -1,50 +1,51 @@
+import type { Locale } from './i18n/locale';
 import type { NumberStyles } from './numberStyle';
 import type { Settings } from './settings';
 
 // ---------------------------------------------------------------------------
-// カスタマイズ（辞書、置換、カスタム指示、学習語）
+// Customizations (dictionary, replacements, custom instructions, learned words)
 // ---------------------------------------------------------------------------
 
 export interface Replacement {
   id: string;
-  /** 置換前（話し言葉としての表記） */
+  /** Text to replace (as written for speech) */
   from: string;
-  /** 置換後（最大 5000 字） */
+  /** Replacement (up to 5000 characters) */
   to: string;
   /**
-   * オン（既定）: 置換後の文字列を書いたとおりに入れる。
-   * オフ: 文頭に入り、置換後の先頭が英小文字なら、その 1 文字を大文字にする。
-   * 一致はどちらでも大文字小文字と全角半角を区別しない（main/format/postprocess.ts の applyReplacements）
+   * On (default): the replacement is inserted exactly as written.
+   * Off: at the start of a sentence, if the replacement starts with a lowercase Latin letter, that letter is capitalized.
+   * Either way, matching ignores case and full-width / half-width differences (applyReplacements in main/format/postprocess.ts)
    */
   preserveCase: boolean;
-  /** 置換後の直後にある句読点を取り除く（URL やコマンドなど） */
+  /** Removes punctuation right after the replacement (for URLs, commands and so on) */
   noPunctuation: boolean;
 }
 
 export interface LearnedWord {
   word: string;
-  /** 学習のもとになった誤認識（例: 「くばねてす」） */
+  /** The misrecognition it was learned from (for example 「くばねてす」) */
   from: string;
   learnedAt: number;
 }
 
-/** 音声認識の取り違えを、利用者が手で直した組（同じ読みの別の語、表記の好みなど）。辞書には入れず、整形に候補として渡す */
+/** A speech recognition mix-up the user corrected by hand (another word with the same reading, a preferred spelling and so on). Not added to the dictionary; passed to formatting as a candidate */
 export interface PastCorrection {
-  /** 音声認識が書いた語句 */
+  /** Phrase the speech recognizer wrote */
   heard: string;
-  /** 利用者が直した語句 */
+  /** Phrase the user corrected it to */
   corrected: string;
-  /** 同じ直しをした回数 */
+  /** How many times the same correction was made */
   count: number;
-  /** 最後に直した時刻 */
+  /** When it was last corrected */
   at: number;
 }
 
-/** 整形が書き換えたあと、利用者が手で元に戻した語句。整形に「書き換えない語句」として渡す */
+/** A phrase the user changed back by hand after formatting rewrote it. Passed to formatting as a phrase not to rewrite */
 export interface KeptPhrase {
-  /** 利用者が戻した語句（話したとおりの形） */
+  /** Phrase the user restored (as spoken) */
   phrase: string;
-  /** 整形が書き換えた形 */
+  /** What formatting rewrote it to */
   changedTo: string;
   count: number;
   at: number;
@@ -56,24 +57,24 @@ export interface Customizations {
   replacements: Replacement[];
   customInstructions: string;
   learnedWords: LearnedWord[];
-  /** 取り消した学習語（同じ語を二度と学習しない） */
+  /** Learned words the user removed (never learned again) */
   blockedLearnedWords: string[];
-  /** 語ごとの読み（カタカナ）。利用者が入力または採用したもので、書き起こしの後の照合に使う（G4-11） */
+  /** Readings per word (katakana), typed or accepted by the user. Used for matching after transcription (G4-11) */
   readings?: Record<string, string[]>;
-  /** LLM が作った読みの候補（未確認。照合の候補にだけ使い、置き換えには使わない） */
+  /** Reading candidates made by the LLM (unconfirmed. Used only as matching candidates, never for replacing) */
   suggestedReadings?: Record<string, string[]>;
   /**
-   * 語ごとの、音声認識が聞き違えた形（利用者の手直しから学んだもの）。辞書の語にも学習語にも付く。
-   * 学習語の最初の形は learnedWords の from にあり、ここには 2 つ目からの形と、辞書の語の形が入る
+   * Per word, the forms the speech recognizer misheard it as (learned from the user's corrections). Attached to both dictionary words and learned words.
+   * The first form of a learned word is in its from in learnedWords; this holds the forms from the second one on, and the forms of dictionary words
    */
   misheard?: Record<string, string[]>;
-  /** 利用者が直した、音声認識の取り違えの組 */
+  /** Speech recognition mix-ups the user corrected */
   pastCorrections?: PastCorrection[];
-  /** 整形の書き換えを、利用者が元に戻した語句 */
+  /** Phrases where the user undid a rewrite by formatting */
   keptPhrases?: KeptPhrase[];
   /** How the user writes numbers, learned from corrections (shared/numberStyle.ts) */
   numberStyle?: NumberStyles;
-  /** 置換の preserveCase を新しい意味（オンで書いたとおり）に移したか（G4-12。main/store/customizations.ts） */
+  /** Whether preserveCase of replacements was moved to its new meaning (on means as written) (G4-12. main/store/customizations.ts) */
   replacementCaseMigrated?: boolean;
 }
 
@@ -86,53 +87,53 @@ export const EMPTY_CUSTOMIZATIONS: Customizations = {
   blockedLearnedWords: [],
 };
 
-/** カスタマイズの上限（本体の検査とスタイル画面の表示で同じ値を使う） */
+/** Customization limits (the same values are used by the checks in the app and by the Style page) */
 export const CUSTOMIZATION_LIMITS = {
-  /** 辞書の件数 */
+  /** Number of dictionary words */
   dictionary: 2000,
-  /** 辞書の 1 語の長さ */
+  /** Length of one dictionary word */
   wordLength: 100,
-  /** 学習語の件数。超えたら古い語から外す */
+  /** Number of learned words. Beyond this, the oldest are dropped */
   learned: 500,
-  /** 置換後の文字列の長さ */
+  /** Length of a replacement */
   replacementTo: 5000,
-  /** 1 語が持つ、聞き違えた形の数。超えたら古い形から外す */
+  /** Number of misheard forms per word. Beyond this, the oldest forms are dropped */
   misheardPerWord: 6,
-  /** 取り違えの組の件数。超えたら古い組から外す */
+  /** Number of mix-up pairs. Beyond this, the oldest pairs are dropped */
   pastCorrections: 200,
-  /** 書き換えない語句の件数。超えたら古い語句から外す */
+  /** Number of phrases not to rewrite. Beyond this, the oldest are dropped */
   keptPhrases: 200,
 } as const;
 
 // ---------------------------------------------------------------------------
-// 履歴
+// History
 // ---------------------------------------------------------------------------
 
 /**
- * 1 回分の処理時間（ms）。asrMs / llmMs / totalMs は各段の所要時間。
- * 〜DoneMs は、main がキーを離す操作を受けた時刻からの経過（区間ごとの遅延の内訳）
+ * Processing times for one dictation (ms). asrMs / llmMs / totalMs are the time of each stage.
+ * The ...DoneMs values are the time since main received the key release (a breakdown of the latency per stage)
  */
 export interface HistoryTimings {
   asrMs: number;
   llmMs: number;
   totalMs: number;
-  /** キーを離してから main が受け取るまで（ヘルパーのイベント時刻からの推定） */
+  /** From releasing the key to main receiving it (estimated from the helper's event time) */
   releaseLagMs?: number;
-  /** 録音の停止を確認するまで */
+  /** Until the recording was confirmed stopped */
   stoppedMs?: number;
-  /** キーを離した後も録音を続けた時間（asr.tailMs）。続けなかったときは無い。録音の末尾のこの長さが、離した後の音声 */
+  /** How long recording went on after the key was released (asr.tailMs). Absent when it did not. The last this-long part of the recording is the audio after the release */
   postRollMs?: number;
-  /** 書き起こしが揃うまで */
+  /** Until the transcription was complete */
   asrDoneMs?: number;
-  /** 整形が終わるまで */
+  /** Until formatting finished */
   llmDoneMs?: number;
-  /** 前の録音の貼り付けを待った時間 */
+  /** Time spent waiting for the previous recording's paste */
   pasteWaitMs?: number;
-  /** ⌘V を送るまで（ヘルパーが報告したときだけ） */
+  /** Until ⌘V was sent (only when the helper reported it) */
   keyPostedMs?: number;
-  /** 貼り付けの ACK を受け取るまで */
+  /** Until the paste ACK arrived */
   ackMs?: number;
-  /** 投機的な書き起こしの結果を使ったか（hit）、使えなかったか（miss） */
+  /** Whether the speculative transcription was used (hit) or could not be used (miss) */
   speculative?: 'hit' | 'miss';
 }
 
@@ -140,35 +141,35 @@ export interface HistoryItem {
   id: string;
   timestamp: number;
   mode: 'dictation' | 'edit';
-  /** 貼り付けた（または貼り付けるはずだった）文 */
+  /** Text pasted (or that was to be pasted) */
   text: string;
-  /** ASR の生テキスト */
+  /** Raw ASR text */
   rawText: string;
-  /** 編集モードで選択されていた文 */
+  /** Text selected in edit mode */
   selectedText?: string;
-  /** LLM で整形したか。false なら生テキストのまま（skipLlm、失敗、タイムアウト） */
+  /** Whether the LLM formatted it. false means the raw text was kept (skipLlm, failure, timeout) */
   formatted: boolean;
   llmError?: string;
   app?: { name: string; bundleId: string };
   host?: string;
   durationSec: number;
-  /** recordings/ からの相対パス */
+  /** Path relative to recordings/ */
   audioFile?: string;
   language: string;
   timings: HistoryTimings;
-  /** 貼り付けの結果 */
+  /** Result of the paste */
   paste: 'pasted' | 'failed' | 'skipped' | 'stale' | 'cancelled';
-  /** 編集モードで、指示を編集として解釈できなかった（履歴に「不明確な編集」と出す。N5） */
+  /** In edit mode, the instruction could not be read as an edit (the history shows it as an unclear edit. N5) */
   editUnclear?: boolean;
-  /** LLM を飛ばす近道（llmFastPath）で確定した（N6） */
+  /** Finished by the shortcut that skips the LLM (llmFastPath) (N6) */
   fastPath?: boolean;
-  /** 書き起こしの語ごとの補正（textfix）で直した箇所。直した文を貼ったときだけ残す（履歴に「自動修正」と出す） */
+  /** Spots fixed by the per-word correction of the transcription (textfix). Kept only when the fixed text was pasted (the history shows them as automatic fixes) */
   autoFixes?: AutoFix[];
-  /** 入力先の画面の文から拾えた、名前らしい英字の語（録音を残す設定のときだけ。評価で、ヒントにした場合の効果を確かめるために残す） */
+  /** Name-like Latin words found in the text on the target screen (only when recordings are kept. Kept so that evaluation can check the effect of using them as hints) */
   contextTerms?: string[];
 }
 
-/** textfix で直した 1 か所（履歴の表示と「今後は直さない」に使う） */
+/** One spot fixed by textfix (for the history display and for "do not fix this again") */
 export interface AutoFix {
   rule: 'latin' | 'fillers' | 'notation' | 'particles';
   before: string;
@@ -176,7 +177,7 @@ export interface AutoFix {
 }
 
 // ---------------------------------------------------------------------------
-// フローティングバー
+// Floating bar
 // ---------------------------------------------------------------------------
 
 export type FloaterPhase = 'idle' | 'recording' | 'locked' | 'finalizing';
@@ -184,22 +185,22 @@ export type FloaterPhase = 'idle' | 'recording' | 'locked' | 'finalizing';
 export interface FloaterState {
   phase: FloaterPhase;
   mode: 'dictation' | 'edit';
-  /** 編集モードで選択されている文字数 */
+  /** Number of characters selected in edit mode */
   selectionChars: number;
-  /** 録音開始からの経過時間の基準（ms エポック） */
+  /** Reference for the time since recording started (ms epoch) */
   startedAt: number | null;
-  /** 処理中の段階（表示用） */
+  /** Current processing stage (for display) */
   stage?: 'transcribing' | 'formatting' | 'pasting';
-  /** 表示するかどうか（設定とスヌーズの反映後） */
+  /** Whether to show it (after applying the setting and snoozing) */
   visible: boolean;
   /**
-   * 録音中に、マイクの音が実際に届き始めたか（最初の音声チャンクの到着）。
-   * false の間は録音中の表示を控えめにする。undefined は true と同じ扱い
+   * Whether sound from the microphone has actually started arriving during recording (the first audio chunk arrived).
+   * While false, the recording display is toned down. undefined is treated as true
    */
   micReady?: boolean;
-  /** 録音に使っているマイクの名前（分かった時点で送る） */
+  /** Name of the microphone used for recording (sent once known) */
   micName?: string;
-  /** 待機中に一時的に出す表示。pasted は貼り付けの成功 */
+  /** Shown briefly while idle. pasted means a successful paste */
   flash?: 'pasted' | null;
 }
 
@@ -212,21 +213,21 @@ export interface HudAction {
 
 export interface HudMessage {
   id: string;
-  /** 通知の種類（ミュートと表示回数の記録に使う） */
+  /** Kind of notification (used for muting and for counting how often it was shown) */
   key: string;
   kind: HudKind;
   title: string;
   body?: string;
   actions?: HudAction[];
-  /** 自動で消えるまでのミリ秒。0 なら消えない */
+  /** Milliseconds until it disappears by itself. 0 means it stays */
   durationMs: number;
   mutable: boolean;
-  /** card は見出しと本文のある通知、pill は 1 行の小さな通知 */
+  /** card is a notification with a title and a body, pill is a small one-line notification */
   style?: 'card' | 'pill';
 }
 
 // ---------------------------------------------------------------------------
-// 画面との IPC
+// IPC with the windows
 // ---------------------------------------------------------------------------
 
 export interface PermissionStatus {
@@ -257,19 +258,19 @@ export interface AsrTestResult {
   error?: string;
 }
 
-/** 音声認識のモデルの取得（ASR-5） */
+/** Downloading the speech recognition model (ASR-5) */
 export interface ModelDownloadState {
   state: 'idle' | 'downloading' | 'waiting' | 'done' | 'failed' | 'cancelled';
-  /** 既定のエンジンのモデルがそろっているか */
+  /** Whether the default engine's model is complete */
   installed: boolean;
-  /** アプリに同梱されたモデルを使っているか（利用者のフォルダにはない） */
+  /** Whether the model bundled with the app is used (not in the user's folder) */
   bundled?: boolean;
   receivedBytes: number;
   totalBytes: number;
-  /** 取得中のファイル名 */
+  /** Name of the file being downloaded */
   file?: string;
   error?: string;
-  /** 再試行までの秒数（state が waiting のとき） */
+  /** Seconds until the retry (when state is waiting) */
   retryInSec?: number;
 }
 
@@ -282,11 +283,13 @@ export interface AppSnapshot {
   permissions: PermissionStatus;
   version: string;
   paths: { userData: string; logs: string; recordings: string; models: string };
+  /** Language the interface is shown in, resolved from settings.uiLanguage and the system languages */
+  locale: Locale;
 }
 
-/** レンダラに公開する API（preload で window.longhand として出す） */
+/** API exposed to the renderer (preload exposes it as window.longhand) */
 export interface LonghandApi {
-  // 共通
+  // Common
   getSnapshot(): Promise<AppSnapshot>;
   onSnapshot(cb: (s: AppSnapshot) => void): () => void;
   updateSettings(patch: DeepPartial<Settings>): Promise<Settings>;
@@ -296,7 +299,7 @@ export interface LonghandApi {
   requestPermission(kind: 'accessibility' | 'microphone'): Promise<PermissionStatus>;
   refreshPermissions(): Promise<PermissionStatus>;
 
-  // 履歴
+  // History
   listHistory(query?: string): Promise<HistoryItem[]>;
   deleteHistory(id: string): Promise<void>;
   clearHistory(): Promise<void>;
@@ -305,43 +308,43 @@ export interface LonghandApi {
   saveAudioAs(id: string): Promise<boolean>;
   onHistoryChanged(cb: () => void): () => void;
   /**
-   * 履歴の項目をやり直す（H1）。
-   * transcribe は録音から書き起こし直して整形もやり直す。format は書き起こしはそのままで整形だけやり直す
+   * Redoes a history item (H1).
+   * transcribe transcribes the recording again and formats again. format keeps the transcription and only formats again
    */
   redoHistory(id: string, opts: { kind: 'transcribe' | 'format'; language?: Settings['language'] }): Promise<{ ok: boolean; error?: string }>;
-  /** 履歴の文を手で直す（G4-08）。学習がオンなら、直した語を辞書に学習し、その語を返す */
-  /** learned は辞書に足した語、remembered は語を足さずに覚えた直し方（聞き違えた形、取り違えの組、書き換えない語句）の数 */
+  /** Corrects the text of a history item by hand (G4-08). If learning is on, learns the corrected words into the dictionary and returns them */
+  /** learned is the words added to the dictionary; remembered is the number of corrections remembered without adding a word (misheard forms, mix-up pairs, phrases not to rewrite) */
   editHistory(id: string, text: string): Promise<{ ok: boolean; error?: string; learned?: string[]; remembered?: number; tooMany?: boolean }>;
 
-  // 接続
+  // Connection
   testLlm(): Promise<ConnectionTestResult>;
   testAsr(): Promise<AsrTestResult>;
   restartAsr(): Promise<void>;
-  /** 音声認識のモデルを取得する（ASR-5）。進みぐあいは snapshot の modelDownload に出る */
+  /** Downloads the speech recognition model (ASR-5). Progress shows in modelDownload of the snapshot */
   downloadModel(): Promise<boolean>;
   cancelModelDownload(): Promise<void>;
-  /** 別の PC で取得したモデルのファイルかフォルダを選んで取り込む */
+  /** Imports a model file or folder, downloaded on another Mac, that the user picks */
   importModel(): Promise<{ ok: boolean; imported: string[]; rejected: string[] }>;
   importConnection(): Promise<{ ok: boolean; error?: string }>;
-  /** removedHeaders: 認証情報らしいので書き出さなかったヘッダ */
+  /** removedHeaders: headers not exported because they look like credentials */
   exportConnection(): Promise<{ ok: boolean; error?: string; removedHeaders?: string[] }>;
 
-  // キーバインド（HK-8）
+  // Key bindings (HK-8)
   recordShortcut(active: boolean): Promise<void>;
   onShortcutKeys(cb: (p: { keys: string[]; combo: string[]; done: boolean }) => void): () => void;
   onHotkeyTest(cb: (p: { action: string; phase: string }) => void): () => void;
-  /** オンボーディングのキーのテスト中だけ hotkey を画面に流す */
+  /** Sends hotkeys to the window only while onboarding tests the keys */
   hotkeyTest(active: boolean): Promise<void>;
 
-  // オーディオ
+  // Audio
   listMicrophones(): Promise<{ id: string; name: string; isDefault: boolean; isVirtual: boolean; transport: string }[]>;
   testMicrophone(seconds: number): Promise<{ ok: boolean; peak: number; rms: number; error?: string }>;
   onMicLevel(cb: (rms: number) => void): () => void;
 
-  // 学習
+  // Learning
   undoLearnedWord(word: string): Promise<void>;
 
-  // フローティングバー
+  // Floating bar
   onFloaterState(cb: (s: FloaterState) => void): () => void;
   onLevel(cb: (rms: number) => void): () => void;
   onHud(cb: (m: HudMessage) => void): () => void;
@@ -351,7 +354,7 @@ export interface LonghandApi {
   setMouseInteractive(interactive: boolean): void;
   hudMute(key: string): void;
 
-  // 管理ウィンドウ
+  // Management window
   onNavigate(cb: (page: string) => void): () => void;
   completeOnboarding(): Promise<void>;
 }

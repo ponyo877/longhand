@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>正解づくり</title>
+<title>Reference Review</title>
 <style>
   :root {
     --paper: #f6f7f9; --surface: #ffffff; --ink: #22262e; --muted: #6b7280; --rule: #d5d9e0;
@@ -97,86 +97,86 @@
 </head>
 <body>
 <header>
-  <h1>正解づくり</h1>
+  <h1>Reference Review</h1>
   <div class="tabs" role="tablist">
-    <button role="tab" id="tab-review" aria-selected="true">録音を確かめる</button>
-    <button role="tab" id="tab-script" aria-selected="false">台本を読む</button>
+    <button role="tab" id="tab-review" aria-selected="true">Review Recordings</button>
+    <button role="tab" id="tab-script" aria-selected="false">Read Script</button>
   </div>
   <div class="progress"><span id="progress-text"></span><div class="bar"><i id="progress-bar"></i></div></div>
 </header>
 
 <main id="view-review">
-  <nav aria-label="録音の一覧">
+  <nav aria-label="Recordings">
     <ol id="review-list"></ol>
     <div class="legend">
-      <span><i class="mark"></i>まだ</span><span><i class="mark same"></i>そのまま確定</span><span><i class="mark fixed"></i>直して確定</span><span><i class="mark excluded"></i>除外</span>
+      <span><i class="mark"></i>Not yet</span><span><i class="mark same"></i>Confirmed as is</span><span><i class="mark fixed"></i>Corrected</span><span><i class="mark excluded"></i>Excluded</span>
     </div>
   </nav>
   <section class="work" id="review-work">
-    <p class="lead">録音を聞いて、入力されてほしい文に直してください。合っていれば、そのまま確定します。</p>
+    <p class="lead">Listen to the recording and correct the text to what you want typed. If it is already right, confirm it as is.</p>
     <p class="meta" id="review-meta"></p>
-    <canvas class="wave" id="wave" width="760" height="84" aria-label="録音の波形。クリックした位置から再生します"></canvas>
+    <canvas class="wave" id="wave" width="760" height="84" aria-label="Waveform of the recording. Click to play from that point"></canvas>
     <div class="player">
-      <button class="plain" id="play">再生</button>
-      <span id="time">0.0 / 0.0 秒</span>
+      <button class="plain" id="play">Play</button>
+      <span id="time">0.0 / 0.0 s</span>
     </div>
-    <label class="field" for="target">入力されてほしい文</label>
+    <label class="field" for="target">Text you want typed</label>
     <textarea class="target" id="target" spellcheck="false"></textarea>
     <p class="note" id="prefill-note"></p>
     <details id="more">
-      <summary>言い直しや、別の書き方があるとき</summary>
+      <summary>Self-corrections and other correct spellings</summary>
       <div class="inner">
         <div>
-          <label class="field" for="spoken">話したままの文（言い直しやつなぎ言葉を消したときだけ）</label>
+          <label class="field" for="spoken">Text as spoken (only when you removed self-corrections or fillers)</label>
           <textarea class="small" id="spoken" spellcheck="false"></textarea>
         </div>
         <div>
-          <label class="field" for="alt">この書き方でも正しい（1 行に 1 つ）</label>
-          <textarea class="small" id="alt" spellcheck="false" placeholder="例：漢字とひらがなのどちらでもよい語を、もう一方の書き方で書いた文"></textarea>
+          <label class="field" for="alt">Also correct (one per line)</label>
+          <textarea class="small" id="alt" spellcheck="false" placeholder="Example: the same text with a word that may be written in kanji or hiragana spelled the other way"></textarea>
         </div>
       </div>
     </details>
     <div class="actions">
-      <button class="primary" id="confirm">この文で確定</button>
-      <button class="plain" id="exclude">除外する</button>
-      <button class="plain" id="prev">前へ</button>
-      <button class="plain" id="next">次へ</button>
-      <div class="keys"><span><kbd>⌘</kbd> <kbd>Enter</kbd> 確定</span><span><kbd>⌘</kbd> <kbd>E</kbd> 除外</span><span><kbd>esc</kbd> 再生と停止</span></div>
+      <button class="primary" id="confirm">Confirm</button>
+      <button class="plain" id="exclude">Exclude</button>
+      <button class="plain" id="prev">Previous</button>
+      <button class="plain" id="next">Next</button>
+      <div class="keys"><span><kbd>⌘</kbd> <kbd>Enter</kbd> Confirm</span><span><kbd>⌘</kbd> <kbd>E</kbd> Exclude</span><span><kbd>esc</kbd> Play/Stop</span></div>
     </div>
     <p class="error" id="review-error" role="alert"></p>
     <div class="guide">
-      迷ったとき
+      When in doubt
       <ul>
-        <li>句読点も、入力されてほしいとおりに書きます。</li>
-        <li>「えー」「あの」や言い直しは、入力されてほしくなければ消します。</li>
-        <li>英字の語と数字は、入力されてほしい書き方にします（GitHub、15時 など）。</li>
-        <li>聞き取れない録音、ほかの人の声、試しに押しただけの録音は除外します。</li>
+        <li>Write punctuation exactly as you want it typed.</li>
+        <li>Remove fillers such as 「えー」 and 「あの」 and self-corrections if you do not want them typed.</li>
+        <li>Write Latin-letter words and numbers the way you want them typed (GitHub, 15時 and so on).</li>
+        <li>Exclude recordings you cannot make out, other people’s voices, and recordings from just trying the key.</li>
       </ul>
     </div>
   </section>
 </main>
 
 <main id="view-script" hidden>
-  <nav aria-label="台本の一覧"><ol id="script-list"></ol>
-    <div class="legend"><span><i class="mark"></i>まだ</span><span><i class="mark same"></i>録音ずみ</span></div>
+  <nav aria-label="Script"><ol id="script-list"></ol>
+    <div class="legend"><span><i class="mark"></i>Not yet</span><span><i class="mark same"></i>Recorded</span></div>
   </nav>
   <section class="work" id="script-work">
     <ol class="steps">
-      <li>Longhand が起動していることを確かめます。</li>
-      <li>下の欄をクリックし、fn を押しながら文を読み、読み終えたら離します。</li>
-      <li>文が入力されると、自動で次の文に進みます。</li>
+      <li>Make sure Longhand is running.</li>
+      <li>Click the field below, hold fn while you read the sentence, and release it when you finish.</li>
+      <li>Once the text is typed, the page moves on to the next sentence by itself.</li>
     </ol>
     <p class="meta" id="script-meta"></p>
     <p class="instruction" id="script-instruction"></p>
     <p class="sentence" id="sentence"></p>
     <div id="script-field"></div>
-    <p class="note">ふだん話す速さで読んでください。入力された文が違っていても、直さなくて大丈夫です（録音だけを使います）。</p>
+    <p class="note">Read at your usual speaking speed. If the typed text is wrong, there is no need to fix it (only the recording is used).</p>
     <p class="state" id="script-state" role="status"></p>
     <div class="actions">
-      <button class="plain" id="script-capture">いまの録音を取り込む</button>
-      <button class="plain" id="script-redo">録り直す</button>
-      <button class="plain" id="script-prev">前へ</button>
-      <button class="plain" id="script-next">次へ</button>
+      <button class="plain" id="script-capture">Import Last Recording</button>
+      <button class="plain" id="script-redo">Record Again</button>
+      <button class="plain" id="script-prev">Previous</button>
+      <button class="plain" id="script-next">Next</button>
     </div>
   </section>
 </main>
@@ -187,7 +187,7 @@ const $ = (id) => document.getElementById(id);
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { 'x-longhand-token': TOKEN, 'content-type': 'application/json' } });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `エラー（${res.status}）`);
+  if (!res.ok) throw new Error(body.error || `Error (${res.status})`);
   return body;
 }
 const fmtTime = (iso) => {
@@ -200,7 +200,7 @@ function setProgress(done, total, unit) {
   $('progress-bar').style.width = total ? `${(done / total) * 100}%` : '0';
 }
 
-// ---------------------------------------------------------------- 録音を確かめる
+// ---------------------------------------------------------------- Review recordings
 const review = { items: [], index: -1, peaks: null, url: null };
 const audio = new Audio();
 const stateOf = (it) => (!it.truth ? '' : it.truth.status === 'excluded' ? 'excluded' : it.truth.target === it.content ? 'same' : 'fixed');
@@ -216,17 +216,17 @@ function renderReviewList() {
     mark.className = `mark ${stateOf(it)}`;
     const snip = document.createElement('span');
     snip.className = 'snip';
-    snip.textContent = (it.truth?.target || it.content || '（文なし）').slice(0, 24);
+    snip.textContent = (it.truth?.target || it.content || '(no text)').slice(0, 24);
     const dur = document.createElement('span');
     dur.className = 'dur';
-    dur.textContent = `${it.durationSec.toFixed(1)} 秒`;
+    dur.textContent = `${it.durationSec.toFixed(1)} s`;
     b.append(mark, snip, dur);
     b.addEventListener('click', () => selectReview(i));
     li.append(b);
     list.append(li);
   });
   const done = review.items.filter((it) => it.truth).length;
-  if (!$('view-review').hidden) setProgress(done, review.items.length, '件');
+  if (!$('view-review').hidden) setProgress(done, review.items.length, 'recordings');
   list.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -273,8 +273,8 @@ function drawWave() {
     ctx.fillRect(x, (h - bar) / 2, 1, bar);
   }
   ctx.globalAlpha = 1;
-  $('time').textContent = `${audio.currentTime.toFixed(1)} / ${(audio.duration || 0).toFixed(1)} 秒`;
-  $('play').textContent = audio.paused ? '再生' : '停止';
+  $('time').textContent = `${audio.currentTime.toFixed(1)} / ${(audio.duration || 0).toFixed(1)} s`;
+  $('play').textContent = audio.paused ? 'Play' : 'Stop';
 }
 function tick() { drawWave(); if (!audio.paused) requestAnimationFrame(tick); }
 audio.addEventListener('play', tick);
@@ -300,23 +300,23 @@ async function selectReview(i, autoplay = true) {
   review.index = i;
   const it = review.items[i];
   $('review-error').textContent = '';
-  $('review-meta').textContent = `${fmtTime(it.timestamp)}、${it.durationSec.toFixed(1)} 秒、${i + 1} 件目（全 ${review.items.length} 件）`;
+  $('review-meta').textContent = `${fmtTime(it.timestamp)}, ${it.durationSec.toFixed(1)} s, ${i + 1} of ${review.items.length}`;
   $('target').value = it.truth?.target ?? it.content ?? '';
   $('spoken').value = it.truth?.spoken ?? '';
   $('spoken').placeholder = it.rawText || '';
   $('alt').value = (it.truth?.alt ?? []).join('\n');
   $('more').open = Boolean(it.truth?.spoken || it.truth?.alt?.length);
   $('prefill-note').textContent = it.truth
-    ? it.truth.status === 'excluded' ? 'この録音は除外しています。確定し直すと、評価に使います。' : '確定ずみです。直して確定し直せます。'
-    : !it.content ? '文が残っていない録音です。話した内容を書くか、除外してください。'
-    : it.source === 'longhand' ? '最初に入っているのは、Longhand が入力した文です。' : '最初に入っているのは、録音したときに入力された文です。';
+    ? it.truth.status === 'excluded' ? 'This recording is excluded. Confirm it again to use it in evaluation.' : 'Already confirmed. You can correct it and confirm again.'
+    : !it.content ? 'This recording has no text. Write what was said, or exclude it.'
+    : it.source === 'longhand' ? 'The field starts with the text Longhand typed.' : 'The field starts with the text typed when this was recorded.';
   renderReviewList();
   audio.pause();
   review.peaks = null;
   drawWave();
   try {
     const res = await fetch(`/api/audio/${encodeURIComponent(it.id)}`, { headers: { 'x-longhand-token': TOKEN } });
-    if (!res.ok) throw new Error('録音を読めませんでした。');
+    if (!res.ok) throw new Error('Could not load the recording.');
     const buf = await res.arrayBuffer();
     if (review.index !== i) return;
     review.peaks = wavPeaks(buf, 760);
@@ -342,7 +342,7 @@ async function saveReview(status) {
     let next = -1;
     for (let k = 1; k <= n; k++) { const j = (review.index + k) % n; if (!review.items[j].truth) { next = j; break; } }
     if (next >= 0) await selectReview(next);
-    else { renderReviewList(); audio.pause(); $('review-error').textContent = ''; $('prefill-note').textContent = 'すべての録音を確かめました。「台本を読む」に進んでください。'; }
+    else { renderReviewList(); audio.pause(); $('review-error').textContent = ''; $('prefill-note').textContent = 'All recordings are reviewed. Go on to “Read Script”.'; }
   } catch (e) { $('review-error').textContent = e.message; }
 }
 $('confirm').addEventListener('click', () => saveReview('ok'));
@@ -363,10 +363,10 @@ async function loadReview() {
   review.items = items;
   const first = items.findIndex((it) => !it.truth);
   if (items.length) await selectReview(first >= 0 ? first : 0, false);
-  else { renderReviewList(); $('review-meta').textContent = '録音がありません。先に npx tsx scripts/eval-import.ts を実行してください。'; }
+  else { renderReviewList(); $('review-meta').textContent = 'No recordings. Run npx tsx scripts/eval-import.ts first.'; }
 }
 
-// ---------------------------------------------------------------- 台本を読む
+// ---------------------------------------------------------------- Read script
 const script = { items: [], index: -1, since: 0, busy: false, timer: null };
 
 function renderScriptList() {
@@ -383,13 +383,13 @@ function renderScriptList() {
     snip.textContent = it.text.slice(0, 24);
     const dur = document.createElement('span');
     dur.className = 'dur';
-    dur.textContent = it.recorded ? `${it.recorded.durationSec.toFixed(1)} 秒` : '';
+    dur.textContent = it.recorded ? `${it.recorded.durationSec.toFixed(1)} s` : '';
     b.append(mark, snip, dur);
     b.addEventListener('click', () => selectScript(i));
     li.append(b);
     list.append(li);
   });
-  if (!$('view-script').hidden) setProgress(script.items.filter((it) => it.recorded).length, script.items.length, '文');
+  if (!$('view-script').hidden) setProgress(script.items.filter((it) => it.recorded).length, script.items.length, 'sentences');
   list.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 
@@ -401,18 +401,18 @@ function selectScript(i) {
   script.index = i;
   script.since = Date.now();
   const it = script.items[i];
-  $('script-meta').textContent = `${i + 1} 文目（全 ${script.items.length} 文）`;
+  $('script-meta').textContent = `Sentence ${i + 1} of ${script.items.length}`;
   $('script-instruction').textContent = it.instruction ?? '';
   $('sentence').textContent = it.text;
-  // 文ごとに新しい欄を作る（入力された文を書き換えると、Longhand が利用者の手直しとして学習してしまうため）
+  // Make a new field for each sentence (editing typed text would make Longhand learn it as the user's correction)
   const field = document.createElement('textarea');
   field.className = 'small';
   field.id = 'script-input';
   field.spellcheck = false;
-  field.placeholder = 'ここをクリックしてから、fn を押しながら上の文を読みます';
+  field.placeholder = 'Click here, then hold fn and read the sentence above';
   field.addEventListener('input', () => { clearTimeout(script.timer); script.timer = setTimeout(captureScript, 600); });
   $('script-field').replaceChildren(field);
-  setScriptState(it.recorded ? `録音ずみです（${it.recorded.durationSec.toFixed(1)} 秒）。読み直すと、新しい録音に置き換わります。` : '');
+  setScriptState(it.recorded ? `Already recorded (${it.recorded.durationSec.toFixed(1)} s). Reading it again replaces the recording.` : '');
   renderScriptList();
   field.focus();
 }
@@ -421,18 +421,18 @@ async function captureScript() {
   const it = script.items[script.index];
   if (!it || script.busy) return;
   script.busy = true;
-  setScriptState('録音を取り込んでいます…');
+  setScriptState('Importing the recording…');
   try {
     const r = await api(`/api/script/${encodeURIComponent(it.id)}/capture`, { method: 'POST', body: JSON.stringify({ since: script.since }) });
     if (!r.ok) { setScriptState(r.reason, 'ng'); return; }
     it.recorded = { durationSec: r.durationSec };
-    setScriptState(`録音しました（${r.durationSec.toFixed(1)} 秒）。`, 'ok');
+    setScriptState(`Recorded (${r.durationSec.toFixed(1)} s).`, 'ok');
     renderScriptList();
     const n = script.items.length;
     let next = -1;
     for (let k = 1; k <= n; k++) { const j = (script.index + k) % n; if (!script.items[j].recorded) { next = j; break; } }
     if (next >= 0) script.timer = setTimeout(() => selectScript(next), 900);
-    else setScriptState('すべての文を録音しました。お疲れさまでした。', 'ok');
+    else setScriptState('All sentences are recorded. Thank you!', 'ok');
   } catch (e) { setScriptState(e.message, 'ng'); }
   finally { script.busy = false; }
 }
@@ -448,7 +448,7 @@ async function loadScript() {
   selectScript(first >= 0 ? first : 0);
 }
 
-// ---------------------------------------------------------------- 切り替え
+// ---------------------------------------------------------------- Switching views
 function show(view) {
   const isReview = view === 'review';
   $('view-review').hidden = !isReview;
