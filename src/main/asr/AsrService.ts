@@ -83,7 +83,7 @@ function resolveIn(cfg: AsrSettings, modelsDir: string, osManaged: boolean): Res
   try {
     const m = JSON.parse(fs.readFileSync(path.join(dir, 'default.json'), 'utf8')) as ResolvedModel;
     const modelPath = m.modelPath && !path.isAbsolute(m.modelPath) ? path.join(dir, m.modelPath) : (m.modelPath ?? '');
-    return { modelPath, options: { ...(m.options ?? {}), ...cfg.options }, description: m.description };
+    return { modelPath, options: { ...m.options, ...cfg.options }, description: m.description };
   } catch {
     if (osManaged && OS_MANAGED_MODEL.has(cfg.engine)) return { modelPath: '', options: cfg.options, description: 'Apple SpeechTranscriber' };
     const builtin = BUILTIN_MODELS[cfg.engine];

@@ -1,7 +1,8 @@
 name: CI
 
-# Runs on pull requests and on demand. Add a `push` trigger for main once GitHub Actions is enabled for this repository.
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

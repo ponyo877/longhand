@@ -37,7 +37,7 @@ export async function runEvalInApp(spec: string, realUserData: string): Promise<
     const savedLlm = saved.get().llm;
     // モデルの比較では、モデルと、Anthropic の設定（effort、thinking）だけを差し替える。接続先とキーは保存済みのまま
     const o = config.llmOverride;
-    const cfg = o ? ({ ...savedLlm, model: o.model ?? savedLlm.model, anthropic: { ...savedLlm.anthropic, ...(o.anthropic ?? {}) } } as typeof savedLlm) : savedLlm;
+    const cfg = o ? ({ ...savedLlm, model: o.model ?? savedLlm.model, anthropic: { ...savedLlm.anthropic, ...o.anthropic } } as typeof savedLlm) : savedLlm;
     const base = { identity: llmIdentity(cfg), maxOutputTokens: cfg.maxOutputTokens, appTimeoutMs: cfg.timeoutMs };
     if (config.llm === 'cache-only') {
       llm = { ...base, provider: null };

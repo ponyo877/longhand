@@ -115,7 +115,7 @@ export class CustomizationsStore extends EventEmitter {
     super();
     this.store = new JsonStore<Customizations>(file);
     const saved = this.store.read() as Partial<Customizations> | undefined;
-    this.value = { ...EMPTY_CUSTOMIZATIONS, ...(saved ?? {}), version: 1 };
+    this.value = { ...EMPTY_CUSTOMIZATIONS, ...saved, version: 1 };
     this.value.learnedWords = uniqLearned(this.value.learnedWords ?? []);
     if (!this.value.replacementCaseMigrated) {
       // 置換の preserveCase の意味が逆になった（G4-12）。以前のオフは「書いたとおりに入れる」、オンは「形を引き継ぐ」だった。
@@ -335,7 +335,7 @@ export class CustomizationsStore extends EventEmitter {
    */
   addMisheardForms(forms: { word: string; from: string }[]): { word: string; from: string }[] {
     const vocab = new Map(this.vocabulary().map((w) => [w.toLowerCase(), w]));
-    const next: Record<string, string[]> = { ...(this.value.misheard ?? {}) };
+    const next: Record<string, string[]> = { ...this.value.misheard };
     const added: { word: string; from: string }[] = [];
     for (const f of forms) {
       const word = vocab.get(f.word.trim().toLowerCase());

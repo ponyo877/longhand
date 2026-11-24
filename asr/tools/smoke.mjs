@@ -87,7 +87,8 @@ class Worker {
         return;
       }
       const w = this.waiters.shift();
-      w ? w(msg) : this.queue.push(msg);
+      if (w) w(msg);
+      else this.queue.push(msg);
     });
     this.exited = new Promise((r) => this.p.on('exit', (code) => r(code)));
     this.n = 0;

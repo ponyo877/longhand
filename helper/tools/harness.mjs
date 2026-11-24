@@ -90,7 +90,8 @@ function onMessage(msg) {
     const text = JSON.stringify(msg);
     console.log(color(32, `${ts()} < ${text.length > 1500 ? text.slice(0, 1500) + '…' : text}`));
   }
-  for (const w of [...waiters]) {
+  // Iterate over a copy: matching waiters are removed inside the loop.
+  for (const w of waiters.slice()) {
     if (w.pred(msg)) {
       waiters.splice(waiters.indexOf(w), 1);
       w.resolve(msg);

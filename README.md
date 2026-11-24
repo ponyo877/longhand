@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ponyo877/longhand/actions/workflows/ci.yml"><img src="https://github.com/ponyo877/longhand/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2A4B9B.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-111A3D.svg" alt="Platform: macOS 14+">
   <img src="https://img.shields.io/badge/chip-Apple%20Silicon-111A3D.svg" alt="Apple Silicon">
