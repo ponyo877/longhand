@@ -27,3 +27,14 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+
+  helper:
+    name: Swift helper build and test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Show toolchain
+        run: swift --version
+      - name: Build and test
+        working-directory: helper
+        run: swift test
