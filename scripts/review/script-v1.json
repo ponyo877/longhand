@@ -1,0 +1,589 @@
+{
+  "version": 1,
+  "name": "script-v1",
+  "note": "読み上げ用の台本。評価の参照文や利用者の書き起こしは見ずに作った。A は開発用、B は確認用。B の unlisted と mixed の語は、今後も用語集（src/main/textfix/lexicon）に足さない。",
+  "categories": {
+    "lexicon": "用語集にある語",
+    "unlisted": "用語集に無い語",
+    "number": "数字と日時",
+    "homophone": "同音異義語",
+    "particle": "助詞",
+    "short": "短い指示",
+    "long": "長めの文",
+    "mixed": "英語の混ざる文"
+  },
+  "items": [
+    {
+      "id": "script-v1-A01",
+      "split": "A",
+      "category": "lexicon",
+      "text": "Slackの通知がうるさいので、あとでまとめて確認します。",
+      "terms": [
+        "Slack"
+      ]
+    },
+    {
+      "id": "script-v1-A02",
+      "split": "A",
+      "category": "lexicon",
+      "text": "GitHubにPull Requestを出したので、レビューをお願いします。",
+      "terms": [
+        "GitHub",
+        "Pull Request"
+      ]
+    },
+    {
+      "id": "script-v1-A03",
+      "split": "A",
+      "category": "lexicon",
+      "text": "Kubernetesのクラスタを、Terraformで管理する形に変えました。",
+      "terms": [
+        "Kubernetes",
+        "Terraform"
+      ]
+    },
+    {
+      "id": "script-v1-A04",
+      "split": "A",
+      "category": "lexicon",
+      "text": "Figmaのデザインを見ながら、Reactのコンポーネントを実装しています。",
+      "terms": [
+        "Figma",
+        "React"
+      ]
+    },
+    {
+      "id": "script-v1-A05",
+      "split": "A",
+      "category": "lexicon",
+      "text": "Dockerのイメージが大きすぎるので、ビルドの手順を見直します。",
+      "terms": [
+        "Docker"
+      ]
+    },
+    {
+      "id": "script-v1-A06",
+      "split": "A",
+      "category": "lexicon",
+      "text": "Notionの議事録に、今日の決定事項を追記しておきました。",
+      "terms": [
+        "Notion"
+      ]
+    },
+    {
+      "id": "script-v1-A07",
+      "split": "A",
+      "category": "lexicon",
+      "text": "TypeScriptの型エラーが、Vitestのテストでだけ出ています。",
+      "terms": [
+        "TypeScript",
+        "Vitest"
+      ]
+    },
+    {
+      "id": "script-v1-A08",
+      "split": "A",
+      "category": "lexicon",
+      "text": "AWSのS3に置いたファイルを、CloudFrontで配信しています。",
+      "terms": [
+        "AWS",
+        "S3",
+        "CloudFront"
+      ]
+    },
+    {
+      "id": "script-v1-A09",
+      "split": "A",
+      "category": "unlisted",
+      "text": "Tailscaleを入れておけば、社外からでも開発用のサーバーにつながります。",
+      "terms": [
+        "Tailscale"
+      ]
+    },
+    {
+      "id": "script-v1-A10",
+      "split": "A",
+      "category": "unlisted",
+      "text": "障害の通知はPagerDutyに飛ぶので、当番の人が最初に対応します。",
+      "terms": [
+        "PagerDuty"
+      ]
+    },
+    {
+      "id": "script-v1-A11",
+      "split": "A",
+      "category": "unlisted",
+      "text": "長谷川さんと五十嵐さんには、私から連絡しておきます。",
+      "terms": [
+        "長谷川",
+        "五十嵐"
+      ]
+    },
+    {
+      "id": "script-v1-A12",
+      "split": "A",
+      "category": "unlisted",
+      "text": "来週は武蔵小杉のオフィスではなく、御茶ノ水の会議室に集まります。",
+      "terms": [
+        "武蔵小杉",
+        "御茶ノ水"
+      ]
+    },
+    {
+      "id": "script-v1-A13",
+      "split": "A",
+      "category": "number",
+      "text": "次の定例は、11月28日の15時からに変更になりました。",
+      "terms": [
+        "11月28日",
+        "15時"
+      ]
+    },
+    {
+      "id": "script-v1-A14",
+      "split": "A",
+      "category": "number",
+      "text": "見積もりは税込みで3,980円、送料は別で550円です。",
+      "terms": [
+        "3,980円",
+        "550円"
+      ]
+    },
+    {
+      "id": "script-v1-A15",
+      "split": "A",
+      "category": "number",
+      "text": "バージョン2.4.1で直したはずの不具合が、2.5.0でまた出ています。",
+      "terms": [
+        "2.4.1",
+        "2.5.0"
+      ]
+    },
+    {
+      "id": "script-v1-A16",
+      "split": "A",
+      "category": "number",
+      "text": "売上は前年比で12.5%増えて、利用者は3万人を超えました。",
+      "terms": [
+        "12.5%",
+        "3万人"
+      ]
+    },
+    {
+      "id": "script-v1-A17",
+      "split": "A",
+      "category": "number",
+      "text": "会議室は3階の302号室で、定員は8人です。",
+      "terms": [
+        "3階",
+        "302号室",
+        "8人"
+      ]
+    },
+    {
+      "id": "script-v1-A18",
+      "split": "A",
+      "category": "homophone",
+      "text": "この仕様だと、私用のアカウントは使用できません。",
+      "terms": [
+        "仕様",
+        "私用",
+        "使用"
+      ]
+    },
+    {
+      "id": "script-v1-A19",
+      "split": "A",
+      "category": "homophone",
+      "text": "移行は来月以降に行う意向です。",
+      "terms": [
+        "移行",
+        "以降",
+        "意向"
+      ]
+    },
+    {
+      "id": "script-v1-A20",
+      "split": "A",
+      "category": "homophone",
+      "text": "正確な数値を確認してから、資料を校正に回します。",
+      "terms": [
+        "正確",
+        "校正"
+      ]
+    },
+    {
+      "id": "script-v1-A21",
+      "split": "A",
+      "category": "particle",
+      "text": "資料を送っておいたので、目を通しておいてください。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-A22",
+      "split": "A",
+      "category": "particle",
+      "text": "明日は大阪へ出張に行くので、返信は遅くなります。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-A23",
+      "split": "A",
+      "category": "particle",
+      "text": "こんにちは。先日はありがとうございました。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-A24",
+      "split": "A",
+      "category": "short",
+      "text": "了解です。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-A25",
+      "split": "A",
+      "category": "short",
+      "text": "確認します。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-A26",
+      "split": "A",
+      "category": "short",
+      "text": "ありがとうございます。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-A27",
+      "split": "A",
+      "category": "long",
+      "text": "先週お伝えした件ですが、関係する部署との調整に思ったより時間がかかっていて、正式な回答は来週の半ばになりそうです。進み具合は、分かりしだい共有します。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-A28",
+      "split": "A",
+      "category": "long",
+      "text": "お疲れ様です。来月のリリースについて、いまの状況を共有します。開発はほぼ終わっていて、残っているのは決済まわりの確認と、管理画面の細かい修正です。テストは今週の金曜日から始めて、来週の水曜日までに終える予定です。もし大きな問題が見つかった場合は、リリースの日を1週間うしろにずらすことも考えています。気になる点があれば、遠慮なく知らせてください。よろしくお願いします。",
+      "terms": [
+        "1週間"
+      ],
+      "tags": [
+        "over28s"
+      ]
+    },
+    {
+      "id": "script-v1-A29",
+      "split": "A",
+      "category": "long",
+      "text": "昨日の障害について、分かっていることをまとめます。夜の10時ごろから、一部の利用者でログインができない状態が、およそ40分続きました。原因は、認証のサーバーの設定を変えたときに、古い証明書が残っていたことです。すでに設定は元に戻していて、同じことが起きないように、変更の前に確認する手順を足しました。影響を受けた利用者には、今日中にお詫びの連絡を送ります。",
+      "terms": [
+        "10時",
+        "40分"
+      ],
+      "tags": [
+        "over28s"
+      ]
+    },
+    {
+      "id": "script-v1-A30",
+      "split": "A",
+      "category": "mixed",
+      "text": "このissueはwon't fixでクローズして、READMEに注意書きを足します。",
+      "terms": [
+        "issue",
+        "won't fix",
+        "README"
+      ]
+    },
+    {
+      "id": "script-v1-B01",
+      "split": "B",
+      "category": "lexicon",
+      "text": "Jiraのチケットを、優先度の高い順に並べ替えました。",
+      "terms": [
+        "Jira"
+      ]
+    },
+    {
+      "id": "script-v1-B02",
+      "split": "B",
+      "category": "lexicon",
+      "text": "PostgreSQLのインデックスを足したら、検索が速くなりました。",
+      "terms": [
+        "PostgreSQL"
+      ]
+    },
+    {
+      "id": "script-v1-B03",
+      "split": "B",
+      "category": "lexicon",
+      "text": "ChatGPTとClaudeに同じ質問をして、答えを比べてみました。",
+      "terms": [
+        "ChatGPT",
+        "Claude"
+      ]
+    },
+    {
+      "id": "script-v1-B04",
+      "split": "B",
+      "category": "lexicon",
+      "text": "VS Codeの拡張機能を入れ直したら、ESLintの警告が消えました。",
+      "terms": [
+        "VS Code",
+        "ESLint"
+      ]
+    },
+    {
+      "id": "script-v1-B05",
+      "split": "B",
+      "category": "lexicon",
+      "text": "Datadogのダッシュボードで、APIの応答時間を見てください。",
+      "terms": [
+        "Datadog",
+        "API"
+      ]
+    },
+    {
+      "id": "script-v1-B06",
+      "split": "B",
+      "category": "lexicon",
+      "text": "Next.jsのアプリを、Vercelにデプロイしました。",
+      "terms": [
+        "Next.js",
+        "Vercel"
+      ]
+    },
+    {
+      "id": "script-v1-B07",
+      "split": "B",
+      "category": "lexicon",
+      "text": "Excelの集計を、BigQueryのクエリに置き換えたいと考えています。",
+      "terms": [
+        "Excel",
+        "BigQuery"
+      ]
+    },
+    {
+      "id": "script-v1-B08",
+      "split": "B",
+      "category": "unlisted",
+      "text": "依存ライブラリの更新は、Renovateに任せています。",
+      "terms": [
+        "Renovate"
+      ]
+    },
+    {
+      "id": "script-v1-B09",
+      "split": "B",
+      "category": "unlisted",
+      "text": "ログはClickHouseに集めて、Metabaseで見られるようにしました。",
+      "terms": [
+        "ClickHouse",
+        "Metabase"
+      ]
+    },
+    {
+      "id": "script-v1-B10",
+      "split": "B",
+      "category": "unlisted",
+      "text": "デプロイはArgo CDで自動化しているので、手作業は要りません。",
+      "terms": [
+        "Argo CD"
+      ]
+    },
+    {
+      "id": "script-v1-B11",
+      "split": "B",
+      "category": "unlisted",
+      "text": "小笠原さんと宇都宮さんが、来月から同じチームに入ります。",
+      "terms": [
+        "小笠原",
+        "宇都宮"
+      ]
+    },
+    {
+      "id": "script-v1-B12",
+      "split": "B",
+      "category": "unlisted",
+      "text": "打ち合わせは、虎ノ門ではなく溜池山王の会議室で行います。",
+      "terms": [
+        "虎ノ門",
+        "溜池山王"
+      ]
+    },
+    {
+      "id": "script-v1-B13",
+      "split": "B",
+      "category": "number",
+      "text": "締め切りは12月5日の17時半なので、前日までに一度見せてください。",
+      "terms": [
+        "12月5日",
+        "17時半"
+      ]
+    },
+    {
+      "id": "script-v1-B14",
+      "split": "B",
+      "category": "number",
+      "text": "予算は1か月あたり25万円で、上限は300万円です。",
+      "terms": [
+        "1か月",
+        "25万円",
+        "300万円"
+      ]
+    },
+    {
+      "id": "script-v1-B15",
+      "split": "B",
+      "category": "number",
+      "text": "ビルドの時間が、4分30秒から1分50秒に縮まりました。",
+      "terms": [
+        "4分30秒",
+        "1分50秒"
+      ]
+    },
+    {
+      "id": "script-v1-B16",
+      "split": "B",
+      "category": "number",
+      "text": "参加者は午前の部が24人、午後の部が136人でした。",
+      "terms": [
+        "24人",
+        "136人"
+      ]
+    },
+    {
+      "id": "script-v1-B17",
+      "split": "B",
+      "category": "homophone",
+      "text": "新しい機能を公開したあとで後悔しないように、もう一度検討します。",
+      "terms": [
+        "公開",
+        "後悔",
+        "検討"
+      ]
+    },
+    {
+      "id": "script-v1-B18",
+      "split": "B",
+      "category": "homophone",
+      "text": "保証の期間と補償の対象を、契約書で確認してください。",
+      "terms": [
+        "保証",
+        "補償",
+        "対象"
+      ]
+    },
+    {
+      "id": "script-v1-B19",
+      "split": "B",
+      "category": "homophone",
+      "text": "回答の期限は以上のとおりです。異常があれば知らせてください。",
+      "terms": [
+        "回答",
+        "以上",
+        "異常"
+      ]
+    },
+    {
+      "id": "script-v1-B20",
+      "split": "B",
+      "category": "particle",
+      "text": "荷物をここに置いておくので、あとで倉庫へ運んでおいてください。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-B21",
+      "split": "B",
+      "category": "particle",
+      "text": "私はそれでいいと思いますが、部長には念のため確認しておきます。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-B22",
+      "split": "B",
+      "category": "particle",
+      "text": "こんばんは。遅い時間に失礼します。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-B23",
+      "split": "B",
+      "category": "short",
+      "text": "承知しました。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-B24",
+      "split": "B",
+      "category": "short",
+      "text": "少々お待ちください。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-B25",
+      "split": "B",
+      "category": "short",
+      "text": "はい、お願いします。",
+      "terms": [],
+      "instruction": "キーを押すと同時に話し始めてください。"
+    },
+    {
+      "id": "script-v1-B26",
+      "split": "B",
+      "category": "long",
+      "text": "お問い合わせの件ですが、担当者が本日は不在にしておりまして、明日の午前中にあらためてご連絡いたします。お急ぎの場合は、代表の番号までお電話ください。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-B27",
+      "split": "B",
+      "category": "long",
+      "text": "アンケートの結果を見ると、操作が分かりにくいという声が多かったので、最初の画面に簡単な説明を足して、迷いやすいボタンの位置も変えることにしました。",
+      "terms": []
+    },
+    {
+      "id": "script-v1-B28",
+      "split": "B",
+      "category": "long",
+      "text": "新しく入った方に向けて、最初の1週間の流れを説明します。初日は、パソコンの設定と、社内で使うツールのアカウントの発行を行います。2日目からは、担当の先輩と一緒に、実際の作業を少しずつ進めてもらいます。分からないことがあれば、チャットで気軽に質問してください。週の終わりには、困っていることがないかを確認するために、30分ほどの面談を行います。最初は覚えることが多いので、無理をせずに進めてください。",
+      "terms": [
+        "1週間",
+        "2日目",
+        "30分"
+      ],
+      "tags": [
+        "over28s"
+      ]
+    },
+    {
+      "id": "script-v1-B29",
+      "split": "B",
+      "category": "mixed",
+      "text": "LGTMです。mainにmergeしてください。",
+      "terms": [
+        "LGTM",
+        "main",
+        "merge"
+      ]
+    },
+    {
+      "id": "script-v1-B30",
+      "split": "B",
+      "category": "mixed",
+      "text": "次のsprintでは、onboardingのflowを見直します。",
+      "terms": [
+        "sprint",
+        "onboarding",
+        "flow"
+      ]
+    }
+  ]
+}

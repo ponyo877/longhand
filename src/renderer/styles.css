@@ -1,0 +1,229 @@
+@import 'tailwindcss';
+
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------------ フローティングバー */
+body.floater {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+.pill {
+  border-radius: 9999px;
+  background: rgba(24, 24, 27, 0.86);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.18) inset,
+    0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.hud-card {
+  background: rgba(28, 28, 32, 0.92);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.16) inset,
+    0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: hud-in 180ms ease-out;
+}
+
+@keyframes hud-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rec-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #f43f5e;
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.25);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* マイクの音が届くまでの控えめな点（F1） */
+.rec-dot-wait {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.5);
+  opacity: 0.6;
+}
+
+/* 音声認識の準備中の待機バー（N12） */
+.preparing {
+  animation: preparing 1.6s ease-in-out infinite;
+}
+@keyframes preparing {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-top-color: rgba(255, 255, 255, 0.85);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 編集の指示が分からなかったとき（F6） */
+.shake {
+  animation: shake 0.45s ease-in-out;
+}
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+/* 貼り付けの成功（F5） */
+.flash-in {
+  animation: hud-in 160ms ease-out;
+}
+
+/* 1 行の通知（N1） */
+.hud-pill {
+  background: rgba(28, 28, 32, 0.92);
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.16) inset,
+    0 6px 18px rgba(0, 0, 0, 0.28);
+  animation: hud-in 180ms ease-out;
+}
+
+/* 動きを減らす設定（X1） */
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot,
+  .preparing,
+  .spinner,
+  .shake,
+  .flash-in,
+  .hud-card,
+  .hud-pill,
+  .dots i {
+    animation: none !important;
+  }
+  .preparing {
+    opacity: 0.6;
+  }
+}
+
+.dots {
+  display: inline-flex;
+  gap: 4px;
+}
+.dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: dot 1s ease-in-out infinite;
+}
+.dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes dot {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ------------------------------------------------------------------ 管理ウィンドウ */
+body.management {
+  background: transparent;
+  color: #1f2328;
+}
+@media (prefers-color-scheme: dark) {
+  body.management {
+    color: #e6e6e6;
+  }
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+kbd.key {
+  display: inline-flex;
+  min-width: 1.6em;
+  justify-content: center;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font:
+    500 12px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.18) inset,
+    0 1px 0 rgba(0, 0, 0, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  kbd.key {
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow:
+      0 0 0 0.5px rgba(255, 255, 255, 0.2) inset,
+      0 1px 0 rgba(0, 0, 0, 0.4);
+  }
+}

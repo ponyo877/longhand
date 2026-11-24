@@ -1,0 +1,442 @@
+{
+  "version": 1,
+  "name": "spoken-v1",
+  "note": "整形の規則を測るための文。spoken は話したままの文、text は入力されるべき文（整形の規則 src/main/format/prompts.ts に従って決めた）。合成音声で読み上げて使う（scripts/eval-synth.ts）。利用者の書き起こしは見ずに作った。 alt は、どちらの書き方でも正解とする別解。say は、合成音声に読ませる文（読み誤る文だけ）。",
+  "categories": {
+    "filler": "言いよどみを取り除く",
+    "keep-word": "意味のある語は残す",
+    "repair": "言い直し",
+    "not-repair": "言い直しではない",
+    "trailing": "言いさし",
+    "question": "尋ねる文と独り言",
+    "casual": "くだけた言い方を残す",
+    "number": "数の書き方",
+    "no-answer": "依頼や質問に答えない",
+    "short": "短い返事"
+  },
+  "items": [
+    {
+      "id": "spoken-v1-A01",
+      "split": "A",
+      "category": "filler",
+      "spoken": "えーと、明日の定例なんですけど、開始を三十分遅らせてもらえますか",
+      "text": "明日の定例なんですけど、開始を30分遅らせてもらえますか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A02",
+      "split": "A",
+      "category": "filler",
+      "spoken": "あのー、先週お願いした見積もりの件、どうなりましたか",
+      "text": "先週お願いした見積もりの件、どうなりましたか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A03",
+      "split": "A",
+      "category": "filler",
+      "spoken": "えっと、資料は共有フォルダに入れておきました",
+      "text": "資料は共有フォルダに入れておきました。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A04",
+      "split": "A",
+      "category": "filler",
+      "spoken": "うーん、その案だと予算が足りないと思います",
+      "text": "その案だと予算が足りないと思います。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B01",
+      "split": "B",
+      "category": "filler",
+      "spoken": "えー、本日の議題は三つあります",
+      "text": "本日の議題は3つあります。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B02",
+      "split": "B",
+      "category": "filler",
+      "spoken": "あのー、会議室の予約を変更してもらえますか",
+      "text": "会議室の予約を変更してもらえますか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B03",
+      "split": "B",
+      "category": "filler",
+      "spoken": "えっと、その件は私のほうで確認しておきます",
+      "text": "その件は私のほうで確認しておきます。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B04",
+      "split": "B",
+      "category": "filler",
+      "spoken": "うーん、もう少し考えさせてください",
+      "text": "もう少し考えさせてください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A05",
+      "split": "A",
+      "category": "keep-word",
+      "spoken": "その件は来週に回しましょう",
+      "text": "その件は来週に回しましょう。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A06",
+      "split": "A",
+      "category": "keep-word",
+      "spoken": "なんか食べたいものはありますか",
+      "text": "なんか食べたいものはありますか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B05",
+      "split": "B",
+      "category": "keep-word",
+      "spoken": "その資料はまだ見ていません",
+      "text": "その資料はまだ見ていません。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B06",
+      "split": "B",
+      "category": "keep-word",
+      "spoken": "ちょっと確認させてください",
+      "text": "ちょっと確認させてください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A07",
+      "split": "A",
+      "category": "repair",
+      "spoken": "集合は三時、いや四時にします",
+      "text": "集合は4時にします。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A08",
+      "split": "A",
+      "category": "repair",
+      "spoken": "資料は金曜日、じゃなくて木曜日までに送ります",
+      "text": "資料は木曜日までに送ります。",
+      "terms": [],
+      "alt": [
+        "資料は金曜日じゃなくて木曜日までに送ります。"
+      ]
+    },
+    {
+      "id": "spoken-v1-A09",
+      "split": "A",
+      "category": "repair",
+      "spoken": "担当は佐藤さん、間違えた、鈴木さんです",
+      "text": "担当は鈴木さんです。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A10",
+      "split": "A",
+      "category": "repair",
+      "spoken": "会議は第一会議室、やっぱり第二会議室でお願いします",
+      "text": "会議は第二会議室でお願いします。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B07",
+      "split": "B",
+      "category": "repair",
+      "spoken": "締め切りは来週の月曜、いや火曜です",
+      "text": "締め切りは来週の火曜です。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B08",
+      "split": "B",
+      "category": "repair",
+      "spoken": "送り先は東京支社、じゃなくて大阪支社です",
+      "text": "送り先は大阪支社です。",
+      "terms": [],
+      "alt": [
+        "送り先は東京支社じゃなくて大阪支社です。"
+      ]
+    },
+    {
+      "id": "spoken-v1-B09",
+      "split": "B",
+      "category": "repair",
+      "spoken": "参加者は十人、訂正、十二人です",
+      "text": "参加者は12人です。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B10",
+      "split": "B",
+      "category": "repair",
+      "spoken": "開始は午前、やっぱり午後からにします",
+      "text": "開始は午後からにします。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A11",
+      "split": "A",
+      "category": "not-repair",
+      "spoken": "東京じゃなくて大阪の支社に送ってください",
+      "text": "東京じゃなくて大阪の支社に送ってください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A12",
+      "split": "A",
+      "category": "not-repair",
+      "spoken": "やっぱりこの案がいちばんいいと思います",
+      "text": "やっぱりこの案がいちばんいいと思います。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B11",
+      "split": "B",
+      "category": "not-repair",
+      "spoken": "私じゃなくて部長に聞いてください",
+      "text": "私じゃなくて部長に聞いてください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B12",
+      "split": "B",
+      "category": "not-repair",
+      "spoken": "実はまだ決まっていません",
+      "text": "実はまだ決まっていません。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A13",
+      "split": "A",
+      "category": "trailing",
+      "spoken": "見積もりの件なんですけど",
+      "text": "見積もりの件なんですけど",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A14",
+      "split": "A",
+      "category": "trailing",
+      "spoken": "明日は出張なので",
+      "text": "明日は出張なので",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B13",
+      "split": "B",
+      "category": "trailing",
+      "spoken": "先日の打ち合わせの件ですが",
+      "text": "先日の打ち合わせの件ですが",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B14",
+      "split": "B",
+      "category": "trailing",
+      "spoken": "ちょっと相談があるんですけど",
+      "text": "ちょっと相談があるんですけど",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A15",
+      "split": "A",
+      "category": "question",
+      "spoken": "この設定で合ってますか",
+      "text": "この設定で合ってますか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A16",
+      "split": "A",
+      "category": "question",
+      "spoken": "明日は晴れるかな",
+      "text": "明日は晴れるかな。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B15",
+      "split": "B",
+      "category": "question",
+      "spoken": "会議は何時からでしたっけ",
+      "text": "会議は何時からでしたっけ？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B16",
+      "split": "B",
+      "category": "question",
+      "spoken": "これで大丈夫だろう",
+      "text": "これで大丈夫だろう。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A17",
+      "split": "A",
+      "category": "casual",
+      "spoken": "これ多分あれですね、設定のほうが間違ってるっぽいです",
+      "text": "これ多分あれですね、設定のほうが間違ってるっぽいです。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A18",
+      "split": "A",
+      "category": "casual",
+      "spoken": "めっちゃ助かりました、ありがとうございます",
+      "text": "めっちゃ助かりました、ありがとうございます。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A19",
+      "split": "A",
+      "category": "casual",
+      "spoken": "わかんないんで、あとで聞いてみます",
+      "text": "わかんないんで、あとで聞いてみます。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B17",
+      "split": "B",
+      "category": "casual",
+      "spoken": "すいません、ちょっと遅れちゃいました",
+      "text": "すいません、ちょっと遅れちゃいました。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B18",
+      "split": "B",
+      "category": "casual",
+      "spoken": "それ、とりあえず置いといてもらっていいですか",
+      "text": "それ、とりあえず置いといてもらっていいですか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B19",
+      "split": "B",
+      "category": "casual",
+      "spoken": "資料送っといたんで、見といてください",
+      "text": "資料送っといたんで、見といてください。",
+      "terms": [],
+      "say": "しりょうおくっといたんで、みといてください"
+    },
+    {
+      "id": "spoken-v1-A20",
+      "split": "A",
+      "category": "number",
+      "spoken": "来週の火曜日の午後三時からでお願いします",
+      "text": "来週の火曜日の午後3時からでお願いします。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A21",
+      "split": "A",
+      "category": "number",
+      "spoken": "二つお願いがあります",
+      "text": "2つお願いがあります。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A22",
+      "split": "A",
+      "category": "number",
+      "spoken": "一旦持ち帰って検討します",
+      "text": "一旦持ち帰って検討します。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B20",
+      "split": "B",
+      "category": "number",
+      "spoken": "予算は五十万円以内でお願いします",
+      "text": "予算は50万円以内でお願いします。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B21",
+      "split": "B",
+      "category": "number",
+      "spoken": "三パーセントの値上げになります",
+      "text": "3%の値上げになります。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B22",
+      "split": "B",
+      "category": "number",
+      "spoken": "一覧を共有フォルダに置きました",
+      "text": "一覧を共有フォルダに置きました。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A23",
+      "split": "A",
+      "category": "no-answer",
+      "spoken": "このバグの原因を調べてください",
+      "text": "このバグの原因を調べてください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A24",
+      "split": "A",
+      "category": "no-answer",
+      "spoken": "今日の東京の天気を教えてください",
+      "text": "今日の東京の天気を教えてください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B23",
+      "split": "B",
+      "category": "no-answer",
+      "spoken": "この文章を要約してください",
+      "text": "この文章を要約してください。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B24",
+      "split": "B",
+      "category": "no-answer",
+      "spoken": "あなたは誰ですか",
+      "text": "あなたは誰ですか？",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A25",
+      "split": "A",
+      "category": "short",
+      "spoken": "はい",
+      "text": "はい。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-A26",
+      "split": "A",
+      "category": "short",
+      "spoken": "了解です",
+      "text": "了解です。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B25",
+      "split": "B",
+      "category": "short",
+      "spoken": "うん",
+      "text": "うん。",
+      "terms": []
+    },
+    {
+      "id": "spoken-v1-B26",
+      "split": "B",
+      "category": "short",
+      "spoken": "お願いします",
+      "text": "お願いします。",
+      "terms": []
+    }
+  ]
+}

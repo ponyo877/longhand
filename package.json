@@ -1,0 +1,77 @@
+{
+  "name": "longhand",
+  "productName": "Longhand",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first voice dictation for Japanese on macOS",
+  "keywords": [
+    "dictation",
+    "speech-to-text",
+    "voice-input",
+    "japanese",
+    "whisper",
+    "macos",
+    "electron",
+    "local-first"
+  ],
+  "homepage": "https://github.com/ponyo877/longhand#readme",
+  "bugs": {
+    "url": "https://github.com/ponyo877/longhand/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ponyo877/longhand.git"
+  },
+  "license": "MIT",
+  "author": "The Longhand Authors",
+  "main": ".vite/build/main.cjs",
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "build:helper": "bash helper/build.sh",
+    "build:asr": "bash asr/build.sh",
+    "build:native": "npm run build:helper && npm run build:asr",
+    "bundle:models": "bash scripts/bundle-models.sh",
+    "lint": "oxlint && oxfmt --check",
+    "lint:fix": "oxlint --fix && oxfmt --write",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "tsx scripts/eval-run.ts"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^8.0.1",
+    "@electron-forge/maker-dmg": "^8.0.1",
+    "@electron-forge/maker-zip": "^8.0.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^8.0.1",
+    "@electron-forge/plugin-fuses": "^8.0.1",
+    "@electron-forge/plugin-vite": "^8.0.1",
+    "@electron/fuses": "^2.1.3",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "45.4.1",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.94.0",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "lindera-wasm-ipadic-web": "2.3.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fs-xattr@0.3.1": true,
+    "fsevents@2.3.3": true,
+    "macos-alias@0.2.12": true
+  }
+}

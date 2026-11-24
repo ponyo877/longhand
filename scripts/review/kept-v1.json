@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "name": "kept-v1",
+  "note": "「書き換えない語句」の学習を測るための文。利用者が、話したままの表記（漢数字、くだけた言い方）を好む、という想定で、text をその表記にした。整形の規則（src/main/format/prompts.ts）の既定の書き方とは、わざと違えてある。合成音声で読み上げて使う（scripts/eval-synth.ts）。利用者の書き起こしは見ずに作った。",
+  "categories": {
+    "number": "漢数字のまま書く",
+    "casual": "くだけた言い方のまま書く"
+  },
+  "items": [
+    {
+      "id": "kept-v1-A01",
+      "split": "A",
+      "category": "number",
+      "text": "会議は第二会議室でお願いします。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A02",
+      "split": "A",
+      "category": "number",
+      "text": "資料は二人で手分けして確認します。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A03",
+      "split": "A",
+      "category": "number",
+      "text": "三つ目の項目から説明します。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A04",
+      "split": "A",
+      "category": "number",
+      "text": "一つずつ順番に見ていきましょう。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A05",
+      "split": "A",
+      "category": "number",
+      "text": "第三四半期の数字をまとめておきます。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A06",
+      "split": "A",
+      "category": "number",
+      "text": "二回目のレビューは来週にします。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A07",
+      "split": "A",
+      "category": "number",
+      "text": "四人で打ち合わせをしました。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A08",
+      "split": "A",
+      "category": "number",
+      "text": "一番上の行を消してください。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A09",
+      "split": "A",
+      "category": "casual",
+      "text": "なんか動きがおかしいので見てもらえますか？",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A10",
+      "split": "A",
+      "category": "casual",
+      "text": "やっぱ元の設定に戻しておきます。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A11",
+      "split": "A",
+      "category": "casual",
+      "text": "すいません、もう一度お願いします。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A12",
+      "split": "A",
+      "category": "casual",
+      "text": "とりあえずこのままでいきましょう。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A13",
+      "split": "A",
+      "category": "casual",
+      "text": "ちょっとだけ待ってもらっていいですか？",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A14",
+      "split": "A",
+      "category": "casual",
+      "text": "全然問題ないです。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A15",
+      "split": "A",
+      "category": "casual",
+      "text": "こっちの案のほうがいいと思います。",
+      "terms": []
+    },
+    {
+      "id": "kept-v1-A16",
+      "split": "A",
+      "category": "casual",
+      "text": "あとでまとめて送っときます。",
+      "terms": []
+    }
+  ]
+}
