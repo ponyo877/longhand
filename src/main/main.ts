@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { app, clipboard, dialog, ipcMain, Menu, nativeTheme, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron';
 import type { AudioDevice, ConfigurePayload, HelperToMain, PermissionsResultPayload } from '../shared/protocol';
@@ -32,6 +33,7 @@ import { applyLearning } from './learn/apply';
 import { learnFromEdit } from './learn/Learner';
 import { applyLoginItem } from './loginItem';
 import { runMouseHoldSelfTest, runMouseRoutingSelfTest } from './ui/mouseRoutingSelfTest';
+import { VirtualInputHelper } from './selftest/virtualInput';
 
 declare const UI_VITE_DEV_SERVER_URL: string | undefined;
 
@@ -58,16 +60,47 @@ if (EVAL_SPEC) {
   app.dock?.hide();
 }
 
-if (!app.requestSingleInstanceLock()) {
+/**
+ * Development end-to-end self-test (LONGHAND_DEBUG_SELFTEST=e2e, selftest/e2e.ts). It takes the real profile's single-instance lock
+ * first, so it never runs next to a running Longhand (two helpers would compete for the keyboard), then moves to a temporary profile
+ * so that the user's settings, dictionary and history are not touched. Speech models are read from the real profile.
+ */
+const SELFTEST_E2E = !app.isPackaged && process.env.LONGHAND_DEBUG_SELFTEST === 'e2e';
+let haveLock = false;
+if (SELFTEST_E2E) {
+  haveLock = app.requestSingleInstanceLock();
+  if (haveLock) {
+    const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-selftest-'));
+    app.setPath('userData', profile);
+    app.setAppLogsPath(path.join(profile, 'logs'));
+  } else {
+    console.error('Longhand is already running. Quit it before running the self-test.');
+  }
+} else {
+  haveLock = app.requestSingleInstanceLock();
+}
+if (!haveLock) {
   // 二重起動を防ぐ（CORE-2）
   app.quit();
-  process.exit(0);
+  process.exit(SELFTEST_E2E ? 1 : 0);
 }
 
 initLogs(paths.logs);
 const log = createLogger('main');
 
 const settings = new SettingsStore(paths.file('settings.json'));
+if (SELFTEST_E2E) {
+  // The self-test profile: no hotkeys (the test presses them virtually), no sounds, no change to the system's globe key setting
+  settings.update({
+    onboardingComplete: true,
+    playSounds: false,
+    suppressGlobe: false,
+    learning: { enabled: false },
+    hotkeys: { activate: [], lock: [], cancel: [], paste_last: [] },
+  });
+}
+/** Speech models. The self-test reads them from the real profile */
+const modelsDir = SELFTEST_E2E ? path.join(REAL_USER_DATA, 'models') : paths.models;
 const customizations = new CustomizationsStore(paths.file('customizations.json'));
 const recordings = new RecordingStore(paths.recordings, () => ({
   hours: settings.get().recordingRetentionHours,
@@ -79,10 +112,12 @@ const history = new HistoryStore(
   (evicted) => recordings.remove(evicted.audioFile),
 );
 const helper = new HelperClient(paths.helperExecutable);
+/** In the end-to-end self-test, the controller gets virtual hotkeys and audio instead of the keyboard and microphone */
+const virtualInput = SELFTEST_E2E ? new VirtualInputHelper(helper) : null;
 const asr = new AsrService(
   () => settings.get().asr,
   (engine) => paths.asrWorker(engine),
-  paths.models,
+  modelsDir,
   () => settings.get().language,
   paths.bundledModels,
 );
@@ -90,7 +125,7 @@ const asr = new AsrService(
 const textfix = new TextFixService(() => paths.linderaWasm);
 // 手直しからの学習も、語の切り出しと読みに単語分割を使う
 const needsTokenizer = (s: Settings) => s.language === 'ja' && ((s.textFix.enabled && (s.textFix.fillers || s.textFix.notation || s.textFix.particles)) || s.learning.enabled);
-const models = new ModelDownloader({ modelsDir: paths.models, bundledDir: paths.bundledModels, fetch: (url, init) => modelFetch(url, init) });
+const models = new ModelDownloader({ modelsDir, bundledDir: paths.bundledModels, fetch: (url, init) => modelFetch(url, init) });
 const floater = new FloaterWindow();
 const management = new ManagementWindow();
 let tray: AppTray | null = null;
@@ -106,7 +141,11 @@ let hotkeyTestListeners = false;
 
 let cachedProvider: { key: string; provider: LlmProvider } | null = null;
 
+/** The self-test with LONGHAND_SELFTEST_LLM=saved borrows the saved connection, read-only (the key is decrypted only in memory) */
+let selfTestProvider: LlmProvider | null = null;
+
 function getProvider(): LlmProvider | null {
+  if (SELFTEST_E2E) return selfTestProvider;
   const s = settings.get();
   if (s.skipLlm) return null;
   const apiKey = settings.getApiKey();
@@ -958,6 +997,29 @@ function quitOrHide(): void {
 }
 
 /** 完全に終了する。後始末は before-quit で行う */
+async function runSelfTestE2E(input: VirtualInputHelper): Promise<number> {
+  const say = (line: string) => {
+    log.info(`selftest-e2e: ${line}`);
+    console.log(`[selftest-e2e] ${line}`);
+  };
+  say(`profile: ${paths.userData}`);
+  if (process.env.LONGHAND_SELFTEST_LLM === 'saved') {
+    const saved = new SettingsStore(path.join(REAL_USER_DATA, 'settings.json'), { readOnly: true });
+    const apiKey = saved.getApiKey();
+    if (isLlmConfigured(saved.get().llm, !!apiKey)) selfTestProvider = createProvider(saved.get().llm, apiKey, llmFetch);
+    else say('the saved LLM connection cannot be used (not set up, or the key cannot be decrypted). Continuing without an LLM');
+  }
+  const { runEndToEndSelfTest } = await import('./selftest/e2e');
+  return runEndToEndSelfTest({
+    input,
+    asr,
+    history,
+    llm: !!selfTestProvider,
+    log: say,
+    reportPath: process.env.LONGHAND_SELFTEST_REPORT || path.join(paths.userData, 'selftest-report.json'),
+  });
+}
+
 function quitCompletely(): void {
   if (quitting) return;
   app.quit();
@@ -989,8 +1051,16 @@ app.on('before-quit', () => {
   // 後始末（ウィンドウ、ヘルパー、ASR ワーカー）が終わらなくても、必ず終了する
   setTimeout(() => {
     log.warn('終了の処理が 3 秒で終わらなかったので、強制的に終了します');
-    app.exit(0);
+    app.exit(selfTestExitCode ?? 0);
   }, 3000).unref();
+});
+
+/** Exit code of the end-to-end self-test, once it has finished */
+let selfTestExitCode: number | null = null;
+app.on('will-quit', (e) => {
+  if (!selfTestExitCode) return;
+  e.preventDefault();
+  app.exit(selfTestExitCode);
 });
 
 app.whenReady().then(async () => {
@@ -1019,7 +1089,7 @@ app.whenReady().then(async () => {
 
   floater.create();
   controller = new DictationController({
-    helper,
+    helper: virtualInput ?? helper,
     asr,
     settings,
     customizations,
@@ -1065,7 +1135,13 @@ app.whenReady().then(async () => {
   // 起動の直後は避けて、少し後に読み込む（辞書の展開で約 120ms メインスレッドが止まる）
   if (needsTokenizer(settings.get())) setTimeout(() => void textfix.load(), 3000);
 
-  if (process.env.LONGHAND_DEBUG_SELFTEST === 'mouse-hold' && !app.isPackaged) {
+  if (SELFTEST_E2E && virtualInput) {
+    // Development end-to-end self-test: virtual hotkeys and synthetic speech through the real pipeline, then quit with its result
+    void runSelfTestE2E(virtualInput).then((code) => {
+      selfTestExitCode = code;
+      quitCompletely();
+    });
+  } else if (process.env.LONGHAND_DEBUG_SELFTEST === 'mouse-hold' && !app.isPackaged) {
     // 開発用。通知を出して消すあいだ、実際のポインタでの当たり判定を外の道具で確かめる
     void runMouseHoldSelfTest(floater, (line) => log.info(`selftest: ${line}`)).then(() => quitCompletely());
   } else if (process.env.LONGHAND_DEBUG_SELFTEST === 'mouse' && !app.isPackaged) {

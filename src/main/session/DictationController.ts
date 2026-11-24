@@ -87,8 +87,19 @@ export interface UiPort {
   preconnect(): void;
 }
 
+/** The parts of the helper the controller uses. The end-to-end self-test passes its own (selftest/virtualInput.ts) */
+export interface HelperPort {
+  on(event: 'message' | 'exit', listener: (...args: any[]) => void): unknown;
+  readonly running: boolean;
+  syncState: HelperClient['syncState'];
+  request<T = unknown>(type: string, payload?: unknown, timeoutMs?: number): Promise<T>;
+  send: HelperClient['send'];
+  startAudio: HelperClient['startAudio'];
+  stopAudio: HelperClient['stopAudio'];
+}
+
 export interface ControllerDeps {
-  helper: HelperClient;
+  helper: HelperPort;
   asr: AsrService;
   settings: SettingsStore;
   customizations: CustomizationsStore;

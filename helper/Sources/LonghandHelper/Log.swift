@@ -45,7 +45,7 @@ enum Log {
 
 enum Clock {
     /// 単調増加の時刻（ミリ秒、起動からの経過。スリープ中は進まない）。
-    /// Node の process.hrtime.bigint() / 1e6 と同じ基準になる。
+    /// Node の process.hrtime はスリープ中も進む（CLOCK_MONOTONIC_RAW）ので、スリープした時間の分だけずれる。比べるのはこの時計どうしだけにする。
     static func nowMs() -> Double {
         Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) / 1_000_000
     }
