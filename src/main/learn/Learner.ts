@@ -6,6 +6,7 @@ import { createLogger } from '../log';
 import type { Tokenizer } from '../textfix/types';
 import { editDistance, hasKanji, isKanaOnly, soundForm, soundsSimilar } from '../vocab/kana';
 import { extractReplacements, extractRewrites, hasDistinctiveCase, locateEditedRegion, type Replacement } from './diff';
+import { detectNumberStyles, isNumberNotationChange, type NumberStyleObservation } from './numberStyle';
 
 const log = createLogger('learn');
 
@@ -163,7 +164,7 @@ const longEnough = (s: string) => Array.from(s).length >= 2 || hasKanji(s);
 export type SkipReason = 'unreadable' | 'no_keystrokes' | 'no_region' | 'removed' | 'no_candidates' | 'too_many' | 'declined';
 
 /** 何も学習しなかったときの結果 */
-const nothing = (): Pick<LearnResult, 'words' | 'forms' | 'corrections' | 'kept'> => ({ words: [], forms: [], corrections: [], kept: [] });
+const nothing = (): Pick<LearnResult, 'words' | 'forms' | 'corrections' | 'kept' | 'numbers'> => ({ words: [], forms: [], corrections: [], kept: [], numbers: [] });
 
 export interface LearnResult {
   words: LearnedWord[];
@@ -173,6 +174,8 @@ export interface LearnResult {
   corrections: CorrectionPair[];
   /** 整形の書き換えを元に戻した語句 */
   kept: KeptPair[];
+  /** Number notations the correction asked for ("2つ" to "二つ") */
+  numbers: NumberStyleObservation[];
   skipped?: SkipReason;
   /** 範囲の見つけ方（ログ用） */
   method?: string;
@@ -218,11 +221,12 @@ export async function learnFromWatchDetailed(w: FieldWatchResultPayload, ctx: Le
 
 /**
  * 元の文と手直し後の文から学習する。貼り付け後の監視と、履歴の画面での手直し（G4-08）の両方から使う。
- * ctx.inserted は使わない。手直しを、次の 4 つに振り分ける。
+ * ctx.inserted は使わない。手直しを、次の 5 つに振り分ける。
  * - 新しい語（words）: 辞書に入れる語。LLM が使えれば LLM が、使えなければ規則が採否を決める
  * - 聞き違えた形（forms）: すでに辞書にある語に直した手直し。音が近ければ、その語の聞き違えた形として覚える
  * - 取り違えの組（corrections）: 辞書に入れない語句への直しのうち、読みが同じか、ごく近いもの（同じ読みの別の語、表記の好み）
  * - 書き換えない語句（kept）: 整形が書き換えた所を、書き起こしのとおりに戻した手直し
+ * - Number notations (numbers): changes that only rewrite how a number is written, such as "2つ" to "二つ"
  */
 export async function learnFromEdit(original: string, edited: string, ctx: Omit<LearnContext, 'inserted'>): Promise<LearnResult> {
   const known = new Set(ctx.vocabulary.map((x) => x.toLowerCase()));
@@ -240,11 +244,14 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
   } catch {
     canSplit = false;
   }
-  const rewrites = canSplit ? extractRewrites(original, edited, tokenizer) : [];
+  // Number notation changes are learned as a style of their own, not as words or corrections
+  const numbers = detectNumberStyles(original, edited);
+  const notNumberStyle = (r: Replacement) => !numbers.length || !isNumberNotationChange(r.from, r.to);
+  const rewrites = (canSplit ? extractRewrites(original, edited, tokenizer) : []).filter(notNumberStyle);
   let kept: KeptPair[] = rewrites.filter((r) => reverted(r) && longEnough(r.to) && !crossesPunctuation(r)).map((r) => ({ phrase: r.to, changedTo: r.from }));
   if (kept.length > MAX_PAIRS_PER_EDIT) kept = [];
 
-  const wordPairs = extractReplacements(original, edited).filter((r) => !reverted(r));
+  const wordPairs = extractReplacements(original, edited).filter((r) => !reverted(r) && notNumberStyle(r));
   const candidates = wordPairs.filter((r) => !known.has(r.to.toLowerCase()) && !blocked.has(r.to.toLowerCase()));
   if (candidates.length > MAX_WORDS_PER_EDIT) return { ...nothing(), skipped: 'too_many', candidates: candidates.length };
 
@@ -309,9 +316,9 @@ export async function learnFromEdit(original: string, edited: string, ctx: Omit<
     .map((r) => ({ heard: r.from, corrected: r.to }));
   if (corrections.length > MAX_PAIRS_PER_EDIT) corrections = [];
 
-  const learned = words.length + forms.length + corrections.length + kept.length;
+  const learned = words.length + forms.length + corrections.length + kept.length + numbers.length;
   const skipped: SkipReason | undefined = learned ? undefined : candidates.length ? 'declined' : 'no_candidates';
-  return { words, forms, corrections, kept, skipped, candidates: candidates.length };
+  return { words, forms, corrections, kept, numbers, skipped, candidates: candidates.length };
 }
 
 /** 貼り付け後の手直しから語を学習する（LRN-1）。学習した語だけを返す（以前からの呼び出し方） */

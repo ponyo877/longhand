@@ -207,7 +207,7 @@ export function planPostAsr(input: PostAsrInput): PostAsrPlan {
     selectedText: mode === 'edit' ? ctx?.field?.selectedText : undefined,
     vocabulary: prep?.vocabulary ?? input.customizations.vocabulary(),
     dictionaryCandidates: prep?.candidates,
-    learned: prep ? { misheard: prep.misheard, kept: prep.kept, hasCorrections: prep.hasCorrections } : undefined,
+    learned: prep ? { misheard: prep.misheard, kept: prep.kept, hasCorrections: prep.hasCorrections, numberStyle: prep.numberStyle } : undefined,
     pastCorrections: prep?.corrections,
     textFix: fix ?? undefined,
     lowConfidence: lowConfidence || undefined,

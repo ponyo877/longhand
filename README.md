@@ -45,7 +45,7 @@ The LLM step is optional: turn it off and Longhand works fully offline.
 - **Tuned for Japanese.** Written-style punctuation, numerals, and Japanese-English spacing follow Japanese conventions. Katakana renderings of technical terms are restored to their Latin spelling (`クバネティス` to `Kubernetes`).
 - **LLM formatting you control.** Removes fillers and false starts, repairs homophones from context, and keeps your wording otherwise. Works with Anthropic, OpenAI-compatible endpoints (LiteLLM, vLLM, Ollama, LM Studio), Azure OpenAI, or any HTTP endpoint.
 - **Edit by voice.** Select text, hold the key and say an instruction such as "もっと丁寧に" to rewrite the selection.
-- **Learns from your corrections.** When you fix the inserted text, Longhand picks up new terms, common mishearings, notation preferences and phrases it should not rewrite. Every learned item is shown and can be undone.
+- **Learns from your corrections.** When you fix the inserted text, Longhand picks up new terms, common mishearings, notation preferences (including how you write numbers, such as `二つ` or `2つ` and `1万円` or `10,000円`) and phrases it should not rewrite. Every learned item is shown and can be undone.
 - **Custom dictionary and replacements.** Terms in the dictionary are passed to the recognizer as hints and to the formatter as spelling references.
 - **Fails safe.** If the LLM is slow or unreachable, the raw transcript is inserted instead. Where there is no text field, `⌃⌘V` pastes the last result.
 

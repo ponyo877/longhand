@@ -17,6 +17,7 @@ import {
 import type { FixEdit, LexiconCandidate, Tokenizer } from '../textfix/types';
 import { needsLlm } from './fastPath';
 import { inspectFormatting, type GuardCheck, type HunkKind } from './guards';
+import { applyNumberStyle } from './numberStyle';
 import { hasSubstance, isCodeLikeApp, looksLikeAnswer, normalizeText, parseJsonObject } from './postprocess';
 
 export interface FormatInput {
@@ -112,6 +113,9 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
   if (input.mode === 'dictation') {
     const codeLike = input.codeLike ?? isCodeLikeApp(input.context.appName);
     const normalize = (s: string) => normalizeText(s, { language: input.language, codeLike });
+    // The user's number notation is applied to whatever text is inserted. Not in terminals and code editors, where digits are code
+    const numberStyle = codeLike ? undefined : input.learned?.numberStyle;
+    const finish = (o: FormatOutput): FormatOutput => (numberStyle && o.text ? { ...o, text: applyNumberStyle(o.text, numberStyle) } : o);
     // LLM を通さない経路では、textfix で直した文を使う
     const fix = input.textFix;
     const version = input.promptVersion ?? 'v1';
@@ -121,8 +125,8 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
     const fixedRaw = fix && fix.edits.length ? fix.text.trim() : raw;
     const autoFixed = fixedRaw !== raw || undefined;
     const fallback = normalize(fixedRaw);
-    if (!raw || !hasSubstance(raw) || !fixedRaw) return { text: '', formatted: false, llmMs: 0 };
-    if (!input.provider) return { text: fallback, formatted: false, llmMs: 0, autoFixed };
+    if (!raw || !hasSubstance(raw) || !fixedRaw) return finish({ text: '', formatted: false, llmMs: 0 });
+    if (!input.provider) return finish({ text: fallback, formatted: false, llmMs: 0, autoFixed });
     // 英字に直した語は知っている語として扱い、直さなかった用語集の候補は LLM に判断させる
     const fixedWords = (fix?.edits ?? []).filter((e) => e.rule === 'latin').map((e) => e.after.trim());
     if (
@@ -140,7 +144,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
         afterCursor: input.context.afterCursor,
       })
     ) {
-      return { text: fallback, formatted: true, fastPath: true, llmMs: 0, autoFixed };
+      return finish({ text: fallback, formatted: true, fastPath: true, llmMs: 0, autoFixed });
     }
     const lexicon = [...(fix?.edits ?? []).filter((e) => e.rule === 'latin').map((e) => ({ heard: e.before, word: e.after.trim() })), ...(fix?.candidates ?? [])];
     const started = Date.now();
@@ -161,14 +165,14 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
       const parsed = parseJsonObject(res.text);
       const text = typeof parsed?.text === 'string' ? parsed.text : parsed ? null : res.text;
       if (text === null) {
-        return { text: fallback, formatted: false, error: 'LLM の出力を解釈できませんでした', errorKind: 'parse', llmMs, model: res.model, autoFixed };
+        return finish({ text: fallback, formatted: false, error: 'LLM の出力を解釈できませんでした', errorKind: 'parse', llmMs, model: res.model, autoFixed });
       }
       const cleaned = normalize(text);
       if (!cleaned && normalizeLen(raw) > 8) {
-        return { text: fallback, formatted: false, error: 'LLM が空の結果を返しました', errorKind: 'guard', llmMs, model: res.model, autoFixed };
+        return finish({ text: fallback, formatted: false, error: 'LLM が空の結果を返しました', errorKind: 'guard', llmMs, model: res.model, autoFixed });
       }
       if (cleaned && looksLikeAnswer(raw, cleaned)) {
-        return {
+        return finish({
           text: fallback,
           formatted: false,
           error: 'LLM の出力が書き起こしから大きく外れたため、生テキストを使いました',
@@ -176,7 +180,7 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
           llmMs,
           model: res.model,
           autoFixed,
-        };
+        });
       }
       const guardMode = input.guard ?? 'off';
       if (guardMode !== 'off' && cleaned) {
@@ -192,20 +196,20 @@ export async function formatText(input: FormatInput): Promise<FormatOutput> {
         const report = inspectFormatting(fallback, cleaned, opts);
         const guard: GuardSummary = { mode: guardMode, counts: report.counts, violations: report.violations.map((v) => v.check), action: 'none' };
         if (guardMode === 'shadow' || (!report.violations.length && report.repaired === cleaned)) {
-          return { text: cleaned, formatted: true, llmMs, model: res.model, guard, llmText: cleaned };
+          return finish({ text: cleaned, formatted: true, llmMs, model: res.model, guard, llmText: cleaned });
         }
         // 根拠のない塊だけを戻した文で、問題が残らなければそれを使う。残るなら、整形前の文を使う
         const repaired = normalize(report.repaired);
         const again = inspectFormatting(fallback, repaired, opts);
         if (!again.violations.length) {
-          return { text: repaired, formatted: true, llmMs, model: res.model, guard: { ...guard, action: 'repaired' }, llmText: cleaned };
+          return finish({ text: repaired, formatted: true, llmMs, model: res.model, guard: { ...guard, action: 'repaired' }, llmText: cleaned });
         }
-        return { text: fallback, formatted: true, llmMs, model: res.model, autoFixed, guard: { ...guard, action: 'fallback' }, llmText: cleaned };
+        return finish({ text: fallback, formatted: true, llmMs, model: res.model, autoFixed, guard: { ...guard, action: 'fallback' }, llmText: cleaned });
       }
-      return { text: cleaned, formatted: true, llmMs, model: res.model };
+      return finish({ text: cleaned, formatted: true, llmMs, model: res.model });
     } catch (e) {
       const err = e instanceof LlmError ? e : new LlmError('network', (e as Error).message);
-      return { text: fallback, formatted: false, error: err.message, errorKind: err.kind, llmMs: Date.now() - started, autoFixed };
+      return finish({ text: fallback, formatted: false, error: err.message, errorKind: err.kind, llmMs: Date.now() - started, autoFixed });
     }
   }
 

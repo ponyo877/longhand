@@ -1,3 +1,4 @@
+import type { NumberStyles } from './numberStyle';
 import type { Settings } from './settings';
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ export interface Customizations {
   pastCorrections?: PastCorrection[];
   /** 整形の書き換えを、利用者が元に戻した語句 */
   keptPhrases?: KeptPhrase[];
+  /** How the user writes numbers, learned from corrections (shared/numberStyle.ts) */
+  numberStyle?: NumberStyles;
   /** 置換の preserveCase を新しい意味（オンで書いたとおり）に移したか（G4-12。main/store/customizations.ts） */
   replacementCaseMigrated?: boolean;
 }

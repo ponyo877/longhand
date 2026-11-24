@@ -734,12 +734,12 @@ async function editHistory(id: string, text: string): ReturnType<LonghandApi['ed
     const applied = applyLearning(customizations, r);
     log.info(
       `履歴の手直しから学習しました（語 ${applied.words.length}、聞き違えた形 ${applied.forms.length}、取り違えの組 ${applied.corrections.length}、` +
-        `書き換えない語句 ${applied.kept.length}）${r.skipped ? `（${r.skipped}）` : ''}`,
+        `書き換えない語句 ${applied.kept.length}、number styles ${applied.numbers.length}）${r.skipped ? `（${r.skipped}）` : ''}`,
     );
     return {
       ok: true,
       learned: applied.words.map((w) => w.word),
-      remembered: applied.forms.length + applied.corrections.length + applied.kept.length,
+      remembered: applied.forms.length + applied.corrections.length + applied.kept.length + applied.numbers.length,
       tooMany: r.skipped === 'too_many',
     };
   } catch (e) {

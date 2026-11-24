@@ -208,3 +208,14 @@ describe('ユーザーメッセージ', () => {
     expect(m).toEqual({ selected_text: '明日', instruction: '明後日', language: 'ja', app: { name: 'メモ', field: '本文' } });
   });
 });
+
+describe('number notation in the system prompt', () => {
+  it('adds a section only when preferences exist, and keeps the prompt identical otherwise', () => {
+    const plain = dictationSystemPrompt([], '');
+    expect(dictationSystemPrompt([], '', [], 'v1', { numberStyle: {} })).toBe(plain);
+    const withStyle = dictationSystemPrompt([], '', [], 'v1', { numberStyle: { counters: { value: 'kanji', count: 1, at: 0 } } });
+    expect(withStyle.startsWith(plain)).toBe(true);
+    expect(withStyle).toContain('# 数字の書き方');
+    expect(withStyle).toContain('「二つ」');
+  });
+});

@@ -48,7 +48,12 @@ If a recognition worker exits, the main process restarts it with backoff and rel
 | New term | `ぐらふぁな` corrected to `Grafana` | Added to the dictionary: a hint for the recognizer and a spelling reference for the formatter |
 | Misheard form | `クバネテス` corrected to the dictionary term `Kubernetes` | Stored as an alternative reading of that term |
 | Correction pair | `公正` corrected to `校正` | When the same form appears again, the pair is shown to the formatter, which decides from context |
-| Kept phrase | The formatter changed `一つ` to `1つ` and the user changed it back | The formatter is told not to rewrite that phrase |
+| Kept phrase | The formatter changed `なんか` to `何か` and the user changed it back | The formatter is told not to rewrite that phrase |
+| Number notation | `2つ` corrected to `二つ`, or `10000円` to `1万円` | Applied to every later result, with or without the LLM, and described to the formatter |
+
+Number notation covers seven independent choices: digit width, thousands separators, 万 and 億 for round amounts, kanji or digits for native counters (`二つ`, `一人`), the percent sign, the time format and the date format.
+A correction teaches a choice only when the value stays the same and one choice explains the whole change.
+`src/main/format/numberStyle.ts` rewrites only numbers whose role is clear from their surroundings (a unit or counter after them, a currency sign before them, a complete date or time), and leaves product names, versions, URLs and codes alone. Terminals and code editors are not rewritten.
 
 Every learned item is announced with a notification and can be undone.
 

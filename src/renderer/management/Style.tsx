@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { extractCandidates, textsFromFile, type DictCandidate } from '../../shared/dictCandidates';
 import { CUSTOMIZATION_LIMITS as LIMITS, type AppSnapshot, type Customizations, type LearnedWord, type Replacement } from '../../shared/types';
 import { Badge, Button, cx, inputClass, PageHeader, Row, Section, Toggle } from '../common/ui';
+import { NUMBER_STYLE_KINDS, type NumberStyleKind, type NumberStyles } from '../../shared/numberStyle';
 
 type Tab = 'dictionary' | 'replacements' | 'learned' | 'instructions';
 
@@ -668,6 +669,13 @@ function Learned({ c, snap }: { c: Customizations; snap: AppSnapshot }) {
   const removeForm = (word: string, form: string) => void save({ misheard: { ...c.misheard, [word]: (c.misheard?.[word] ?? []).filter((x) => x !== form) } });
   const corrections = [...(c.pastCorrections ?? [])].sort((a, b) => b.at - a.at);
   const kept = [...(c.keptPhrases ?? [])].sort((a, b) => b.at - a.at);
+  const numberStyles = NUMBER_STYLE_KINDS.flatMap((k) => (c.numberStyle?.[k] ? [[k, c.numberStyle[k]] as const] : []));
+  const removeNumberStyle = (kind: NumberStyleKind) => {
+    const next: NumberStyles = { ...c.numberStyle };
+    delete next[kind];
+    // An empty object clears the field (undefined would be dropped on the way to the main process)
+    void save({ numberStyle: next });
+  };
 
   const q = keyOf(query);
   const visible = [...c.learnedWords].sort((a, b) => b.learnedAt - a.learnedAt).filter((w) => !q || keyOf(w.word).includes(q) || keyOf(w.from).includes(q));
@@ -763,10 +771,45 @@ function Learned({ c, snap }: { c: Customizations; snap: AppSnapshot }) {
           ))}
         </Section>
       )}
+      {numberStyles.length > 0 && (
+        <Section
+          title="数字の書き方"
+          description="数字の書き方だけを直したとき（「2つ」を「二つ」にした、など）、その書き方を覚えます。次からは、LLM を使わないときも、この書き方で入力します。ターミナルとコードエディタでは変えません。"
+        >
+          {numberStyles.map(([kind, p]) => (
+            <div key={kind} className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
+              <span className="w-24 shrink-0 text-neutral-500">{NUMBER_STYLE_LABELS[kind].title}</span>
+              <span className="font-medium">{NUMBER_STYLE_LABELS[kind].values[p.value] ?? p.value}</span>
+              {p.example && (
+                <span className="text-neutral-400">
+                  {p.example.before} → {p.example.after}
+                </span>
+              )}
+              {p.count > 1 && <span className="text-[11.5px] text-neutral-400">{p.count} 回</span>}
+              <span className="ml-auto">
+                <Button small variant="danger" onClick={() => removeNumberStyle(kind)}>
+                  取り消す
+                </Button>
+              </span>
+            </div>
+          ))}
+        </Section>
+      )}
       <BlockedWords c={c} />
     </>
   );
 }
+
+/** Names of the number notation preferences on the Style page */
+const NUMBER_STYLE_LABELS: Record<NumberStyleKind, { title: string; values: Record<string, string> }> = {
+  width: { title: '数字の幅', values: { half: '半角（10）', full: '全角（１０）' } },
+  grouping: { title: '3 桁の区切り', values: { comma: '入れる（10,000円）', none: '入れない（10000円）' } },
+  units: { title: '万と億', values: { kanji: '使う（1万円）', digits: '使わない（10000円）' } },
+  counters: { title: '数え方', values: { kanji: '漢数字（二つ、一人）', digits: '算用数字（2つ、1人）' } },
+  percent: { title: '百分率', values: { symbol: '記号（3%）', word: 'カタカナ（3パーセント）' } },
+  time: { title: '時刻', values: { colon: '10:30', kanji: '10時30分' } },
+  date: { title: '日付', values: { slash: '11/24', kanji: '11月24日' } },
+};
 
 function Instructions({ c }: { c: Customizations }) {
   const [v, setV] = useState(c.customInstructions);

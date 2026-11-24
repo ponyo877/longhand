@@ -31,7 +31,7 @@ export function validateEvalConfig(v: unknown): EvalConfig {
     } catch {
       throw new Error('learn.train を正規表現として読めません');
     }
-    const kinds = ['words', 'forms', 'corrections', 'kept'];
+    const kinds = ['words', 'forms', 'corrections', 'kept', 'numbers'];
     if (c.learn.kinds !== undefined && (!Array.isArray(c.learn.kinds) || c.learn.kinds.some((k) => !kinds.includes(k)))) {
       throw new Error(`learn.kinds は ${kinds.join('、')} の配列にしてください`);
     }

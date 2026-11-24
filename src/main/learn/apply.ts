@@ -3,7 +3,7 @@
  * 履歴の画面での手直し（main）の両方から使う。
  */
 import type { KeptPhrase, LearnedWord, PastCorrection } from '../../shared/types';
-import type { CustomizationsStore } from '../store/customizations';
+import type { AppliedNumberStyle, CustomizationsStore } from '../store/customizations';
 import type { LearnResult, MisheardForm } from './Learner';
 
 export interface AppliedLearning {
@@ -15,6 +15,8 @@ export interface AppliedLearning {
   corrections: PastCorrection[];
   /** 覚えた、書き換えない語句（回数を増やしただけのものも含む） */
   kept: KeptPhrase[];
+  /** Number notation preferences that were set or confirmed */
+  numbers: AppliedNumberStyle[];
   /** 反映した数の合計 */
   count: number;
   /** 今回の反映を取り消す。語は「学習しない語」に入る（以前からの動き）。回数を増やしただけの組と語句は、そのまま残す */
@@ -23,25 +25,38 @@ export interface AppliedLearning {
 
 type Store = Pick<
   CustomizationsStore,
-  'addLearnedWords' | 'addMisheardForms' | 'addPastCorrections' | 'addKeptPhrases' | 'undoLearnedWord' | 'removeMisheardForm' | 'removePastCorrection' | 'removeKeptPhrase'
+  | 'addLearnedWords'
+  | 'addMisheardForms'
+  | 'addPastCorrections'
+  | 'addKeptPhrases'
+  | 'addNumberStyles'
+  | 'undoLearnedWord'
+  | 'removeMisheardForm'
+  | 'removePastCorrection'
+  | 'removeKeptPhrase'
+  | 'setNumberStyle'
 >;
 
-export function applyLearning(store: Store, r: Pick<LearnResult, 'words' | 'forms' | 'corrections' | 'kept'>, now = Date.now()): AppliedLearning {
+export function applyLearning(store: Store, r: Pick<LearnResult, 'words' | 'forms' | 'corrections' | 'kept'> & Partial<Pick<LearnResult, 'numbers'>>, now = Date.now()): AppliedLearning {
   const words = store.addLearnedWords(r.words);
   const forms = store.addMisheardForms(r.forms);
   const corrections = store.addPastCorrections(r.corrections, now);
   const kept = store.addKeptPhrases(r.kept, now);
+  const numbers = store.addNumberStyles(r.numbers ?? [], now);
   return {
     words,
     forms,
     corrections,
     kept,
-    count: words.length + forms.length + corrections.length + kept.length,
+    numbers,
+    count: words.length + forms.length + corrections.length + kept.length + numbers.length,
     undo: () => {
       for (const w of words) store.undoLearnedWord(w.word);
       for (const f of forms) store.removeMisheardForm(f.word, f.from);
       for (const c of corrections) if (c.count <= 1) store.removePastCorrection(c.heard, c.corrected);
       for (const k of kept) if (k.count <= 1) store.removeKeptPhrase(k.phrase, k.changedTo);
+      // Put back the notation the user had before this correction
+      for (const n of numbers) store.setNumberStyle(n.kind, n.previous);
     },
   };
 }

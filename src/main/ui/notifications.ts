@@ -185,6 +185,8 @@ export const NOTIFICATIONS = {
   /** 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）。text は直した後の形 */
   CorrectionLearned: { kind: 'success', style: 'pill', title: '「{text}」の直し方を覚えました', durationMs: 6000, deferWhileBusy: true },
   CorrectionsLearnedMany: { kind: 'success', style: 'pill', title: '「{text}」など {count} 件の直し方を覚えました', durationMs: 6000, deferWhileBusy: true },
+  /** A correction that only changed how a number is written. text is the corrected number */
+  NumberStyleLearned: { kind: 'success', style: 'pill', title: '数字の書き方を覚えました（「{text}」）', durationMs: 6000, deferWhileBusy: true },
   HandsFreeInfo: {
     kind: 'info',
     title: 'ハンズフリーで録音中',

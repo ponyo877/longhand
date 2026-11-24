@@ -3,6 +3,8 @@
  * システムプロンプトには、毎回変わらない規則と、変更の少ない辞書とカスタム指示を入れる（プロンプトキャッシュが効く）。
  * 毎回変わる書き起こしと文脈はユーザーメッセージに JSON で入れる。
  */
+import type { NumberStyles } from '../../shared/numberStyle';
+import { numberStylePromptLines } from './numberStyle';
 
 export const DICTATION_SCHEMA = {
   type: 'object',
@@ -249,6 +251,8 @@ export interface LearnedHints {
   hasCorrections?: boolean;
   /** 音声認識の結果が食い違った箇所（uncertain）を渡す設定になっている（uncertain の説明を入れる） */
   explainUncertain?: boolean;
+  /** How the user writes numbers */
+  numberStyle?: NumberStyles;
 }
 
 /** プロンプトに載せる語句から、改行と、かぎかっこを取り除く（行と引用の形を崩さないため） */
@@ -291,6 +295,10 @@ function personalSection(vocabulary: string[], customInstructions: string, prote
         '次の語句は、以前に整形で書き換えたところ、ユーザーが手で元に戻した。raw_text にあれば、かっこの中の形に書き換えず、そのまま出力する。\n' +
         kept.map((k) => `- ${k.phrase}（「${k.changedTo}」にしない）`).join('\n'),
     );
+  }
+  const numberLines = numberStylePromptLines(learned.numberStyle);
+  if (numberLines.length) {
+    parts.push(`# 数字の書き方\nユーザーは、数字を次のように書く。上の規則と違うときは、こちらに従う。\n${numberLines.map((l) => `- ${l}`).join('\n')}`);
   }
   const phrases = protectedPhraseList(protectedPhrases);
   if (phrases.length) {

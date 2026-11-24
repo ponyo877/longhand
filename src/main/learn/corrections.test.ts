@@ -257,3 +257,65 @@ describe('保存先への反映と、整形への受け渡し', () => {
     expect(store.get().pastCorrections?.map((c) => c.count)).toEqual([2]);
   });
 });
+
+describe('number notation preferences', () => {
+  let dir: string;
+  let store: CustomizationsStore;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'longhand-number-style-'));
+    store = new CustomizationsStore(path.join(dir, 'customizations.json'));
+  });
+  afterEach(() => {
+    store.flush();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('learns a notation change as a number style, not as a word or a correction', async () => {
+    const r = await learnFromEdit('お願いが2つあります。', 'お願いが二つあります。', ctx());
+    expect(r.numbers.map((n) => [n.kind, n.value])).toEqual([['counters', 'kanji']]);
+    expect([r.words, r.forms, r.corrections, r.kept]).toEqual([[], [], [], []]);
+    expect(r.skipped).toBeUndefined();
+  });
+
+  it('learns a number style next to another correction', async () => {
+    const r = await learnFromEdit('資料を公正に回して、2つ確認します。', '資料を校正に回して、二つ確認します。', ctx());
+    expect(r.numbers.map((n) => n.kind)).toEqual(['counters']);
+    expect(pairs(r.corrections.map((c) => ({ from: c.heard, to: c.corrected })))).toEqual([['公正', '校正']]);
+  });
+
+  it('counts the same notation and replaces a different one', () => {
+    store.addNumberStyles([{ kind: 'counters', value: 'kanji', before: '2つ', after: '二つ' }], 10);
+    store.addNumberStyles([{ kind: 'counters', value: 'kanji', before: '3つ', after: '三つ' }], 20);
+    expect(store.numberStyles()?.counters).toMatchObject({ value: 'kanji', count: 2, at: 20, example: { before: '3つ', after: '三つ' } });
+    store.addNumberStyles([{ kind: 'counters', value: 'digits', before: '四つ', after: '4つ' }], 30);
+    expect(store.numberStyles()?.counters).toMatchObject({ value: 'digits', count: 1 });
+  });
+
+  it('passes the preferences to formatting', () => {
+    store.addNumberStyles([{ kind: 'grouping', value: 'comma', before: '10000円', after: '10,000円' }]);
+    expect(store.prepareFormatting('予算は10000円です', { useLlm: false }).numberStyle?.grouping?.value).toBe('comma');
+    expect(store.prepareFormatting('予算は10000円です', { useLlm: true }).numberStyle?.grouping?.value).toBe('comma');
+  });
+
+  it('undo puts back the previous preference', () => {
+    store.addNumberStyles([{ kind: 'counters', value: 'kanji', before: '2つ', after: '二つ' }], 10);
+    const applied = applyLearning(store, { words: [], forms: [], corrections: [], kept: [], numbers: [{ kind: 'counters', value: 'digits', before: '四つ', after: '4つ' }] });
+    expect(applied.count).toBe(1);
+    expect(store.numberStyles()?.counters?.value).toBe('digits');
+    applied.undo();
+    expect(store.numberStyles()?.counters).toMatchObject({ value: 'kanji', at: 10 });
+  });
+
+  it('undo removes a preference that did not exist before', () => {
+    const applied = applyLearning(store, { words: [], forms: [], corrections: [], kept: [], numbers: [{ kind: 'date', value: 'slash', before: '11月24日', after: '11/24' }] });
+    applied.undo();
+    expect(store.get().numberStyle).toBeUndefined();
+  });
+
+  it('drops unknown kinds and values from the saved file, and an empty object clears the field', () => {
+    store.update({ numberStyle: { counters: { value: 'roman', count: 1, at: 0 }, time: { value: 'colon', count: 1, at: 0 } } });
+    expect(Object.keys(store.get().numberStyle ?? {})).toEqual(['time']);
+    store.update({ numberStyle: {} });
+    expect(store.get().numberStyle).toBeUndefined();
+  });
+});

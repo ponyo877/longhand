@@ -187,3 +187,24 @@ describe('formatText（編集モード）', () => {
     expect(await edit('{"text": "Slack で送る", "deleted": false, "unclear": false}')).toMatchObject({ text: 'Slack で送る', unclear: false });
   });
 });
+
+describe('formatText applies the learned number notation', () => {
+  const learned = { numberStyle: { counters: { value: 'kanji', count: 1, at: 0 } } };
+
+  it('without an LLM', async () => {
+    const r = await formatText(base({ rawText: 'お願いが2つあります', learned }));
+    expect(r.text).toBe('お願いが二つあります');
+  });
+
+  it('to the LLM output', async () => {
+    const f = fake('{"text": "お願いが2つあります。"}');
+    const r = await formatText(base({ rawText: 'お願いがふたつあります', provider: f.provider, learned }));
+    expect(r.text).toBe('お願いが二つあります。');
+    expect(f.calls[0].system).toContain('# 数字の書き方');
+  });
+
+  it('not in terminals and code editors', async () => {
+    const r = await formatText(base({ rawText: 'お願いが2つあります', learned, codeLike: true }));
+    expect(r.text).toBe('お願いが2つあります');
+  });
+});

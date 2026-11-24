@@ -96,6 +96,7 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
     forms: [] as { word: string; from: string }[],
     corrections: [] as { heard: string; corrected: string }[],
     kept: [] as { phrase: string; changedTo: string }[],
+    numbers: [] as { kind: string; value: string; before: string; after: string }[],
   };
   const customizations = {
     get: () => cust,
@@ -119,10 +120,15 @@ function setup(opts: { settings?: Partial<Settings>; asrText?: string; llm?: (re
       remembered.kept.push(...p);
       return p.map((x) => ({ ...x, count: 1, at: 0 }));
     }),
+    addNumberStyles: vi.fn((n: { kind: string; value: string; before: string; after: string }[]) => {
+      remembered.numbers.push(...n);
+      return n.map((x) => ({ kind: x.kind, value: x.value, example: { before: x.before, after: x.after } }));
+    }),
     undoLearnedWord: vi.fn(),
     removeMisheardForm: vi.fn(),
     removePastCorrection: vi.fn(),
     removeKeptPhrase: vi.fn(),
+    setNumberStyle: vi.fn(),
   };
   const history: HistoryItem[] = [];
   const huds: string[] = [];
@@ -780,6 +786,24 @@ describe('DictationController', () => {
     expect(t.remembered.kept).toEqual([{ phrase: 'なんか', changedTo: '何か' }]);
     expect(t.learned).toEqual([]);
     expect(t.huds).toContain('CorrectionLearned');
+  });
+
+  it('learns a correction of how a number is written, and says so', async () => {
+    const t = setup({ asrText: 'お願いが2つあります', llm: () => formatted('お願いが2つあります。') });
+    t.helper.hotkey('activate', 'down', 0);
+    await new Promise((r) => setTimeout(r, 10));
+    t.helper.audio(1, speech(2));
+    t.helper.hotkey('activate', 'up', 2000);
+    await until(() => t.history.length === 1);
+    const pasteId = t.helper.pastes[0].pasteId as string;
+    t.helper.emitMsg({
+      type: 'field_watch_result',
+      payload: { pasteId, before: '', afterPaste: 'お願いが2つあります。', final: 'お願いが二つあります。', reason: 'timeout' },
+    });
+    await until(() => t.remembered.numbers.length === 1);
+    expect(t.remembered.numbers[0]).toMatchObject({ kind: 'counters', value: 'kanji' });
+    expect(t.learned).toEqual([]);
+    expect(t.huds).toContain('NumberStyleLearned');
   });
 
   it('パスワード欄では、手直しの監視を頼まない', async () => {

@@ -1205,7 +1205,10 @@ export class DictationController {
       const applied = applyLearning(cust, r);
       if (!applied.count) return;
       // 本文は残さず、数だけを記録する
-      log.info(`手直しから学習しました（語 ${applied.words.length}、聞き違えた形 ${applied.forms.length}、取り違えの組 ${applied.corrections.length}、書き換えない語句 ${applied.kept.length}）`);
+      log.info(
+        `手直しから学習しました（語 ${applied.words.length}、聞き違えた形 ${applied.forms.length}、取り違えの組 ${applied.corrections.length}、書き換えない語句 ${applied.kept.length}、` +
+          `number styles ${applied.numbers.map((n) => `${n.kind}=${n.value}`).join(',') || 0}）`,
+      );
       const undo = [
         {
           id: 'undo',
@@ -1218,9 +1221,12 @@ export class DictationController {
       ];
       if (applied.words.length) {
         this.d.ui.hud('WordsLearned', { words: applied.words.map((w) => w.word).join('」「') }, undo);
+      } else if (applied.numbers.length === applied.count) {
+        // Only how numbers are written changed: show the corrected form of the first one
+        this.d.ui.hud('NumberStyleLearned', { text: applied.numbers[0].example.after }, undo);
       } else {
         // 辞書に語を足さない学習（聞き違えた形、取り違えの組、書き換えない語句）は、直した後の形を 1 つ見せる
-        const shown = applied.forms[0]?.word ?? applied.corrections[0]?.corrected ?? applied.kept[0]?.phrase ?? '';
+        const shown = applied.forms[0]?.word ?? applied.corrections[0]?.corrected ?? applied.kept[0]?.phrase ?? applied.numbers[0]?.example.after ?? '';
         this.d.ui.hud(applied.count > 1 ? 'CorrectionsLearnedMany' : 'CorrectionLearned', { text: shown, count: String(applied.count) }, undo);
       }
     } catch (e) {

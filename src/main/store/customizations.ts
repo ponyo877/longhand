@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { isNumberStyleKind, isNumberStyleValue, NUMBER_STYLE_KINDS, type NumberStyleKind, type NumberStylePreference, type NumberStyles } from '../../shared/numberStyle';
 import { CUSTOMIZATION_LIMITS, EMPTY_CUSTOMIZATIONS, type Customizations, type KeptPhrase, type LearnedWord, type PastCorrection } from '../../shared/types';
 import { createLogger } from '../log';
 import { rankVocabulary, type HintContext, type HintOptions, type RecentText, type VocabEntry } from '../vocab/hints';
@@ -95,6 +96,34 @@ export interface PreparedFormatting {
   kept?: { phrase: string; changedTo: string }[];
   /** 利用者が、取り違えの組を 1 つでも持っているか（整形の規則に説明を足すかどうかを決める） */
   hasCorrections?: boolean;
+  /** How the user writes numbers. Described in the formatter prompt and applied to the output */
+  numberStyle?: NumberStyles;
+}
+
+/** A number notation preference changed by learning, with the one it replaced (to undo the change) */
+export interface AppliedNumberStyle {
+  kind: NumberStyleKind;
+  value: string;
+  example: { before: string; after: string };
+  previous?: NumberStylePreference;
+}
+
+/** Keeps only known kinds with known values (the file may come from an older or newer version) */
+function cleanNumberStyles(styles: unknown): NumberStyles | undefined {
+  if (!styles || typeof styles !== 'object') return undefined;
+  const out: NumberStyles = {};
+  for (const [kind, pref] of Object.entries(styles as Record<string, unknown>)) {
+    if (!isNumberStyleKind(kind) || !pref || typeof pref !== 'object') continue;
+    const p = pref as Partial<NumberStylePreference>;
+    if (!isNumberStyleValue(kind, p.value)) continue;
+    out[kind] = {
+      value: p.value as string,
+      count: typeof p.count === 'number' && p.count > 0 ? p.count : 1,
+      at: typeof p.at === 'number' ? p.at : 0,
+      ...(p.example && typeof p.example.before === 'string' && typeof p.example.after === 'string' ? { example: { before: p.example.before, after: p.example.after } } : {}),
+    };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** 読みを作る関数。LLM を使えないときは null を返す（次に辞書が変わったときに作り直す） */
@@ -160,6 +189,8 @@ export class CustomizationsStore extends EventEmitter {
     // 学習しない語にした語は、取り違えの組からも外す
     const blockedKeys = new Set(next.blockedLearnedWords.map((w) => w.toLowerCase()));
     if (next.pastCorrections) next.pastCorrections = next.pastCorrections.filter((c) => !blockedKeys.has(c.corrected.toLowerCase()));
+    next.numberStyle = cleanNumberStyles(next.numberStyle);
+    if (!next.numberStyle) delete next.numberStyle;
     this.value = next;
     this.store.write(next);
     this.emit('change', next);
@@ -312,6 +343,7 @@ export class CustomizationsStore extends EventEmitter {
       misheard: this.formsFor(vocabulary),
       kept: this.keptPhrases(),
       hasCorrections: (this.value.pastCorrections?.length ?? 0) > 0,
+      numberStyle: this.value.numberStyle,
     };
     if (!opts.useLlm) {
       const { text, replaced } = applyConfirmedMatches(rawText, matches);
@@ -382,6 +414,37 @@ export class CustomizationsStore extends EventEmitter {
 
   removePastCorrection(heard: string, corrected: string): void {
     this.update({ pastCorrections: (this.value.pastCorrections ?? []).filter((c) => !(c.heard === heard && c.corrected === corrected)) });
+  }
+
+  /** How the user writes numbers (undefined when nothing has been learned) */
+  numberStyles(): NumberStyles | undefined {
+    return this.value.numberStyle;
+  }
+
+  /**
+   * Records number notations seen in a correction. The same notation again raises the count; a different notation of the same kind
+   * replaces the old one, because the latest correction says how the user writes now. Returns what changed, with the previous preference.
+   */
+  addNumberStyles(observations: readonly { kind: NumberStyleKind; value: string; before: string; after: string }[], now = Date.now()): AppliedNumberStyle[] {
+    const styles: NumberStyles = { ...this.value.numberStyle };
+    const applied: AppliedNumberStyle[] = [];
+    for (const o of observations) {
+      if (!isNumberStyleKind(o.kind) || !isNumberStyleValue(o.kind, o.value)) continue;
+      const previous = styles[o.kind];
+      const example = { before: o.before, after: o.after };
+      styles[o.kind] = { value: o.value, count: previous?.value === o.value ? previous.count + 1 : 1, at: now, example };
+      applied.push({ kind: o.kind, value: o.value, example, ...(previous ? { previous } : {}) });
+    }
+    if (applied.length) this.update({ numberStyle: styles });
+    return applied;
+  }
+
+  /** Sets or removes one number notation preference (undoing a learned change, or the Style page) */
+  setNumberStyle(kind: NumberStyleKind, pref: NumberStylePreference | undefined): void {
+    const styles: NumberStyles = { ...this.value.numberStyle };
+    if (pref) styles[kind] = pref;
+    else delete styles[kind];
+    this.update({ numberStyle: NUMBER_STYLE_KINDS.some((k) => styles[k]) ? styles : undefined });
   }
 
   /** 書き換えない語句を足す。足した語句を返す。同じ語句は回数を増やす */

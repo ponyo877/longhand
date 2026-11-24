@@ -38,8 +38,8 @@ const EVAL_LLM_TIMEOUT_MS = 60_000;
 export const DEFAULT_MAX_LLM_CALLS = 150;
 
 /** 手直しから覚えることの種類（語、聞き違えた形、取り違えの組、書き換えない語句） */
-export type LearnKind = 'words' | 'forms' | 'corrections' | 'kept';
-const LEARN_KINDS: readonly LearnKind[] = ['words', 'forms', 'corrections', 'kept'];
+export type LearnKind = 'words' | 'forms' | 'corrections' | 'kept' | 'numbers';
+const LEARN_KINDS: readonly LearnKind[] = ['words', 'forms', 'corrections', 'kept', 'numbers'];
 
 export interface EvalConfig {
   /** 実行の名前（結果のフォルダ名に入る） */
@@ -153,7 +153,7 @@ export interface EvalSummary {
   /** truncated は、末尾を切り落とした発話の数（切り落としを指定した実行だけ） */
   asr: { cached: number; transcribed: number; skippedOtherRate: number; truncated?: number };
   /** 手直しからの学習の実験をしたときの、学習に使った発話の数と、覚えた数 */
-  learn?: { train: number; edited: number; words: number; forms: number; corrections: number; kept: number };
+  learn?: { train: number; edited: number; words: number; forms: number; corrections: number; kept: number; numbers?: number };
   groups: Groups;
 }
 
@@ -503,7 +503,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
         if (caching?.fatal) break;
         if (done) outputs.push({ u, raw: done.outcome.text, final: done.out.stages.final });
       }
-      const counts = { train: outputs.length, edited: 0, words: 0, forms: 0, corrections: 0, kept: 0 };
+      const counts = { train: outputs.length, edited: 0, words: 0, forms: 0, corrections: 0, kept: 0, numbers: 0 };
       // 学習した時刻は、手直しの順に 1 秒ずつ進める。実際の時刻を使うと、同じ時刻に学習した語の並びが実行のたびに変わり、
       // 音声認識のヒントの順と、結果がゆらぐ
       let learnClock = started.getTime();
@@ -533,6 +533,7 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
             forms: kinds.has('forms') ? lr.forms : [],
             corrections: kinds.has('corrections') ? lr.corrections : [],
             kept: kinds.has('kept') ? lr.kept : [],
+            numbers: kinds.has('numbers') ? lr.numbers : [],
           },
           learnClock,
         );
@@ -540,11 +541,12 @@ export async function runEval(config: EvalConfig, env: EvalEnv): Promise<EvalRun
         counts.forms += applied.forms.length;
         counts.corrections += applied.corrections.length;
         counts.kept += applied.kept.length;
+        counts.numbers += applied.numbers.length;
       }
       learnSummary = counts;
       print(
         `学習: ${counts.train} 件のうち、出力が正解と違った ${counts.edited} 件を手直しとして学習（語 ${counts.words}、聞き違えた形 ${counts.forms}、` +
-          `取り違えの組 ${counts.corrections}、書き換えない語句 ${counts.kept}）`,
+          `取り違えの組 ${counts.corrections}、書き換えない語句 ${counts.kept}、number styles ${counts.numbers}）`,
       );
       if (caching?.fatal) {
         aborted = caching.fatal.kind;
