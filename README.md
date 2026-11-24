@@ -15,7 +15,6 @@
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-111A3D.svg" alt="Platform: macOS 14+">
   <img src="https://img.shields.io/badge/chip-Apple%20Silicon-111A3D.svg" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/speech-on--device-0F766E.svg" alt="Speech recognition: on-device">
-  <img src="https://img.shields.io/badge/tests-736%20passing-15803D.svg" alt="Tests: 736 passing">
 </p>
 
 <p align="center">
