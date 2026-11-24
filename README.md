@@ -121,6 +121,8 @@ To build a distributable app:
 npm run make           # .dmg and .zip in out/make/
 ```
 
+Signed and notarized release builds are made with `scripts/release.sh`, which needs a Developer ID certificate. See [docs/releasing.md](docs/releasing.md).
+
 Building the optional Apple SpeechTranscriber worker requires Xcode 26. Without it, run `npm run build:helper && bash asr/build.sh whisper`.
 
 ## Configuration

@@ -69,6 +69,10 @@ Explain why the change is needed in the body when it is not obvious from the sub
 - TypeScript is formatted with oxfmt (200 columns) and linted with oxlint.
 - Comments and UI strings in the app are written in Japanese, the language of its users. Documentation and commit messages are in English.
 
+## Releases
+
+Signed and notarized builds are published from version tags by the release workflow. [docs/releasing.md](docs/releasing.md) describes the one-time setup and the steps.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).

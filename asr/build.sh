@@ -6,7 +6,8 @@
 #   asr/build.sh whisper      個別に指定することもできる（whisper / apple / parakeet / whisper-coreml）
 #
 # 署名: キーチェーンに "Apple Development" の証明書があればそれで、なければ ad-hoc で署名する。
-#       CODESIGN_IDENTITY を設定すると、その ID を使う（配布用の "Developer ID Application: ..." など）。
+#       Set LONGHAND_SIGN_IDENTITY (same as helper/build.sh; "-" for ad-hoc) or CODESIGN_IDENTITY to use another identity.
+#       Packaging re-signs the workers with the app's identity and a secure timestamp, so release builds need nothing here.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +34,7 @@ for t in "${targets[@]}"; do
   esac
 done
 
-identity="${CODESIGN_IDENTITY:-}"
+identity="${LONGHAND_SIGN_IDENTITY:-${CODESIGN_IDENTITY:-}}"
 if [ -z "$identity" ]; then
   identity="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development/ {print $2; exit}')"
 fi

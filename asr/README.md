@@ -32,7 +32,8 @@ whisper.cpp is not vendored: `asr/whisper/fetch-deps.sh` fetches a pinned tag in
 - **longhand-asr-parakeet** is a Swift program built on FluidAudio.
 
 `asr/build.sh` signs the binaries with an Apple Development certificate if one is in the keychain, and ad hoc otherwise.
-Set `CODESIGN_IDENTITY` to use a different identity.
+Set `LONGHAND_SIGN_IDENTITY` (or `CODESIGN_IDENTITY`) to use a different identity.
+Packaging re-signs the workers with the app's certificate, so release builds need no extra setup here (see [docs/releasing.md](../docs/releasing.md)).
 
 ## Models
 

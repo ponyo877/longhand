@@ -33,40 +33,112 @@ function nativeResources(): string[] {
 }
 
 /**
- * 署名に使う証明書を決める。
- *
- * - LONGHAND_SIGN_IDENTITY=-：署名しない。
- * - LONGHAND_SIGN_IDENTITY=<名前か SHA-1>：その証明書を使う。
- * - 未指定：キーチェーンから探す。Developer ID Application があればそれ、なければ Apple Development を使う
- *   （helper/build.sh や asr/build.sh と同じ証明書になり、ビルドし直しても権限の許可が残る）。
- *
- * @electron/osx-sign は、証明書を指定しないと Developer ID Application しか探さない。
- * 開発用の証明書しかない PC では、署名に失敗したまま（何も表示せずに）署名なしのアプリができてしまうので、ここで選んで渡す。
+ * Release builds (`LONGHAND_RELEASE=1`, set by scripts/release.sh) must be signed with a Developer ID certificate and notarized.
+ * They stop instead of falling back to a development certificate or skipping notarization.
  */
-function signingIdentity(): string | undefined {
-  const given = process.env.LONGHAND_SIGN_IDENTITY;
-  if (given === '-') return undefined;
-  if (given) return given;
+const release = process.env.LONGHAND_RELEASE === '1';
+
+interface SigningIdentity {
+  /** SHA-1 hash, or the name given in LONGHAND_SIGN_IDENTITY */
+  id: string;
+  /** "Developer ID Application", "Apple Development", or null when the kind is unknown */
+  kind: string | null;
+}
+
+function keychainIdentities(): { hash: string; name: string }[] {
   let listing = '';
   try {
     listing = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' });
   } catch {
-    // security が使えないときは、署名しない
+    // Without the security tool, behave as if the keychain had no identities
   }
-  const found = [...listing.matchAll(/^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"/gm)].map((m) => ({ hash: m[1], name: m[2] }));
-  for (const kind of ['Developer ID Application', 'Apple Development']) {
+  return [...listing.matchAll(/^\s*\d+\)\s+([0-9A-F]{40})\s+"([^"]+)"/gm)].map((m) => ({ hash: m[1], name: m[2] }));
+}
+
+const IDENTITY_KINDS = ['Developer ID Application', 'Apple Development'];
+
+const kindOf = (name: string) => IDENTITY_KINDS.find((k) => name.startsWith(k)) ?? null;
+
+/**
+ * Chooses the certificate to sign with.
+ *
+ * - LONGHAND_SIGN_IDENTITY=-: do not sign.
+ * - LONGHAND_SIGN_IDENTITY=<name or SHA-1>: use that certificate.
+ * - Unset: look in the keychain. Use a Developer ID Application certificate if there is one, otherwise Apple Development
+ *   (the same certificate helper/build.sh and asr/build.sh use, so macOS keeps the permissions granted to earlier builds).
+ *
+ * @electron/osx-sign only looks for Developer ID Application certificates when none is given.
+ * On a machine with only a development certificate it would silently produce an unsigned app, so the choice is made here.
+ */
+function signingIdentity(): SigningIdentity | undefined {
+  const given = process.env.LONGHAND_SIGN_IDENTITY;
+  if (given === '-') return undefined;
+  const found = keychainIdentities();
+  if (given) {
+    const hit = found.find((i) => i.hash === given.toUpperCase() || i.name === given);
+    return { id: given, kind: hit ? kindOf(hit.name) : null };
+  }
+  for (const kind of IDENTITY_KINDS) {
     const hit = found.find((i) => i.name.startsWith(kind));
     if (hit) {
-      // 証明書の名前には個人の名前が入るので、種類だけを表示する
-      console.log(`[forge] 署名に使う証明書: ${kind}（${hit.hash.slice(0, 8)}…）`);
-      return hit.hash;
+      // Certificate names contain a person's name, so only the kind is printed
+      console.log(`[forge] Signing with: ${kind} (${hit.hash.slice(0, 8)}…)`);
+      return { id: hit.hash, kind };
     }
   }
-  console.warn('[forge] 署名に使える証明書が見つかりません。署名なしで作ります（権限の許可は、ビルドし直すたびに取り直しになります）');
+  console.warn('[forge] No code signing certificate found. Building unsigned (macOS will ask for permissions again after every rebuild)');
+  return undefined;
+}
+
+type NotarizeOptions = NonNullable<ForgeConfig['packagerConfig']>['osxNotarize'];
+
+/**
+ * Notarization credentials from the environment. The first complete set wins:
+ *
+ * - APPLE_KEYCHAIN_PROFILE: a profile saved with `xcrun notarytool store-credentials`
+ * - APPLE_API_KEY (path to the .p8 file), APPLE_API_KEY_ID, APPLE_API_ISSUER: an App Store Connect API key
+ * - APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID: an Apple ID with an app-specific password
+ */
+function notarizeOptions(): NotarizeOptions {
+  const e = process.env;
+  if (e.APPLE_KEYCHAIN_PROFILE) return { keychainProfile: e.APPLE_KEYCHAIN_PROFILE };
+  if (e.APPLE_API_KEY && e.APPLE_API_KEY_ID) {
+    return { appleApiKey: e.APPLE_API_KEY, appleApiKeyId: e.APPLE_API_KEY_ID, ...(e.APPLE_API_ISSUER ? { appleApiIssuer: e.APPLE_API_ISSUER } : {}) };
+  }
+  if (e.APPLE_ID && e.APPLE_APP_SPECIFIC_PASSWORD && e.APPLE_TEAM_ID) {
+    return { appleId: e.APPLE_ID, appleIdPassword: e.APPLE_APP_SPECIFIC_PASSWORD, teamId: e.APPLE_TEAM_ID };
+  }
   return undefined;
 }
 
 const signIdentity = signingIdentity();
+const developerId = signIdentity?.kind === 'Developer ID Application';
+const credentials = notarizeOptions();
+if (release && !developerId) {
+  throw new Error('[forge] A release build needs a "Developer ID Application" certificate in the keychain (see docs/releasing.md)');
+}
+if (release && !credentials) {
+  throw new Error('[forge] A release build needs notarization credentials in the environment (see docs/releasing.md)');
+}
+// Apple only notarizes apps signed with a Developer ID certificate
+const notarize = developerId ? credentials : undefined;
+if (credentials && !developerId) console.warn('[forge] Notarization credentials are set, but the app is not signed with a Developer ID certificate. Skipping notarization');
+
+const entitlements = {
+  app: path.join(root, 'resources/entitlements.mac.plist'),
+  helper: path.join(root, 'helper/Resources/LonghandHelper.entitlements'),
+};
+
+/**
+ * Entitlements for each signed file. Electron's own executables get the app's entitlements (JIT and microphone).
+ * The Swift helper keeps its own (microphone only), and the speech recognition workers get none: they read audio from stdin
+ * and use neither JIT nor injected libraries.
+ */
+function entitlementsFor(filePath: string): string | string[] {
+  if (filePath.includes('/LonghandHelper.app')) return entitlements.helper;
+  if (/\/longhand-asr-[^/]+$/.test(filePath)) return [];
+  return entitlements.app;
+}
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -83,15 +155,17 @@ const config: ForgeConfig = {
     },
     osxSign: signIdentity
       ? {
-          identity: signIdentity,
-          // 署名に失敗したら、署名なしのアプリを残さずにビルドを止める
+          identity: signIdentity.id,
+          // Stop the build if signing fails, rather than leaving an unsigned app behind
           continueOnError: false,
-          optionsForFile: () => ({
+          optionsForFile: (filePath) => ({
             hardenedRuntime: true,
-            entitlements: path.join(root, 'resources/entitlements.mac.plist'),
+            entitlements: entitlementsFor(filePath),
           }),
         }
       : undefined,
+    // Submits the signed app to Apple and staples the ticket. Only with a Developer ID certificate and credentials (see above)
+    osxNotarize: notarize,
   },
   rebuildConfig: {},
   makers: [new MakerZIP({}, ['darwin']), new MakerDMG({ format: 'ULFO' })],
